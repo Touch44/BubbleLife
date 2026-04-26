@@ -3143,7 +3143,7 @@ async function _save() {
       _entity._subtype = _entity.type;
       _entity.type = _config.key;
     }
-    _entity = await saveEntity(_entity);
+    _entity = await saveEntity(_entity, getAccount()?.id);
     _dirty    = false;
     _snapshot = JSON.stringify(_entity);  // update snapshot after save
     _updateDirtyIndicator();

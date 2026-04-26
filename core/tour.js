@@ -34,7 +34,6 @@ let _steps      = [];
 let _keyHandler = null;  // P-32: escape handler
 let _name      = '';
 let _env       = null;
-let _cleanup   = null;
 
 // ── Public API ────────────────────────────────────────────── //
 
@@ -97,8 +96,19 @@ function _mountBackdrop() {
     transition: clip-path 0.3s ease;
     pointer-events: auto;
   `;
-  // Clicking outside the spotlight skips the tour
-  _backdrop.addEventListener('click', _skip);
+  // Clicking OUTSIDE the spotlight skips the tour (BUG-2 fix: check rect)
+  _backdrop.addEventListener('click', (e) => {
+    const step   = _steps[_stepIndex];
+    const target = step?.target ? document.querySelector(step.target) : null;
+    if (target) {
+      const pad = 8;
+      const r   = target.getBoundingClientRect();
+      const inX = e.clientX >= r.left - pad && e.clientX <= r.right  + pad;
+      const inY = e.clientY >= r.top  - pad && e.clientY <= r.bottom + pad;
+      if (inX && inY) return; // click inside spotlight — let event reach target
+    }
+    _skip();
+  });
   document.body.appendChild(_backdrop);
 
   // Escape key ends tour (P-32)
@@ -292,6 +302,13 @@ async function _complete() {
 function _teardown() {
   _backdrop?.remove(); _backdrop = null;
   _tooltip?.remove();  _tooltip  = null;
+  // BUG-1 fix: remove Escape keydown handler
+  if (_keyHandler) {
+    document.removeEventListener('keydown', _keyHandler);
+    _keyHandler = null;
+  }
+  _stepIndex = 0;
+  _steps     = [];
 }
 
 function _esc(s) {

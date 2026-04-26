@@ -19,9 +19,11 @@
 import { navigate, getState } from '../core/router.js';
 
 export const VIEW_MODES = [
-  { key: 'list',     icon: '☰', label: 'List view'   },
-  { key: 'kanban',   icon: '⊡', label: 'Kanban view' },
-  { key: 'calendar', icon: '▦', label: 'Calendar view' },
+  // 'list' navigates to 'entity-type' view (generic entity list)
+  // 'kanban' and 'calendar' are registered views
+  { key: 'list',     view: 'entity-type', icon: '☰', label: 'List view'   },
+  { key: 'kanban',   view: 'kanban',      icon: '⊡', label: 'Kanban view' },
+  { key: 'calendar', view: 'calendar',    icon: '▦', label: 'Calendar view' },
 ];
 
 /**
@@ -63,12 +65,12 @@ export function createViewSwitcher({ entityType, currentMode = 'list', onSwitch 
         main.style.transition = 'opacity 0.1s ease';
         main.style.opacity    = '0';
         setTimeout(() => {
-          navigate(mode.key, params);
+          navigate(mode.view || mode.key, params);
           main.style.opacity = '1';
           onSwitch?.(mode.key);
         }, 100);
       } else {
-        navigate(mode.key, params);
+        navigate(mode.view || mode.key, params);
         onSwitch?.(mode.key);
       }
     });

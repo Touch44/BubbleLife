@@ -703,7 +703,7 @@
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
-  import { startTour, tourRegistry, isTourComplete } from './core/tour.js';  // P-32
+  import { startTour, isTourComplete }               from './core/tour.js';  // P-31
   import { initPWA }                   from './core/pwa.js';    // P-33
 
   // ── App initialisation ────────────────────────────────────
@@ -903,7 +903,7 @@
         }
       }
 
-      // 12. Populate shortcuts overlay from hotkeyService (P-32)
+      // 13. Populate shortcuts overlay from hotkeyService (P-32)
       {
         const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
         const modKey = isMac ? '⌘' : 'Ctrl';
@@ -983,7 +983,7 @@
         }
       }
 
-      // 12. Service Worker registration (Blueprint §8.2)
+      // 14. Service Worker registration (Blueprint §8.2)
       if ('serviceWorker' in navigator) {
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
@@ -1009,7 +1009,7 @@
         }
       }
 
-      // 12. Update banner actions
+      // 15. Update banner actions
       const reloadBtn  = document.getElementById('update-reload-btn');
       const dismissBtn = document.getElementById('update-dismiss-btn');
       if (reloadBtn) {
@@ -1025,10 +1025,10 @@
         });
       }
 
-      // 13. Entity panel open/close — handled by components/entity-panel.js
+      // 16. Entity panel open/close — handled by components/entity-panel.js
       // (initEntityPanel() wires PANEL_OPENED listener internally)
 
-      // 14. Theme toggle listener — sync fast-boot key when theme changes
+      // 17. Theme toggle listener — sync fast-boot key when theme changes
       // themeService.setTheme() handles 'settings:theme'; this keeps 'fh_theme'
       // in sync so the next page load can apply the theme before JS runs.
       on(EVENTS.THEME_CHANGED, ({ theme }) => {
@@ -1036,7 +1036,7 @@
         localStorage.setItem('fh_theme', theme);  // fast-boot key (read in step 1)
       });
 
-      // 15. Migration skip button (migration-yes wired by auth.js)
+      // 18. Migration skip button (migration-yes wired by auth.js)
       document.getElementById('migration-skip-btn')?.addEventListener('click', () => {
         document.getElementById('auth-migration-prompt')?.classList.add('hidden');
       });
