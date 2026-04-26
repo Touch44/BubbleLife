@@ -818,7 +818,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=2.2.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=2.3.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
