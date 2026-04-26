@@ -956,7 +956,7 @@
                 .replace('enter', '↵')
                 .toUpperCase()
                 .replace(/\+/g, '+');
-              row.innerHTML = \`<kbd>\${display}</kbd><span>\${s.description}</span>\`;
+              row.innerHTML = `<kbd>${display}</kbd><span>${s.description}</span>`;
               grp.appendChild(row);
             }
             listEl.appendChild(grp);
