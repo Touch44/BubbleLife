@@ -175,66 +175,71 @@ export async function doFirstRun(familyName, displayName, username, password) {
     return { ok: false, error: 'Username may only contain letters, numbers, dots, dashes, underscores.' };
   }
 
-  // ── Guard: ensure truly first run ──
-  const existing = await getSetting('auth');
-  if (existing?.accounts?.length) {
-    return { ok: false, error: 'FamilyHub is already set up.' };
+  try {
+    // ── Guard: ensure truly first run ──
+    const existing = await getSetting('auth');
+    if (existing?.accounts?.length) {
+      return { ok: false, error: 'FamilyHub is already set up.' };
+    }
+
+    const passHash  = await _hashPass(password);
+    const memberId  = uid();
+    const accountId = uid();
+    const now       = new Date().toISOString();
+
+    // Create person entity for the admin (lazy import to avoid circular deps)
+    const { saveEntity } = await import('./db.js');
+    await saveEntity({
+      id:        memberId,
+      type:      'person',
+      title:     displayName.trim(),
+      name:      displayName.trim(),
+      role:      'admin',
+      createdAt: now,
+      updatedAt: now,
+    }, accountId);
+
+    // Build auth structure
+    const auth = {
+      accounts: [{
+        id:            accountId,
+        username:      username.trim().toLowerCase(),
+        passHash,
+        memberId,
+        role:          'admin',
+        perms:         _allPermsTrue(),
+        email:         null,
+        createdAt:     now,
+        lastLogin:     now,
+        loginAttempts: 0,
+        lockedUntil:   null,
+      }],
+      invites:  [],
+      auditLog: [],
+    };
+
+    await setSetting('auth', auth);
+    await setSetting('familyName', familyName.trim());
+    await setSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+    await setSetting('theme', 'light');
+    await setSetting('appVersion', '2.0.0');
+
+    // Log the first audit entry
+    await _writeAuditEntry(auth, 'FIRST_RUN', 'family', null, familyName.trim(), {
+      admin: username.trim().toLowerCase(),
+    }, accountId);
+
+    // Create session and show app
+    await _createSession(auth.accounts[0]);
+    _startIdleTimer();
+    _showApp(auth);
+
+    emit(EVENTS.AUTH_LOGIN, { accountId });
+    return { ok: true };
+  } catch (err) {
+    console.error('[auth] doFirstRun error:', err);
+    return { ok: false, error: 'Setup failed due to an internal error. Please reload and try again.' };
   }
-
-  const passHash  = await _hashPass(password);
-  const memberId  = uid();
-  const accountId = uid();
-  const now       = new Date().toISOString();
-
-  // Create person entity for the admin (lazy import to avoid circular deps)
-  const { saveEntity } = await import('./db.js');
-  await saveEntity({
-    id:        memberId,
-    type:      'person',
-    title:     displayName.trim(),
-    name:      displayName.trim(),
-    role:      'admin',
-    createdAt: now,
-    updatedAt: now,
-  }, accountId);
-
-  // Build auth structure
-  const auth = {
-    accounts: [{
-      id:            accountId,
-      username:      username.trim().toLowerCase(),
-      passHash,
-      memberId,
-      role:          'admin',
-      perms:         _allPermsTrue(),
-      email:         null,
-      createdAt:     now,
-      lastLogin:     now,
-      loginAttempts: 0,
-      lockedUntil:   null,
-    }],
-    invites:  [],
-    auditLog: [],
-  };
-
-  await setSetting('auth', auth);
-  await setSetting('familyName', familyName.trim());
-  await setSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-  await setSetting('theme', 'light');
-  await setSetting('appVersion', '2.0.0');
-
-  // Log the first audit entry
-  await _writeAuditEntry(auth, 'FIRST_RUN', 'family', null, familyName.trim(), {
-    admin: username.trim().toLowerCase(),
-  }, accountId);
-
-  // Create session and show app
-  await _createSession(auth.accounts[0]);
-  _startIdleTimer();
-  _showApp(auth);
-
-  emit(EVENTS.AUTH_LOGIN, { accountId });
-  return { ok: true };
 }
 
 
@@ -253,72 +258,77 @@ export async function doLogin(usernameOrEmail, password) {
     return { ok: false, error: 'Please enter your username and password.' };
   }
 
-  const auth = await getSetting('auth');
-  if (!auth?.accounts?.length) {
-    return { ok: false, error: 'No accounts found. Please set up FamilyHub first.' };
-  }
-
-  // Find account by username or email (case-insensitive)
-  const needle = usernameOrEmail.trim().toLowerCase();
-  const account = auth.accounts.find(a =>
-    a.username === needle ||
-    (a.email && a.email.toLowerCase() === needle)
-  );
-
-  if (!account) {
-    // Deliberately vague to avoid username enumeration
-    return { ok: false, error: 'Username or password is incorrect.' };
-  }
-
-  // ── Check brute-force lockout ──
-  if (account.lockedUntil && Date.now() < account.lockedUntil) {
-    const remaining = Math.ceil((account.lockedUntil - Date.now()) / 60_000);
-    return {
-      ok: false,
-      error: `Account locked. Try again in ${remaining} minute${remaining !== 1 ? 's' : ''}.`
-    };
-  }
-
-  // ── Verify password (PBKDF2) ──
-  const valid = await _verifyPass(password, account.passHash);
-
-  if (!valid) {
-    account.loginAttempts = (account.loginAttempts || 0) + 1;
-
-    if (account.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-      account.lockedUntil   = Date.now() + LOCKOUT_DURATION_MS;
-      account.loginAttempts = 0;           // reset counter on lock
-      await setSetting('auth', auth);
-
-      await _writeAuditEntry(auth, 'ACCOUNT_LOCKED', 'account', account.id, account.username, {
-        reason: 'Too many failed login attempts',
-      }, account.id);
-
-      return { ok: false, error: 'Too many attempts. Account locked for 15 minutes.' };
+  try {
+    const auth = await getSetting('auth');
+    if (!auth?.accounts?.length) {
+      return { ok: false, error: 'No accounts found. Please set up FamilyHub first.' };
     }
 
+    // Find account by username or email (case-insensitive)
+    const needle = usernameOrEmail.trim().toLowerCase();
+    const account = auth.accounts.find(a =>
+      a.username === needle ||
+      (a.email && a.email.toLowerCase() === needle)
+    );
+
+    if (!account) {
+      // Deliberately vague to avoid username enumeration
+      return { ok: false, error: 'Username or password is incorrect.' };
+    }
+
+    // ── Check brute-force lockout ──
+    if (account.lockedUntil && Date.now() < account.lockedUntil) {
+      const remaining = Math.ceil((account.lockedUntil - Date.now()) / 60_000);
+      return {
+        ok: false,
+        error: `Account locked. Try again in ${remaining} minute${remaining !== 1 ? 's' : ''}.`
+      };
+    }
+
+    // ── Verify password (PBKDF2) ──
+    const valid = await _verifyPass(password, account.passHash);
+
+    if (!valid) {
+      account.loginAttempts = (account.loginAttempts || 0) + 1;
+
+      if (account.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        account.lockedUntil   = Date.now() + LOCKOUT_DURATION_MS;
+        account.loginAttempts = 0;           // reset counter on lock
+        await setSetting('auth', auth);
+
+        await _writeAuditEntry(auth, 'ACCOUNT_LOCKED', 'account', account.id, account.username, {
+          reason: 'Too many failed login attempts',
+        }, account.id);
+
+        return { ok: false, error: 'Too many attempts. Account locked for 15 minutes.' };
+      }
+
+      await setSetting('auth', auth);
+      const remaining = MAX_LOGIN_ATTEMPTS - account.loginAttempts;
+      return {
+        ok: false,
+        error: `Incorrect password. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`
+      };
+    }
+
+    // ── Success ──
+    account.loginAttempts = 0;
+    account.lockedUntil   = null;
+    account.lastLogin     = new Date().toISOString();
     await setSetting('auth', auth);
-    const remaining = MAX_LOGIN_ATTEMPTS - account.loginAttempts;
-    return {
-      ok: false,
-      error: `Incorrect password. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`
-    };
+
+    await _createSession(account);
+    _startIdleTimer();
+    _showApp(auth);
+
+    await _writeAuditEntry(auth, 'LOGIN', 'account', account.id, account.username, null, account.id);
+
+    emit(EVENTS.AUTH_LOGIN, { accountId: account.id });
+    return { ok: true };
+  } catch (err) {
+    console.error('[auth] doLogin error:', err);
+    return { ok: false, error: 'Login failed due to an internal error. Please reload and try again.' };
   }
-
-  // ── Success ──
-  account.loginAttempts = 0;
-  account.lockedUntil   = null;
-  account.lastLogin     = new Date().toISOString();
-  await setSetting('auth', auth);
-
-  await _createSession(account);
-  _startIdleTimer();
-  _showApp(auth);
-
-  await _writeAuditEntry(auth, 'LOGIN', 'account', account.id, account.username, null, account.id);
-
-  emit(EVENTS.AUTH_LOGIN, { accountId: account.id });
-  return { ok: true };
 }
 
 
@@ -1208,11 +1218,20 @@ function _wireAuthForms() {
     if (loginErr) loginErr.classList.add('hidden');
     if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = 'Signing in\u2026'; }
 
-    const result = await doLogin(username, password);
+    try {
+      const result = await doLogin(username, password);
 
-    if (!result.ok) {
+      if (!result.ok) {
+        if (loginErr) {
+          loginErr.textContent = result.error;
+          loginErr.classList.remove('hidden');
+        }
+        if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Sign In'; }
+      }
+    } catch (err) {
+      console.error('[auth] handleLogin threw:', err);
       if (loginErr) {
-        loginErr.textContent = result.error;
+        loginErr.textContent = 'An unexpected error occurred. Please try again.';
         loginErr.classList.remove('hidden');
       }
       if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Sign In'; }
@@ -1241,11 +1260,20 @@ function _wireAuthForms() {
     if (inviteErr) inviteErr.classList.add('hidden');
     if (inviteJoinBtn) { inviteJoinBtn.disabled = true; inviteJoinBtn.textContent = 'Joining\u2026'; }
 
-    const result = await redeemInvite(code, username, password);
+    try {
+      const result = await redeemInvite(code, username, password);
 
-    if (!result.ok) {
+      if (!result.ok) {
+        if (inviteErr) {
+          inviteErr.textContent = result.error;
+          inviteErr.classList.remove('hidden');
+        }
+        if (inviteJoinBtn) { inviteJoinBtn.disabled = false; inviteJoinBtn.textContent = 'Join FamilyHub'; }
+      }
+    } catch (err) {
+      console.error('[auth] handleInviteJoin threw:', err);
       if (inviteErr) {
-        inviteErr.textContent = result.error;
+        inviteErr.textContent = 'An unexpected error occurred. Please try again.';
         inviteErr.classList.remove('hidden');
       }
       if (inviteJoinBtn) { inviteJoinBtn.disabled = false; inviteJoinBtn.textContent = 'Join FamilyHub'; }
@@ -1267,11 +1295,20 @@ function _wireAuthForms() {
     if (firstRunErr) firstRunErr.classList.add('hidden');
     if (firstRunBtn) { firstRunBtn.disabled = true; firstRunBtn.textContent = 'Setting up\u2026'; }
 
-    const result = await doFirstRun(familyName, displayName, username, password);
+    try {
+      const result = await doFirstRun(familyName, displayName, username, password);
 
-    if (!result.ok) {
+      if (!result.ok) {
+        if (firstRunErr) {
+          firstRunErr.textContent = result.error;
+          firstRunErr.classList.remove('hidden');
+        }
+        if (firstRunBtn) { firstRunBtn.disabled = false; firstRunBtn.textContent = 'Create Family & Sign In'; }
+      }
+    } catch (err) {
+      console.error('[auth] handleFirstRun threw:', err);
       if (firstRunErr) {
-        firstRunErr.textContent = result.error;
+        firstRunErr.textContent = 'An unexpected error occurred. Please try again.';
         firstRunErr.classList.remove('hidden');
       }
       if (firstRunBtn) { firstRunBtn.disabled = false; firstRunBtn.textContent = 'Create Family & Sign In'; }
