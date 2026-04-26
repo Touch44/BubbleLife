@@ -23,6 +23,11 @@ let _selectedIndex  = -1;
 let _currentItems   = [];   // flat list of rendered result items for keyboard nav
 let _searchTimeout  = null;
 
+// ── Faceted search state (P-17) ───────────────────────────── //
+/** Active facet chips: [{type, label, value, color}] */
+let _facets = [];
+let _facetBar = null;  // chip container element
+
 // ── Recent entities key ───────────────────────────────────── //
 const RECENT_KEY    = 'recentEntities';
 const RECENT_MAX    = 10;
@@ -41,7 +46,9 @@ export function initSearch() {
     return;
   }
 
-  // ── Search button in topbar ──────────────────────────────
+  // ── Search button in topbar (falls back gracefully if button removed) ─────
+  // topbar-search is now the faceted search bar container (P-17)
+  // Cmd+K via hotkeyService is the primary trigger
   document.getElementById('topbar-search-btn')
     ?.addEventListener('click', openSearch);
 
@@ -49,6 +56,12 @@ export function initSearch() {
   _overlay.addEventListener('click', (e) => {
     if (e.target === _overlay) closeSearch();
   });
+
+  // ── Facet bar (P-17): chip container above input ─────────────
+  _facetBar = document.createElement('div');
+  _facetBar.className = 'search-facet-bar';
+  _input.parentNode.insertBefore(_facetBar, _input);
+  _facetBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;padding:0 var(--space-3);min-height:0;';
 
   // ── Input: trigger search or command mode ─────────────────
   _input.addEventListener('input', () => {
@@ -61,19 +74,20 @@ export function initSearch() {
     }
   });
 
+  // ── Backspace removes last facet chip when input empty (P-17) ──
+  _input.addEventListener('keydown', (e) => {
+    if (e.key === 'Backspace' && _input.value === '' && _facets.length > 0) {
+      _facets.pop();
+      _renderFacetBar();
+      _render();
+    }
+  });
+
   // ── Keyboard navigation ───────────────────────────────────
   _input.addEventListener('keydown', _handleInputKey);
 
-  // ── Global: Cmd+K opens search ───────────────────────────
-  document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-      e.preventDefault();
-      _overlay.classList.contains('open') ? closeSearch() : openSearch();
-    }
-    if (e.key === 'Escape' && _overlay.classList.contains('open')) {
-      closeSearch();
-    }
-  });
+  // Cmd+K and Escape are handled by hotkeyService (P-07).
+  // search.js exposes openSearch()/closeSearch() which hotkeyService calls.
 
   // ── Track opened entities for recents ────────────────────
   on(EVENTS.PANEL_OPENED, ({ entityId } = {}) => {
@@ -366,14 +380,37 @@ function _renderCommands(query) {
   _currentItems      = [];
   _selectedIndex     = -1;
 
-  const lq = query.toLowerCase();
+  // Use commandService if available (P-11), fall back to hardcoded COMMANDS
+  const cmdService = window._fhEnv?.services?.command;
 
-  const matches = query.length === 0
-    ? COMMANDS
-    : COMMANDS.filter(cmd =>
-        cmd.label.toLowerCase().includes(lq) ||
-        cmd.keys.some(k => k.includes(lq))
-      );
+  let matches;
+  if (cmdService) {
+    // Use commandService.search() — returns [{cmd, score}] sorted by score
+    const results = cmdService.search(query);
+    matches = results.map(r => ({
+      icon:       r.cmd.icon || '◈',
+      label:      r.cmd.label,
+      detail:     r.cmd.description || r.cmd.category,
+      action:     () => cmdService.execute(r.cmd.id, window._fhEnv),
+      category:   r.cmd.category,
+    }));
+  } else {
+    // Fallback: hardcoded COMMANDS array
+    const lq = query.toLowerCase();
+    const raw = query.length === 0
+      ? COMMANDS
+      : COMMANDS.filter(cmd =>
+          cmd.label.toLowerCase().includes(lq) ||
+          cmd.keys.some(k => k.includes(lq))
+        );
+    matches = raw.map(cmd => ({
+      icon:     cmd.icon,
+      label:    cmd.label,
+      detail:   cmd.detail,
+      action:   cmd.action,
+      category: 'Commands',
+    }));
+  }
 
   if (matches.length === 0) {
     _results.innerHTML = `
@@ -382,19 +419,119 @@ function _renderCommands(query) {
     return;
   }
 
-  const section = _makeSection('Commands');
-  _results.appendChild(section.header);
-
-  for (const cmd of matches) {
-    const item = _makeResultItem({
-      icon:       cmd.icon,
-      title:      cmd.label,
-      detail:     cmd.detail,
-      onActivate: cmd.action,
-    });
-    _results.appendChild(item.el);
-    _currentItems.push(item);
+  // Group by category if commandService is in use
+  if (window._fhEnv?.services?.command) {
+    const groups = new Map();
+    for (const cmd of matches) {
+      const cat = cmd.category || 'General';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(cmd);
+    }
+    for (const [cat, cmds] of groups) {
+      const section = _makeSection(cat);
+      _results.appendChild(section.header);
+      for (const cmd of cmds) {
+        const item = _makeResultItem({
+          icon:       cmd.icon,
+          title:      cmd.label,
+          detail:     cmd.detail,
+          onActivate: cmd.action,
+        });
+        _results.appendChild(item.el);
+        _currentItems.push(item);
+      }
+    }
+  } else {
+    const section = _makeSection('Commands');
+    _results.appendChild(section.header);
+    for (const cmd of matches) {
+      const item = _makeResultItem({
+        icon:       cmd.icon,
+        title:      cmd.label,
+        detail:     cmd.detail,
+        onActivate: cmd.action,
+      });
+      _results.appendChild(item.el);
+      _currentItems.push(item);
+    }
   }
+}
+
+// ════════════════════════════════════════════════════════════
+// FACETED SEARCH (P-17)
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Render facet chips into the facet bar.
+ */
+function _renderFacetBar() {
+  if (!_facetBar) return;
+  _facetBar.innerHTML = '';
+
+  for (let i = 0; i < _facets.length; i++) {
+    const f = _facets[i];
+    const chip = document.createElement('div');
+    chip.className = 'search-facet-chip';
+    chip.style.cssText = `
+      display:inline-flex;align-items:center;gap:4px;
+      padding:2px 8px;border-radius:999px;font-size:12px;font-weight:500;
+      background:${f.color || 'var(--color-accent)'};color:#fff;
+      cursor:default;white-space:nowrap;
+    `;
+
+    const label = document.createElement('span');
+    label.textContent = `${f.type}: ${f.label}`;
+
+    const del = document.createElement('button');
+    del.textContent = '×';
+    del.setAttribute('aria-label', `Remove ${f.label} filter`);
+    del.style.cssText = 'background:none;border:none;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0;opacity:0.8;';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _facets.splice(i, 1);
+      _renderFacetBar();
+      _render();
+    });
+
+    chip.appendChild(label);
+    chip.appendChild(del);
+    _facetBar.appendChild(chip);
+  }
+
+  // Update input placeholder
+  _input.placeholder = _facets.length > 0 ? 'Add more filters…' : 'Search or type > for commands';
+  _facetBar.style.paddingBottom = _facets.length > 0 ? '4px' : '0';
+}
+
+/**
+ * Add a facet chip programmatically.
+ * Views call this to pre-filter the search.
+ * @param {{type: string, label: string, value: string, color?: string}} facet
+ */
+export function addFacet(facet) {
+  // Deduplicate by type+value
+  const exists = _facets.some(f => f.type === facet.type && f.value === facet.value);
+  if (!exists) {
+    _facets.push(facet);
+    _renderFacetBar();
+    openSearch();
+  }
+}
+
+/**
+ * Clear all facet chips.
+ */
+export function clearFacets() {
+  _facets.length = 0;
+  _renderFacetBar();
+}
+
+/**
+ * Get active facets (for views that respond to search state).
+ * @returns {{type: string, label: string, value: string}[]}
+ */
+export function getFacets() {
+  return [..._facets];
 }
 
 // ════════════════════════════════════════════════════════════

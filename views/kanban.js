@@ -419,6 +419,11 @@ function _buildCard(task) {
     ? `<span class="kanban-card-checklist-prog" title="${clDone} of ${cl.length} items done">${clDone}/${cl.length}</span>`
     : '';
 
+  // Kanban state dot (P-23)
+  const kState    = task.kanban_state || 'normal';
+  const kStateDot = `<button class="kanban-state-dot kanban-state-dot--${kState}"
+    title="State: ${kState}" aria-label="Kanban state: ${kState}" data-state="${kState}"></button>`;
+
   card.innerHTML = `
     <div class="kanban-card-top">
       <label class="kanban-card-check-label">
@@ -427,6 +432,7 @@ function _buildCard(task) {
       <span class="kanban-card-title">${_esc(task.title || 'Untitled')}</span>
       ${prioDot}
       ${blockerEl}
+      ${kStateDot}
     </div>
     ${clProgress}
     ${projChip}
@@ -438,6 +444,15 @@ function _buildCard(task) {
       </div>
     </div>
   `;
+
+  // ── State dot: click → popover (P-23) ──────────────────── //
+  const stateDotEl = card.querySelector('.kanban-state-dot');
+  if (stateDotEl) {
+    stateDotEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _showStateDotPopover(stateDotEl, task);
+    });
+  }
 
   // ── Click: title → edit form  |  rest of card → panel ──
   // (Checkbox is handled separately below and stops propagation)
@@ -463,6 +478,7 @@ function _buildCard(task) {
     e.stopPropagation();
     const account = getAccount();
     const newStatus = cb.checked ? 'Done' : 'Inbox';
+    if (newStatus === 'Done') window._fhEnv?.services?.effects?.play('confetti');
     try {
       await saveEntity({ ...task, status: newStatus }, account?.id);
       // Reload data and re-render
@@ -496,6 +512,89 @@ function _buildCard(task) {
   return card;
 }
 
+
+// ── State Dot Popover (P-23) ──────────────────────────────── //
+
+const KANBAN_STATES = [
+  { key: 'normal',  label: 'Normal',  color: 'var(--color-text-muted)' },
+  { key: 'done',    label: 'Done',    color: 'var(--color-success)' },
+  { key: 'blocked', label: 'Blocked', color: 'var(--color-danger)' },
+];
+
+let _activeDotPopover = null;
+
+function _showStateDotPopover(dotEl, task) {
+  // Close any existing popover
+  _activeDotPopover?.remove();
+  _activeDotPopover = null;
+
+  const popover = document.createElement('div');
+  popover.className = 'kanban-state-popover';
+  popover.setAttribute('role', 'menu');
+
+  for (const state of KANBAN_STATES) {
+    const btn = document.createElement('button');
+    btn.className = `kanban-state-option ${state.key === task.kanban_state ? 'kanban-state-option--active' : ''}`;
+    btn.setAttribute('role', 'menuitem');
+    btn.innerHTML = `<span class="kanban-state-option-dot" style="background:${state.color}"></span>${state.label}`;
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      popover.remove();
+      _activeDotPopover = null;
+
+      const account = getAccount();
+      try {
+        await saveEntity({ ...task, kanban_state: state.key }, account?.id);
+        // Update dot immediately without full re-render
+        dotEl.className = `kanban-state-dot kanban-state-dot--${state.key}`;
+        dotEl.setAttribute('title', `State: ${state.key}`);
+        dotEl.setAttribute('aria-label', `Kanban state: ${state.key}`);
+        dotEl.dataset.state = state.key;
+        task.kanban_state = state.key;
+        // Notification toast per spec
+        const notifSvc = window._fhEnv?.services?.notification;
+        if (notifSvc) {
+          notifSvc.info(`Marked as ${state.label}`);
+        }
+      } catch (err) {
+        console.error('[kanban] State update failed:', err);
+      }
+    });
+    popover.appendChild(btn);
+  }
+
+  // Position below the dot
+  document.body.appendChild(popover);
+  const rect = dotEl.getBoundingClientRect();
+  popover.style.top  = `${rect.bottom + window.scrollY + 4}px`;
+  popover.style.left = `${Math.min(rect.left + window.scrollX, window.innerWidth - 140)}px`;
+
+  _activeDotPopover = popover;
+
+  // Close on outside click or Escape
+  const closeHandler = (e) => {
+    if (!popover.contains(e.target)) {
+      popover.remove();
+      _activeDotPopover = null;
+      document.removeEventListener('click', closeHandler, true);
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      popover.remove();
+      _activeDotPopover = null;
+      document.removeEventListener('click', closeHandler, true);
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  // Defer so the current click doesn't immediately close it
+  setTimeout(() => {
+    document.addEventListener('click', closeHandler, true);
+    document.addEventListener('keydown', escHandler);
+  }, 0);
+}
+
 // ── Quick-add ─────────────────────────────────────────────── //
 
 function _buildQuickAdd(statusKey) {
@@ -518,7 +617,7 @@ function _buildQuickAdd(statusKey) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'input kanban-quick-add-input';
-  input.placeholder = 'Task title…';
+  input.placeholder = 'Task name...';
 
   const doAdd = async () => {
     const title = input.value.trim();
@@ -538,6 +637,13 @@ function _buildQuickAdd(statusKey) {
       input.value = '';
       await _loadData();
       _rerenderColumns();
+      // Animate the new card (last card in column gets slide-in class)
+      const col = wrap.closest('.kanban-col');
+      const newCard = col?.querySelector('.kanban-card:last-child');
+      if (newCard) {
+        newCard.classList.add('kanban-card-new');
+        setTimeout(() => newCard.classList.remove('kanban-card-new'), 400);
+      }
     } catch (err) {
       console.error('[kanban] Quick add failed:', err);
     }
@@ -706,6 +812,11 @@ async function _moveTask(taskId, newStatus) {
     await saveEntity({ ...task, status: newStatus }, account?.id);
     await _loadData();
     _rerenderColumns();
+
+    // P-12: play confetti when task moves to Done column
+    if (newStatus === 'Done' || newStatus === 'done') {
+      window._fhEnv?.services?.effects?.play('confetti');
+    }
   } catch (err) {
     console.error('[kanban] Move task failed:', err);
   }

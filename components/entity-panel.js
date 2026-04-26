@@ -15,8 +15,10 @@ import { getEntityTypeConfig, getAllEntityTypes,
          getNeighbors, convertEntity } from '../core/graph-engine.js';
 import { on, emit, EVENTS } from '../core/events.js';
 import { openEditForm }     from './entity-form.js';
+import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
+import { mountActivityStream, recordCreated } from './activity-stream.js';
 
 // ── Graph view state ──────────────────────────────────────── //
 let _graphViewActive = false;
@@ -64,7 +66,10 @@ let _entity     = null;   // currently open entity
 let _config     = null;   // its EntityTypeConfig
 let _activeTab  = 'properties';
 let _saving     = false;
-let _dirty      = false;
+let _dirty           = false;
+let _snapshot        = null;
+let _activityCleanup = null;  // P-28: cleanup fn for mounted activity stream       // snapshot of entity at panel open time (P-26)
+let _dirtyEl    = null;       // "Unsaved changes" indicator element (P-26)
 
 // ════════════════════════════════════════════════════════════
 // INIT
@@ -86,6 +91,14 @@ export function initEntityPanel() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && _panel.classList.contains('open')) {
       closePanel();
+    }
+  });
+
+  // Cmd+S saves panel when open (P-26)
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's' && _panel?.classList.contains('open')) {
+      e.preventDefault();
+      if (_dirty) _save();
     }
   });
 
@@ -421,6 +434,8 @@ export async function openPanel(entityId, entityTypeHint) {
     // Content-first types default to 'content' view; others to 'properties'
     _activeTab = CONTENT_FIRST_TYPES.has(entity.type) ? 'content' : 'properties';
     _dirty     = false;
+    _snapshot  = JSON.stringify(entity);  // P-26: snapshot for dirty detection
+    _updateDirtyIndicator();
 
     // Auto-link entity to its Daily Note(s) in background
     // Skip in graph mode — graph browsing shouldn't create new DR edges
@@ -430,6 +445,7 @@ export async function openPanel(entityId, entityTypeHint) {
 
     _renderHeader();
     _renderActiveTab();
+    _mountActivityStream();  // P-28: mount activity stream after content
 
     _panel.classList.add('open');
     _panel.setAttribute('aria-hidden', 'false');
@@ -455,9 +471,12 @@ export function closePanel() {
   _panel.classList.remove('open');
   _panel.setAttribute('aria-hidden', 'true');
 
-  _entity = null;
-  _config = null;
-  _dirty  = false;
+  _entity   = null;
+  _config   = null;
+  _dirty    = false;
+  _snapshot = null;
+  _updateDirtyIndicator();
+  if (_activityCleanup) { _activityCleanup(); _activityCleanup = null; }  // P-28
 
   // Clear body after transition
   setTimeout(() => {
@@ -504,6 +523,15 @@ function _renderHeader() {
   savingInd.textContent = 'Saving…';
   topRow.appendChild(savingInd);
   _savingIndicator = savingInd;
+
+  // Dirty indicator (P-26)
+  const dirtyInd = document.createElement('span');
+  dirtyInd.className = 'panel-dirty-indicator';
+  dirtyInd.textContent = '● Unsaved';
+  dirtyInd.setAttribute('aria-live', 'polite');
+  dirtyInd.style.display = 'none';
+  topRow.appendChild(dirtyInd);
+  _dirtyEl = dirtyInd;
 
   // ── Icon toolbar (right-aligned) ─────────────────────────
   const toolbar = document.createElement('div');
@@ -584,7 +612,20 @@ function _renderHeader() {
   closeBtn.className = 'panel-icon-btn';
   closeBtn.setAttribute('aria-label', 'Close entity panel');
   closeBtn.innerHTML = '✕';
-  closeBtn.addEventListener('click', closePanel);
+  closeBtn.addEventListener('click', async () => {
+    if (_dirty) {
+      const dialogSvc = window._fhEnv?.services?.dialog;
+      let confirmed = true;
+      if (dialogSvc) {
+        confirmed = await dialogSvc.confirm(
+          'You have unsaved changes. Discard them?',
+          { title: 'Unsaved changes', confirmLabel: 'Discard', cancelLabel: 'Keep editing', danger: true }
+        );
+      }
+      if (!confirmed) return;
+    }
+    closePanel();
+  });
   toolbar.appendChild(closeBtn);
   _panelClose = closeBtn;
 
@@ -630,6 +671,7 @@ function _makeTitleEditable(titleField) {
     const val = input.value.trim();
     if (val !== current) {
       _entity[titleField.key] = val;
+      _markDirty();
       await _save();
     }
     // Rebuild title span — CSS handles styling via #entity-panel-title
@@ -676,6 +718,7 @@ function _renderHeaderActions() {
     btn.style.fontWeight = '600';
     btn.addEventListener('click', async () => {
       _entity.status = 'Done';
+      _markDirty();
       await _save();
       _renderHeader();
       _renderActiveTab();
@@ -693,6 +736,7 @@ function _renderHeaderActions() {
       } else {
         _entity.archived = !isArchived;
       }
+      _markDirty();
       await _save();
       _renderHeader();
       _renderActiveTab();
@@ -763,9 +807,11 @@ async function _duplicateEntity() {
   if (!_entity) return;
   const dup = { ..._entity };
   delete dup.id; delete dup.createdAt; delete dup.updatedAt;
+  delete dup.createdBy; // will be set to current user by saveEntity
   const titleK = _getTitleKey(dup.type);
   if (titleK && dup[titleK]) dup[titleK] += ' (copy)';
-  const saved = await saveEntity(dup);
+  const account = getAccount();
+  const saved = await saveEntity(dup, account?.id);
   openPanel(saved.id);
 }
 
@@ -1005,6 +1051,7 @@ function _renderContentView(container) {
       // Only save if panel still shows the same entity
       if (_entity !== _capturedEntity) return;
       _capturedEntity[_capturedFieldKey] = editor.innerHTML;
+      _markDirty();
       await _save();
     }, 800);
   };
@@ -1013,6 +1060,7 @@ function _renderContentView(container) {
     clearTimeout(_saveDebounce);
     if (_entity !== _capturedEntity) return;
     _capturedEntity[_capturedFieldKey] = editor.innerHTML;
+    _markDirty();
     await _save();
   });
 
@@ -1178,6 +1226,7 @@ function _renderFieldValue(wrap, field) {
       cb.style.cssText = 'cursor: pointer; width: 18px; height: 18px; accent-color: var(--color-accent);';
       cb.addEventListener('change', async () => {
         _entity[field.key] = cb.checked;
+        _markDirty();
         await _save();
       });
       wrap.appendChild(cb);
@@ -1238,6 +1287,7 @@ function _renderFieldValue(wrap, field) {
           txt.style.color = cb.checked ? 'var(--color-text-muted)' : 'var(--color-text)';
           _updateProg(); // keep progress counter live
           try {
+            _markDirty();
             await _save();
           } catch (err) {
             // Revert on failure
@@ -1438,6 +1488,7 @@ function _editText(wrap, field, inputType = 'text') {
     if (inputType === 'number') val = val === '' ? null : Number(val);
     if (val !== current) {
       _entity[field.key] = val || null;
+      _markDirty();
       await _save();
     }
     _renderFieldValue(wrap, field);
@@ -1484,6 +1535,7 @@ function _editSelect(wrap, field) {
       } else {
         _entity[field.key] = val || null;
       }
+      _markDirty();
       await _save();
     }
     _renderFieldValue(wrap, field);
@@ -1529,6 +1581,8 @@ function _editDate(wrap, field) {
       const newDateStr = DR_DATE_FIELDS.has(field.key) ? _isoToLocalDate(isoVal) : null;
 
       _entity[field.key] = isoVal;
+      _markDirty();
+      await _applyOnChanges(field.key, isoVal);  // P-27
       await _save();
 
       // Rewire Daily Review edges when a canonical date field changes
@@ -1580,6 +1634,7 @@ function _editTime(wrap, field) {
       if (field.key === 'dueTime' && _entity.dueDate) {
         _entity._dateTimeISO = `${_entity.dueDate}T${val}:00`;
       }
+      _markDirty();
       await _save();
     }
     _renderFieldValue(wrap, field);
@@ -1607,6 +1662,7 @@ function _editRichtext(wrap, field) {
     const val = textarea.value.trim();
     if (val !== current) {
       _entity[field.key] = val || null;
+      _markDirty();
       await _save();
     }
     _renderFieldValue(wrap, field);
@@ -1697,6 +1753,7 @@ function _renderTagChips(wrap, field) {
       const arr = [...(_entity[field.key] || [])];
       arr.splice(idx, 1);
       _entity[field.key] = arr;
+      _markDirty();
       await _save();
       _renderTagChips(wrap, field);
     });
@@ -1738,6 +1795,7 @@ function _showTagInput(wrap, field, chipContainer) {
       if (!arr.includes(val)) {
         arr.push(val);
         _entity[field.key] = arr;
+        _markDirty();
         await _save();
       }
     }
@@ -2959,15 +3017,111 @@ function _clearGraphPanel() {
 async function _confirmDelete() {
   if (!_entity) return;
 
-  const confirmed = confirm(`Delete this ${_config?.label || 'entity'}? This action cannot be undone.`);
+  const entityLabel = _config?.label || 'entity';
+  const entityTitle = _entity.title || _entity.name || _entity.body?.slice(0,40) || entityLabel;
+  const entityId    = _entity.id;
+
+  // Capture snapshot for undo BEFORE deleting
+  const snapshot = { ..._entity };
+
+  // Use dialog service if available, fall back to browser confirm
+  let confirmed = false;
+  const dialogSvc = window._fhEnv?.services?.dialog;
+  if (dialogSvc) {
+    confirmed = await dialogSvc.confirm(
+      `Delete \u201c${entityTitle}\u201d? You can press Cmd+Z to undo within 8 seconds.`,
+      { title: `Delete ${entityLabel}`, confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true }
+    );
+  } else {
+    confirmed = window.confirm(`Delete \u201c${entityTitle}\u201d? Press Cmd+Z immediately after to undo.`);
+  }
   if (!confirmed) return;
 
   try {
-    await deleteEntity(_entity.id);
+    await deleteEntity(entityId);
     closePanel();
+
+    // Push to global undo stack (imported from index.html via event)
+    window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle });
   } catch (err) {
     console.error('[entity-panel] Delete failed:', err);
+    const { showToast } = await import('../core/toast.js');
+    showToast('Delete failed — please try again', 'error');
   }
+}
+
+
+
+/**
+ * Mount activity stream below the properties tab content (P-28).
+ */
+function _mountActivityStream() {
+  // Cleanup previous stream
+  if (_activityCleanup) { _activityCleanup(); _activityCleanup = null; }
+  if (!_entity) return;
+
+  // Find or create the activity container below the panel body
+  let actContainer = _panelBody?.querySelector('.activity-stream-container');
+  if (!actContainer) {
+    actContainer = document.createElement('div');
+    actContainer.className = 'activity-stream-container';
+    _panelBody?.appendChild(actContainer);
+  }
+  _activityCleanup = mountActivityStream(actContainer, _entity.id, _entity.type);
+}
+
+
+// ── onChange cascading (P-27) ────────────────────────────── //
+
+/**
+ * Apply onChanges cascade when a field value changes.
+ * Merges the returned patch into _entity and highlights auto-computed fields.
+ * @param {string} changedField
+ * @param {*} newValue
+ */
+async function _applyOnChanges(changedField, newValue) {
+  const onChanges = _config?.onChanges;
+  if (!onChanges || !onChanges[changedField]) return;
+
+  const patch = onChanges[changedField]({ ..._entity }, newValue);
+  if (!patch || typeof patch !== 'object') return;
+
+  // Merge patch into entity
+  Object.assign(_entity, patch);
+
+  // Re-render to reflect cascaded values
+  _renderActiveTab();
+
+  // Highlight auto-computed fields with yellow flash (150ms per spec)
+  for (const key of Object.keys(patch)) {
+    const fieldEl = _panelBody?.querySelector(`[data-field-key="${key}"]`);
+    if (fieldEl) {
+      fieldEl.style.transition = 'background 0s';
+      fieldEl.style.background = 'rgba(251,191,36,0.35)';
+      setTimeout(() => {
+        fieldEl.style.transition = 'background 0.4s ease';
+        fieldEl.style.background = '';
+      }, 150);
+    }
+  }
+}
+
+// ── Dirty state (P-26) ──────────────────────────────────── //
+
+/**
+ * Mark the panel as dirty (unsaved changes).
+ * Called by every inline-edit that mutates _entity.
+ */
+function _markDirty() {
+  if (!_dirty) {
+    _dirty = true;
+    _updateDirtyIndicator();
+  }
+}
+
+function _updateDirtyIndicator() {
+  if (!_dirtyEl) return;
+  _dirtyEl.style.display = _dirty ? '' : 'none';
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2990,6 +3144,9 @@ async function _save() {
       _entity.type = _config.key;
     }
     _entity = await saveEntity(_entity);
+    _dirty    = false;
+    _snapshot = JSON.stringify(_entity);  // update snapshot after save
+    _updateDirtyIndicator();
   } catch (err) {
     console.error('[entity-panel] Save failed:', err);
   } finally {

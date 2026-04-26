@@ -23,6 +23,7 @@ import { getEntitiesByType, getEntity,
          getSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }          from '../core/events.js';
 import { getAccount }                 from '../core/auth.js';
+import { toast }                      from '../core/toast.js';
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -629,7 +630,8 @@ function _buildCompose(el, pm, apm) {
       selType='Text'; typeGrp.querySelectorAll('.fw-compose-type-btn').forEach(b=>b.classList.remove('active'));
       cancelBtn.style.display='none';
       renderWall({_internal:true});
-    } catch(e) { console.error('[fw] post failed',e); }
+      toast.success('Post shared');
+    } catch(e) { console.error('[fw] post failed',e); toast.error('Could not share post — please try again'); }
     finally { postBtn.disabled=false; postBtn.textContent='Post'; }
   });
 
@@ -849,8 +851,8 @@ async function _buildCard(post, pm, apm) {
         _parentPostId:post.id,
       },a?.id);
       await saveEdge({fromId:saved.id,fromType:'comment',toId:post.id,toType:'post',relation:'comments-on'},a?.id);
-      cf.value=''; renderWall({_internal:true});
-    } catch(e){ console.error(e); } finally{ cr.disabled=false; }
+      cf.value=''; renderWall({_internal:true}); toast.success('Comment added');
+    } catch(e){ console.error(e); toast.error('Could not add comment'); } finally{ cr.disabled=false; }
   });
   cf.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();cr.click();} });
   ci.append(cf,cr); thread.appendChild(ci); card.appendChild(thread);

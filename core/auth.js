@@ -221,7 +221,7 @@ export async function doFirstRun(familyName, displayName, username, password) {
     await setSetting('auth', auth);
     await setSetting('familyName', familyName.trim());
     await setSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-    await setSetting('theme', 'light');
+    // theme now managed by themeService — no longer stored under 'theme' key
     await setSetting('appVersion', '2.0.0');
 
     // Log the first audit entry
@@ -741,7 +741,7 @@ async function _seedDefaultAdmin() {
   await setSetting('auth', auth);
   await setSetting('familyName', DEFAULT_FAMILY_NAME);
   await setSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-  await setSetting('theme', 'light');
+  // theme now managed by themeService — no longer stored under 'theme' key
   await setSetting('appVersion', '2.0.0');
 
   // Log the seed event
@@ -1131,13 +1131,9 @@ function _showApp(auth) {
     if (familyNameEl && name) familyNameEl.textContent = name;
   });
 
-  // Apply saved theme
-  getSetting('theme').then(theme => {
-    if (theme) {
-      document.documentElement.setAttribute('data-theme', theme);
-      localStorage.setItem('fh_theme', theme);
-    }
-  });
+  // Theme is now managed entirely by themeService (P-13, services/theme.js)
+  // which reads 'settings:theme' and injects CSS variable overrides.
+  // The old getSetting('theme') call is removed to prevent overwriting themeService.
 
   // Import and start router
   import('./router.js').then(({ navigate, handleInitialHash, wireNavItems, VIEW_KEYS }) => {

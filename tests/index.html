@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FamilyHub v3 — Test Suite</title>
+  <link rel="stylesheet" href="../styles/tokens.css" />
+  <link rel="stylesheet" href="../styles/layout.css" />
+  <link rel="stylesheet" href="../styles/components.css" />
+  <style>
+    body { font-family: var(--font-body); padding: var(--space-8); background: var(--color-bg); }
+    h1   { font-family: var(--font-heading); font-size: var(--text-2xl); margin-bottom: var(--space-6); }
+    #summary { margin-bottom: var(--space-6); display: flex; gap: var(--space-4); align-items: center; }
+    .badge { padding: var(--space-1) var(--space-3); border-radius: var(--radius-full); font-weight: 700; font-size: var(--text-sm); }
+    .badge-pass { background: var(--color-success-bg); color: var(--color-success-text); }
+    .badge-fail { background: var(--color-danger-bg);  color: var(--color-danger-text);  }
+    .badge-total{ background: var(--color-surface-2);  color: var(--color-text-muted);  }
+    #results { display: flex; flex-direction: column; gap: var(--space-1); }
+    .test-row { display: grid; grid-template-columns: 28px 1fr auto; gap: var(--space-3);
+                align-items: center; padding: var(--space-2) var(--space-3);
+                border-radius: var(--radius-md); background: var(--color-surface);
+                border: 1px solid var(--color-border); }
+    .test-row.pass { border-left: 3px solid var(--color-success); }
+    .test-row.fail { border-left: 3px solid var(--color-danger); background: var(--color-danger-bg); }
+    .test-icon { font-size: 14px; text-align: center; }
+    .test-name { font-size: var(--text-sm); color: var(--color-text); }
+    .test-err  { font-size: var(--text-xs); color: var(--color-danger-text); margin-top: 2px; font-family: var(--font-mono); }
+    .test-ms   { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; }
+    .test-file { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing:.05em;
+                 color: var(--color-text-muted); padding: var(--space-3) 0 var(--space-1); }
+    #run-btn { margin-bottom: var(--space-6); }
+  </style>
+</head>
+<body>
+  <h1>🧪 FamilyHub Test Suite</h1>
+  <button class="btn btn-primary" id="run-btn">▶ Run All Tests</button>
+  <div id="summary" style="display:none">
+    <span class="badge badge-pass" id="badge-pass">— passed</span>
+    <span class="badge badge-fail" id="badge-fail">— failed</span>
+    <span class="badge badge-total" id="badge-total">— total</span>
+    <span style="font-size:var(--text-sm);color:var(--color-text-muted);" id="time-taken"></span>
+  </div>
+  <div id="results"></div>
+
+  <script type="module">
+    import { run, getResults } from './runner.js';
+
+    // Import all test files to register their tests
+    const FILES = [
+      { label: 'Signals',  module: './signals.test.js' },
+      { label: 'Errors',   module: './errors.test.js'  },
+      { label: 'Data',     module: './data.test.js'    },
+      { label: 'History',  module: './history.test.js' },
+      { label: 'Router',   module: './router.test.js'  },
+    ];
+
+    let _fileOrder = [];
+
+    document.getElementById('run-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('run-btn');
+      btn.disabled = true; btn.textContent = '⏳ Running…';
+
+      const t0 = performance.now();
+
+      // Dynamically import each test file
+      for (const { label, module } of FILES) {
+        try {
+          await import(/* @vite-ignore */ module);
+          _fileOrder.push(label);
+        } catch (err) {
+          console.error(`[tests] Failed to load ${module}:`, err);
+        }
+      }
+
+      const { passed, failed, total } = await run();
+      const results = getResults();
+      const elapsed = Math.round(performance.now() - t0);
+
+      // Summary
+      const summary = document.getElementById('summary');
+      summary.style.display = 'flex';
+      document.getElementById('badge-pass').textContent  = `${passed} passed`;
+      document.getElementById('badge-fail').textContent  = `${failed} failed`;
+      document.getElementById('badge-total').textContent = `${total} total`;
+      document.getElementById('time-taken').textContent  = `${elapsed}ms`;
+
+      // Results
+      const container = document.getElementById('results');
+      container.innerHTML = '';
+
+      let fileIdx = 0;
+      for (const r of results) {
+        // File separator heuristic: every n tests
+        const div = document.createElement('div');
+        div.className = `test-row ${r.ok ? 'pass' : 'fail'}`;
+        div.innerHTML = `
+          <span class="test-icon">${r.ok ? '✓' : '✗'}</span>
+          <div>
+            <div class="test-name">${_esc(r.name)}</div>
+            ${r.error ? `<div class="test-err">${_esc(r.error)}</div>` : ''}
+          </div>
+          <span class="test-ms">${r.ms}ms</span>
+        `;
+        container.appendChild(div);
+      }
+
+      btn.disabled = false;
+      btn.textContent = '▶ Run All Tests';
+
+      // Update page title
+      document.title = `${passed}/${total} passing — FamilyHub Tests`;
+      if (failed === 0) document.title = `✓ All ${total} tests passing`;
+    });
+
+    function _esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+  </script>
+</body>
+</html>

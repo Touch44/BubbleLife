@@ -373,6 +373,8 @@ export async function saveEntity(entity, byAccountId) {
     await tx.done;
 
     await _emit('entity:saved', { entity: saved, isNew });
+    // P-14: notify other tabs via sync service
+    window._fhEnv?.services?.sync?.broadcast(saved.type || 'entity', saved.id, isNew ? 'create' : 'update');
     return saved;
 
   } catch (err) {
@@ -429,6 +431,8 @@ export async function deleteEntity(id, byAccountId) {
     await tx.done;
 
     await _emit('entity:deleted', { id, entityType: entity.type });
+    // P-14: notify other tabs
+    window._fhEnv?.services?.sync?.broadcast(entity.type || 'entity', id, 'delete');
 
   } catch (err) {
     console.error('[db] deleteEntity failed:', err);
@@ -935,3 +939,32 @@ function _idbReq(request) {
     request.onerror   = () => reject(request.error);
   });
 }
+
+// ── Service descriptor for serviceRegistry (P-06) ─────────── //
+// Wraps db.js functions as env.services.data so the env pattern works.
+// db.js is already initialized by initDB() before buildEnv() runs.
+// This descriptor just exposes the db API through the service layer.
+
+export const dataServiceDescriptor = {
+  dependencies: [],
+  start() {
+    return {
+      getEntity,
+      getEntitiesByType,
+      queryEntities,
+      saveEntity,
+      deleteEntity,
+      getEdge,
+      getEdgesFrom,
+      getEdgesTo,
+      saveEdge,
+      deleteEdge,
+      getSetting,
+      setSetting,
+      getSettings,
+      exportAll,
+      importAll,
+      uid,
+    };
+  },
+};

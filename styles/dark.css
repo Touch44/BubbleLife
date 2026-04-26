@@ -8,6 +8,7 @@
   /* ── Brand / Accent ──────────────────────────────────────── */
   --color-brand:        #E2E8F0;
   --color-accent:       #14B8A6;
+  --color-accent-muted: rgba(20, 184, 166, 0.15);   /* accent at 15% on dark */
 
   /* ── Background / Surface (Blueprint §9.1 dark values) ───── */
   --color-bg:           #0F172A;

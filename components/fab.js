@@ -78,6 +78,10 @@ export function initFab() {
 
   // ── Keyboard shortcuts: N = note, T = task, + = toggle FAB ─
   document.addEventListener('keydown', (e) => {
+    // BUG-G fix: don't fire shortcuts when auth screen is visible
+    const appEl = document.getElementById('app');
+    if (appEl && appEl.getAttribute('aria-hidden') === 'true') return;
+
     const inTextField = e.target.matches(
       'input, textarea, [contenteditable="true"], select'
     );

@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v2.3.0 -->
+  <!-- Build: v3.0.0 -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=2.3.0" />
-  <link rel="stylesheet" href="./styles/layout.css?v=2.3.0" />
-  <link rel="stylesheet" href="./styles/components.css?v=2.3.0" />
-  <link rel="stylesheet" href="./styles/dark.css?v=2.3.0" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=3.0.0" />
+  <link rel="stylesheet" href="./styles/layout.css?v=3.0.0" />
+  <link rel="stylesheet" href="./styles/components.css?v=3.0.0" />
+  <link rel="stylesheet" href="./styles/dark.css?v=3.0.0" />
 </head>
 <body>
 
@@ -170,15 +170,11 @@
 
     <div id="topbar-spacer" aria-hidden="true"></div>
 
-    <!-- Search button (Cmd+K) -->
-    <button id="topbar-search-btn" aria-label="Search (Cmd+K)" aria-keyshortcuts="Meta+k Control+k">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-        <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.5"/>
-        <path d="M10 10L13 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-      <span>Search</span>
-      <kbd aria-hidden="true">⌘K</kbd>
-    </button>
+    <!-- Faceted Search Bar (P-17) — initSearchBar() populates this -->
+    <div id="topbar-search" role="search" aria-label="Search and filter"></div>
+
+    <!-- Systray — ambient awareness bar (P-19) — initSystray() populates this -->
+    <div id="topbar-systray" class="st-bar" aria-label="Awareness indicators"></div>
 
     <!-- Sync indicator -->
     <span id="topbar-sync-indicator" title="Sync status" aria-live="polite" aria-label="Sync status: idle">
@@ -563,34 +559,45 @@
 <!-- ── Keyboard Shortcuts Help Overlay ── -->
 <div id="shortcuts-overlay" role="dialog" aria-label="Keyboard shortcuts"
      aria-modal="true" aria-hidden="true" inert>
-  <div style="background: var(--color-bg); border-radius: var(--radius-lg);
-              box-shadow: var(--shadow-2xl); padding: var(--space-6);
-              width: 100%; max-width: 520px; max-height: 80dvh;
-              overflow-y: auto; margin: var(--space-4);">
-    <div style="display: flex; align-items: center; justify-content: space-between;
-                margin-bottom: var(--space-5);">
-      <h2 style="font-family: var(--font-heading); font-size: var(--text-xl);">
-        Keyboard Shortcuts
-      </h2>
+  <div class="shortcuts-panel">
+    <div class="shortcuts-header">
+      <h2 class="shortcuts-title">Keyboard Shortcuts</h2>
       <button class="btn-icon" id="shortcuts-close" aria-label="Close shortcuts">✕</button>
     </div>
-    <!-- Blueprint §9.3 — all 14 shortcuts -->
-    <div style="display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-4);
-                align-items: center;">
-      <kbd>⌘K</kbd>        <span class="text-sm">Open global search / command palette</span>
-      <kbd>+</kbd>          <span class="text-sm">Toggle quick-create menu (FAB)</span>
-      <kbd>N</kbd>          <span class="text-sm">Quick new Note (outside text field)</span>
-      <kbd>T</kbd>          <span class="text-sm">Quick new Task</span>
-      <kbd>E</kbd>          <span class="text-sm">Quick new Event</span>
-      <kbd>G</kbd>          <span class="text-sm">Go to Knowledge Graph</span>
-      <kbd>D</kbd>          <span class="text-sm">Go to Daily Review</span>
-      <kbd>K</kbd>          <span class="text-sm">Go to Kanban</span>
-      <kbd>C</kbd>          <span class="text-sm">Go to Calendar</span>
-      <kbd>Esc</kbd>        <span class="text-sm">Close entity panel / modal / search</span>
-      <kbd>⌘↵</kbd>        <span class="text-sm">Save entity form</span>
-      <kbd>⌘Z</kbd>        <span class="text-sm">Undo last entity delete (5 sec window)</span>
-      <kbd>?</kbd>          <span class="text-sm">Show this shortcuts overlay</span>
-      <kbd>Backspace</kbd>  <span class="text-sm">Graph focus mode: go back one level</span>
+    <!-- P-32: search input filters shortcuts by name -->
+    <div class="shortcuts-search-wrap">
+      <input type="text" id="shortcuts-search" class="input"
+             placeholder="Filter shortcuts…" autocomplete="off"
+             aria-label="Filter keyboard shortcuts" />
+    </div>
+    <!-- P-32: populated dynamically from hotkeyService.getAll() -->
+    <div id="shortcuts-list" class="shortcuts-list" role="list">
+      <!-- Fallback static list (shown before hotkeyService boots) -->
+      <div class="shortcuts-group">
+        <div class="shortcuts-group-label">Global</div>
+        <div class="shortcuts-row"><kbd>⌘K</kbd><span>Open command palette</span></div>
+        <div class="shortcuts-row"><kbd>?</kbd><span>Show this overlay</span></div>
+        <div class="shortcuts-row"><kbd>Esc</kbd><span>Close overlay / panel</span></div>
+        <div class="shortcuts-row"><kbd>⌘Z</kbd><span>Undo entity delete (8 sec)</span></div>
+        <div class="shortcuts-row"><kbd>⌘S</kbd><span>Save entity panel</span></div>
+      </div>
+      <div class="shortcuts-group">
+        <div class="shortcuts-group-label">Navigation</div>
+        <div class="shortcuts-row"><kbd>D</kbd><span>Go to Daily Review</span></div>
+        <div class="shortcuts-row"><kbd>K</kbd><span>Go to Kanban</span></div>
+        <div class="shortcuts-row"><kbd>C</kbd><span>Go to Calendar</span></div>
+        <div class="shortcuts-row"><kbd>G</kbd><span>Go to Knowledge Graph</span></div>
+      </div>
+      <div class="shortcuts-group">
+        <div class="shortcuts-group-label">Create</div>
+        <div class="shortcuts-row"><kbd>N</kbd><span>New Note</span></div>
+        <div class="shortcuts-row"><kbd>T</kbd><span>New Task</span></div>
+        <div class="shortcuts-row"><kbd>E</kbd><span>New Event</span></div>
+        <div class="shortcuts-row"><kbd>+</kbd><span>Toggle FAB menu</span></div>
+      </div>
+    </div>
+    <div class="shortcuts-footer">
+      <span id="shortcuts-platform"></span>
     </div>
   </div>
 </div>
@@ -658,9 +665,10 @@
      ══════════════════════════════════════════════════════════ -->
 <script type="module">
   /**
-   * FamilyHub v2.0 — App Bootstrap
+   * FamilyHub v3.0 — App Bootstrap
    * This is the only <script> in index.html.
    * All logic lives in ES modules imported below.
+   * P-01: buildEnv() wires registry+env before auth.
    */
 
   // ── Core imports ──────────────────────────────────────────
@@ -668,6 +676,7 @@
   import './views/kanban.js';                                 // registers 'kanban' view
   import './views/calendar.js';                               // registers 'calendar' view
   import './views/family-wall.js';                            // registers 'family-wall' view
+  import './views/stub-views.js';                             // registers placeholder views
   import { on, emit, EVENTS }        from './core/events.js';
   import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS }
                                      from './core/router.js';
@@ -678,6 +687,24 @@
   import { initFab }                 from './components/fab.js';
   import { initSearch }              from './components/search.js';
   import { initAuth }                from './core/auth.js';
+  import { buildEnv }                from './core/env.js';      // P-01
+  import { dataServiceDescriptor }    from './core/db.js';        // P-06
+  import { effectsServiceDescriptor } from './services/effects.js'; // P-12
+  import { themeServiceDescriptor }   from './services/theme.js';   // P-13
+  import { syncServiceDescriptor }    from './services/sync.js';    // P-14
+  import { initSearchBar }            from './components/search-bar.js';      // P-17
+  import { initCommandPalette }       from './components/command-palette.js'; // P-18
+  import { initSystray }              from './components/systray.js';          // P-19
+  import { notificationServiceDescriptor } from './services/notification.js'; // P-07
+  import { dialogServiceDescriptor }      from './services/dialog.js';       // P-08
+  import { hotkeyServiceDescriptor }      from './services/hotkey.js';       // P-09
+  import { historyServiceDescriptor }     from './services/history.js';      // P-10
+  import { commandServiceDescriptor }     from './services/command.js';      // P-11
+  import { serviceRegistry }          from './core/registry.js';
+  import { showToast, toast }        from './core/toast.js';
+  import { mountDebugPanel }          from './core/debug.js';   // P-29
+  import { startTour, tourRegistry, isTourComplete } from './core/tour.js';  // P-32
+  import { initPWA }                   from './core/pwa.js';    // P-33
 
   // ── App initialisation ────────────────────────────────────
   async function initApp() {
@@ -730,50 +757,68 @@
       // 6. FAB — handled by components/fab.js (initFab())
 
       // 7. Keyboard shortcuts (Blueprint §9.3)
-      // N, T → fab.js | Cmd+K + Esc(search) → search.js | FAB Esc → fab.js
-      // Remaining: navigation shortcuts + ? overlay + Esc(shortcuts) + Cmd+Z
-      document.addEventListener('keydown', (e) => {
-        const inTextField = e.target.matches('input, textarea, [contenteditable="true"], select');
-
-        // Esc — close shortcuts overlay only (panel/search/fab handle their own)
-        if (e.key === 'Escape') {
-          const shortcutsOverlay = document.getElementById('shortcuts-overlay');
-          if (shortcutsOverlay?.classList.contains('open')) {
-            shortcutsOverlay.classList.remove('open');
-            shortcutsOverlay.setAttribute('aria-hidden', 'true');
-            shortcutsOverlay.setAttribute('inert', '');
-          }
-          return;
-        }
-
-        if (inTextField || e.metaKey || e.ctrlKey || e.altKey) return;
-
-        // Navigation + utility shortcuts (N/T owned by fab.js, Cmd+K by search.js)
-        switch (e.key) {
-          case 'e': case 'E': emit(EVENTS.FAB_CREATE, { entityType: 'event' }); break;
-          case 'g': case 'G': navigate(VIEW_KEYS.GRAPH);    break;
-          case 'd': case 'D': navigate(VIEW_KEYS.DAILY);    break;
-          case 'k': case 'K': navigate(VIEW_KEYS.KANBAN);   break;
-          case 'c': case 'C': navigate(VIEW_KEYS.CALENDAR); break;
-          case '?': {
-            e.preventDefault();
-            const so = document.getElementById('shortcuts-overlay');
-            if (so) {
-              so.classList.add('open');
-              so.setAttribute('aria-hidden', 'false');
-              so.removeAttribute('inert');
-            }
-            break;
-          }
-        }
-      });
+      // Handled by hotkeyService (P-07) after buildEnv() runs.
+      // Cmd+Z undo handled below (must run before hotkey service to pop undo stack first).
 
       // Cmd+Z — undo delete (always, even in text fields)
+      // Global undo-delete stack — populated by entity-panel._confirmDelete()
+      const _undoStack = [];
+      const UNDO_TTL = 8000; // ms
+
+      // Initialize window.FH early so entity-panel can call _pushUndoDelete
+      // (the full FH object is completed later at boot sequence end)
+      window.FH = window.FH || {};
+
+      window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
+        const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
+        _undoStack.push(entry);
+        showToast(`“${entityTitle}” deleted`, 'warn', {
+          duration: UNDO_TTL,
+          action: { label: 'Undo', onClick: () => _performUndo(entry) },
+        });
+        setTimeout(() => {
+          const idx = _undoStack.indexOf(entry);
+          if (idx !== -1) _undoStack.splice(idx, 1);
+        }, UNDO_TTL);
+      };
+
+      async function _performUndo(entry) {
+        if (!entry?.snapshot) return;
+        try {
+          const { saveEntity } = await import('./core/db.js');
+          await saveEntity({ ...entry.snapshot, deleted: false, updatedAt: new Date().toISOString() });
+          showToast(`“${entry.entityTitle}” restored`, 'success');
+          const idx = _undoStack.indexOf(entry);
+          if (idx !== -1) _undoStack.splice(idx, 1);
+        } catch (err) {
+          console.error('[undo] Restore failed:', err);
+          showToast('Could not restore — please check your data', 'error');
+        }
+      }
+
       document.addEventListener('keydown', (e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-          emit('entity:undoDelete');
+        if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+          const entry = _undoStack.pop();
+          if (entry) {
+            // stopImmediatePropagation so hotkeyService doesn't also fire history.undo()
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            _performUndo(entry);
+          }
         }
       });
+
+      // Handle SW_UPDATED message from service worker (P-20)
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          if (e.data?.type === 'SW_UPDATED') {
+            showToast('Update available — reload to get the latest version', 'info', {
+              duration: 0,
+              action: { label: 'Reload', onClick: () => window.location.reload() },
+            });
+          }
+        });
+      }
 
       // 8. Shortcuts overlay close button
       const shortcutsClose = document.getElementById('shortcuts-close');
@@ -801,24 +846,149 @@
         });
       });
 
-      // 10. Initialise IndexedDB then Auth (the real boot sequence)
-      //     auth.js determines: first-run | login screen | resume session
-      //     isLoggedIn(), isFirstRun(), doFirstRun(), doLogin(), doLogout()
-      //     are all available here if any top-level wiring needs them.
+      // 10. Initialise IndexedDB, build env (P-01), then Auth
+      //     buildEnv() resolves all registered services in dependency order.
+      //     auth.js determines: first-run | login screen | resume session.
       await initDB();
       await initGraphEngine();
+
+      // Register services in dependency order before buildEnv() resolves them
+      // P-06: data (no deps) — registered first, all services may depend on it
+      serviceRegistry.add('data',         dataServiceDescriptor);
+      // P-12: effects (no deps)
+      serviceRegistry.add('effects',      effectsServiceDescriptor);
+      // P-13: theme (needs data)
+      serviceRegistry.add('theme',        themeServiceDescriptor);
+      // P-14: sync (no deps)
+      serviceRegistry.add('sync',         syncServiceDescriptor);
+      // P-07: notification (no deps) — must be early, others depend on it
+      serviceRegistry.add('notification', notificationServiceDescriptor);
+      // P-08: dialog (needs notification)
+      serviceRegistry.add('dialog',       dialogServiceDescriptor);
+      // P-09: hotkey (no deps)
+      serviceRegistry.add('hotkey',       hotkeyServiceDescriptor);
+      // P-10: history (needs notification + hotkey)
+      serviceRegistry.add('history',      historyServiceDescriptor);
+      // P-11: command (no deps)
+      serviceRegistry.add('command',      commandServiceDescriptor);
+
+      // P-01: Build the shared environment object (registry + services)
+      const env = await buildEnv();
+
+      // Expose env on window.FH for debugging and inter-module use
+      // (will be overwritten below with full FH object)
+      window._fhEnv = env;
+
+      // P-29: mount debug overlay if ?debug=true
+      if (env.debug) mountDebugPanel(env);
+
+      // P-33: init PWA install prompt handler
+      initPWA(env);
+
       initEntityPanel();
       initEntityForm();
       initFab();
       initSearch();
+      initSearchBar();                    // P-17: faceted search bar
+      initCommandPalette(env);            // P-18: command palette
+      initSystray(env);                   // P-19: systray awareness bar
       await initAuth();
 
-      // 11. Service Worker registration (Blueprint §8.2)
+      // 11. Auto-start onboarding tour on first login (P-31)
+      {
+        const tourDone = await isTourComplete('onboarding').catch(() => false);
+        if (!tourDone) {
+          // Small delay so the view renders first
+          setTimeout(() => startTour('onboarding', window._fhEnv), 800);
+        }
+      }
+
+      // 12. Populate shortcuts overlay from hotkeyService (P-32)
+      {
+        const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+        const modKey = isMac ? '⌘' : 'Ctrl';
+        const platformEl = document.getElementById('shortcuts-platform');
+        if (platformEl) platformEl.textContent = isMac ? 'Mac' : 'Windows/Linux';
+
+        // Render shortcut chips from hotkeyService.getAll() after env builds
+        function _renderShortcutsOverlay(query = '') {
+          const listEl = document.getElementById('shortcuts-list');
+          if (!listEl) return;
+          const hotkeySvc = window._fhEnv?.services?.hotkey;
+          if (!hotkeySvc) return; // fallback static list stays
+
+          const all = hotkeySvc.getAll().filter(s => s.description);
+          const q = query.toLowerCase().trim();
+          const filtered = q
+            ? all.filter(s => s.description.toLowerCase().includes(q) || s.shortcut.includes(q))
+            : all;
+
+          // Group by scope (global, then view-specific)
+          const groups = new Map();
+          for (const s of filtered) {
+            const cat = s.scope === 'global' ? 'Global' : `View: ${s.scope}`;
+            if (!groups.has(cat)) groups.set(cat, []);
+            groups.get(cat).push(s);
+          }
+
+          if (groups.size === 0) {
+            listEl.innerHTML = '<div style="padding:var(--space-4);color:var(--color-text-muted);text-align:center;">No shortcuts match</div>';
+            return;
+          }
+
+          listEl.innerHTML = '';
+          for (const [cat, shorts] of groups) {
+            const grp = document.createElement('div');
+            grp.className = 'shortcuts-group';
+            const label = document.createElement('div');
+            label.className = 'shortcuts-group-label';
+            label.textContent = cat;
+            grp.appendChild(label);
+            for (const s of shorts) {
+              const row = document.createElement('div');
+              row.className = 'shortcuts-row';
+              // Format key: ctrl→⌘/Ctrl, shift→⇧, alt→⌥
+              let display = s.shortcut
+                .replace('ctrl', modKey)
+                .replace('shift', '⇧')
+                .replace('alt', isMac ? '⌥' : 'Alt')
+                .replace('escape', 'Esc')
+                .replace('enter', '↵')
+                .toUpperCase()
+                .replace(/\+/g, '+');
+              row.innerHTML = \`<kbd>\${display}</kbd><span>\${s.description}</span>\`;
+              grp.appendChild(row);
+            }
+            listEl.appendChild(grp);
+          }
+        }
+
+        // Wire search input
+        const searchEl = document.getElementById('shortcuts-search');
+        if (searchEl) {
+          searchEl.addEventListener('input', () => _renderShortcutsOverlay(searchEl.value));
+        }
+
+        // Refresh list when overlay opens
+        const so = document.getElementById('shortcuts-overlay');
+        if (so) {
+          const observer = new MutationObserver(() => {
+            if (so.classList.contains('open')) {
+              if (searchEl) searchEl.value = '';
+              _renderShortcutsOverlay();
+              searchEl?.focus();
+            }
+          });
+          observer.observe(so, { attributes: true, attributeFilter: ['class'] });
+        }
+      }
+
+      // 12. Service Worker registration (Blueprint §8.2)
       if ('serviceWorker' in navigator) {
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=2.3.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=3.0.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -858,10 +1028,12 @@
       // 13. Entity panel open/close — handled by components/entity-panel.js
       // (initEntityPanel() wires PANEL_OPENED listener internally)
 
-      // 14. Theme toggle listener
+      // 14. Theme toggle listener — sync fast-boot key when theme changes
+      // themeService.setTheme() handles 'settings:theme'; this keeps 'fh_theme'
+      // in sync so the next page load can apply the theme before JS runs.
       on(EVENTS.THEME_CHANGED, ({ theme }) => {
         document.documentElement.setAttribute('data-theme', theme);
-        localStorage.setItem('fh_theme', theme);
+        localStorage.setItem('fh_theme', theme);  // fast-boot key (read in step 1)
       });
 
       // 15. Migration skip button (migration-yes wired by auth.js)
@@ -871,12 +1043,35 @@
 
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
-      window.FH = { version: '2.0.0', emit, on };
+      window.FH = Object.assign(window.FH || {}, {
+        version: '3.0.0', emit, on, env: window._fhEnv,
+        startTour: (name) => startTour(name, window._fhEnv),  // P-32
+      });
 
       console.log('[FH] Boot sequence complete.');
 
     } catch (err) {
       console.error('[FH] Fatal init error:', err);
+      // Show user-facing error — blank screen is worse than an error message
+      document.body.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                    min-height:100dvh;padding:2rem;text-align:center;font-family:system-ui,sans-serif;
+                    background:#0F172A;color:#F1F5F9;">
+          <div style="font-size:2rem;margin-bottom:1rem;">⚠️</div>
+          <h1 style="font-size:1.25rem;font-weight:600;margin-bottom:0.5rem;">FamilyHub failed to start</h1>
+          <p style="color:#94A3B8;max-width:360px;margin-bottom:1.5rem;">
+            ${err?.message || 'An unexpected error occurred during startup.'}
+          </p>
+          <button onclick="window.location.reload()"
+                  style="padding:0.5rem 1.5rem;background:#0A7B6C;color:#fff;border:none;
+                         border-radius:0.5rem;cursor:pointer;font-size:0.875rem;">
+            Reload
+          </button>
+          <details style="margin-top:1rem;color:#64748B;font-size:0.75rem;max-width:480px;">
+            <summary style="cursor:pointer;">Technical details</summary>
+            <pre style="text-align:left;margin-top:0.5rem;white-space:pre-wrap;">${err?.stack || err}</pre>
+          </details>
+        </div>`;
     }
   }
 

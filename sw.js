@@ -1,250 +1,172 @@
 /**
- * FamilyHub v2.0 — Service Worker (sw.js)
- * Blueprint §8.2 — Cache shell, background sync, offline fallback
- *
- * Strategy summary:
- *   - App shell (HTML/CSS/JS): Cache First — update in background
- *   - Notion API calls:        Network Only — never cached
- *   - Offline fallback:        Serve cached index.html
- *   - Background Sync:         Register "notion-sync" for offline queue retry
+ * FamilyHub v3.0 — Service Worker (sw.js)
+ * Implements Prompt 05 spec: Cache-First shell, Network-First 3s timeout, update detection, offline fallback.
  */
-
 'use strict';
 
-// ── Cache Names ───────────────────────────────────────────── //
-const APP_VERSION   = '2.3.0';
+const APP_VERSION   = '3.0.0';
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
+const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
-// All caches managed by this SW
-const ALL_CACHES = [CACHE_SHELL, CACHE_DYNAMIC];
-
-// ── Shell Files to Pre-Cache ──────────────────────────────── //
-// These are fetched and cached during install.
-// Must match actual file paths on server.
 const SHELL_FILES = [
-  './',
-  './index.html',
-  './manifest.json',
-  './styles/tokens.css?v=2.3.0',
-  './styles/layout.css?v=2.3.0',
-  './styles/components.css?v=2.3.0',
-  './styles/dark.css?v=2.3.0',
-  './core/events.js',
-  './core/router.js',
-  './core/db.js',
-  './core/auth.js',
-  './core/graph-engine.js',
-  './components/entity-panel.js',
-  './components/entity-form.js',
-  './components/fab.js',
-  './components/search.js',
-  './components/graph-canvas.js',
-  // View modules
-  './views/daily.js',
-  './views/kanban.js',
-  './views/calendar.js',
-  './views/family-wall.js',
-  // Icons (all sizes + maskable variants for PWA installability)
-  './icons/icon-192.png',
-  './icons/icon-192-maskable.png',
-  './icons/icon-512.png',
-  './icons/icon-512-maskable.png',
-  // Shortcut icons (used by OS home screen shortcuts)
-  './icons/shortcut-daily.png',
-  './icons/shortcut-task.png',
-  // Screenshots (used by PWA install UI in supporting browsers)
-  './screenshots/daily-desktop.png',
-  './screenshots/kanban-mobile.png',
+  './', './index.html', './manifest.json',
+  './styles/tokens.css?v=3.0.0', './styles/layout.css?v=3.0.0',
+  './styles/components.css?v=3.0.0', './styles/dark.css?v=3.0.0',
+  './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
+  './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
+  './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
+  './i18n/en.json',
+  './services/notification.js', './services/dialog.js', './services/hotkey.js',
+  './services/history.js', './services/command.js', './services/effects.js',
+  './services/theme.js', './services/sync.js',
+  './components/entity-panel.js', './components/entity-form.js', './components/fab.js',
+  './components/search.js', './components/search-bar.js', './components/command-palette.js',
+  './components/systray.js', './components/graph-canvas.js',
+  './components/activity-stream.js', './components/view-switcher.js',
+  './core/debug.js', './core/tour.js', './core/pwa.js',
+  './core/debug.js', './core/tour.js', './core/pwa.js',
+  './views/daily.js', './views/kanban.js', './views/calendar.js',
+  './views/family-wall.js', './views/stub-views.js',
+  './icons/icon-192.png', './icons/icon-192-maskable.png',
+  './icons/icon-512.png', './icons/icon-512-maskable.png',
+  './icons/shortcut-daily.png', './icons/shortcut-task.png',
+  './screenshots/daily-desktop.png', './screenshots/kanban-mobile.png',
 ];
 
-// ── Patterns: Never Cache ─────────────────────────────────── //
-// Notion API calls always go to network.
-const NETWORK_ONLY_PATTERNS = [
-  /api\.notion\.com/,
-  /\/sync\/notion-proxy\.php/,
-  /\/sync\/notion-cron\.php/,
-  /\/sync\/save-data\.php/,
+const NETWORK_ONLY = [
+  /api\.notion\.com/, /\/sync\/notion-proxy\.php/,
+  /\/sync\/notion-cron\.php/, /\/sync\/save-data\.php/,
 ];
 
-// ── INSTALL ───────────────────────────────────────────────── //
-self.addEventListener('install', (event) => {
-  console.log('[SW] Installing FamilyHub', APP_VERSION);
+function _isShellFile(url) {
+  try {
+    const path = new URL(url).pathname;
+    return SHELL_FILES.some(sf => {
+      const sfPath = sf.split('?')[0];
+      return sfPath === path || path.endsWith(sfPath.replace('./', '/'));
+    });
+  } catch { return false; }
+}
 
+// INSTALL: pre-cache shell, skipWaiting
+self.addEventListener('install', event => {
+  console.log('[SW] Installing v' + APP_VERSION);
   event.waitUntil(
-    caches.open(CACHE_SHELL)
-      .then(cache => {
-        console.log('[SW] Pre-caching shell files');
-        // addAll fails atomically — if one file 404s, install fails.
-        // Use individual adds to be resilient during dev.
-        return Promise.allSettled(
-          SHELL_FILES.map(url =>
-            cache.add(url).catch(err =>
-              console.warn(`[SW] Failed to cache ${url}:`, err)
-            )
-          )
-        );
-      })
-      .then(() => {
-        // Skip waiting — activate immediately on install.
-        // The update banner in index.html handles the UX.
-        return self.skipWaiting();
-      })
+    caches.open(CACHE_SHELL).then(cache =>
+      Promise.allSettled(
+        SHELL_FILES.map(url => cache.add(url).catch(e => console.warn('[SW] skip', url, e.message)))
+      )
+    ).then(() => self.skipWaiting())
   );
 });
 
-// ── ACTIVATE ──────────────────────────────────────────────── //
-self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating FamilyHub', APP_VERSION);
-
+// ACTIVATE: delete old caches, claim clients, postMessage SW_UPDATED
+self.addEventListener('activate', event => {
+  console.log('[SW] Activating v' + APP_VERSION);
   event.waitUntil(
     Promise.all([
-      // Delete old caches from previous versions
       caches.keys().then(keys =>
-        Promise.all(
-          keys
-            .filter(key => !ALL_CACHES.includes(key))
-            .map(key => {
-              console.log('[SW] Deleting old cache:', key);
-              return caches.delete(key);
-            })
-        )
+        Promise.all(keys.filter(k => !ALL_CACHES.includes(k)).map(k => caches.delete(k)))
       ),
-      // Claim all open clients immediately
       self.clients.claim(),
-    ])
+    ]).then(() =>
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+        clients.forEach(c => c.postMessage({ type: 'SW_UPDATED', version: APP_VERSION }));
+        console.log('[SW] Notified ' + clients.length + ' client(s)');
+      })
+    )
   );
 });
 
-// ── FETCH ─────────────────────────────────────────────────── //
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
+// FETCH: Cache-First for shell, Network-First(3s) for dynamic
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  if (NETWORK_ONLY.some(p => p.test(req.url))) { event.respondWith(fetch(req)); return; }
+  if (!req.url.startsWith(self.location.origin)) return;
 
-  // Only handle same-origin GET requests
-  if (request.method !== 'GET') return;
-
-  // Network-only: Notion API and PHP sync endpoints
-  if (NETWORK_ONLY_PATTERNS.some(pattern => pattern.test(request.url))) {
-    event.respondWith(fetch(request));
-    return;
+  if (_isShellFile(req.url) || req.mode === 'navigate') {
+    event.respondWith(_cacheFirst(req));
+  } else {
+    event.respondWith(_networkFirst(req, 3000));
   }
-
-  // ── Network First for everything ──────────────────────────
-  // Always fetch fresh from network when online; cache for offline only.
-  // This prevents stale JS/CSS/HTML being served after a deployment.
-  event.respondWith(
-    fetch(request, { cache: 'no-cache' })
-      .then(response => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_SHELL)
-            .then(cache => cache.put(request, clone))
-            .catch(() => {});
-        }
-        return response;
-      })
-      .catch(async () => {
-        // Offline fallback
-        const cached = await caches.match(request);
-        if (cached) return cached;
-        if (request.mode === 'navigate') {
-          const fallback = await caches.match('./index.html');
-          if (fallback) return fallback;
-        }
-        return new Response(
-          'FamilyHub is offline. Please reconnect.',
-          { status: 503, headers: { 'Content-Type': 'text/plain' } }
-        );
-      })
-  );
 });
 
-// ── BACKGROUND SYNC ───────────────────────────────────────── //
-// Blueprint §8.2 — "Register sync event 'notion-sync' — retries when online"
-self.addEventListener('sync', (event) => {
-  console.log('[SW] Background sync event:', event.tag);
+async function _cacheFirst(req) {
+  const hit = await caches.match(req);
+  if (hit) return hit;
+  try {
+    const res = await fetch(req);
+    if (res.ok) (await caches.open(CACHE_SHELL)).put(req, res.clone());
+    return res;
+  } catch {
+    if (req.mode === 'navigate') {
+      const fb = await caches.match('./index.html') || await caches.match('./');
+      if (fb) return fb;
+    }
+    return _offline();
+  }
+}
 
-  if (event.tag === 'notion-sync') {
+async function _networkFirst(req, ms) {
+  const timeout = new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms));
+  try {
+    const res = await Promise.race([fetch(req), timeout]);
+    if (res.ok) (await caches.open(CACHE_DYNAMIC)).put(req, res.clone());
+    return res;
+  } catch {
+    const hit = await caches.match(req);
+    return hit || _offline();
+  }
+}
+
+function _offline() {
+  return new Response('{"error":"offline"}', {
+    status: 503, headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+// BACKGROUND SYNC
+self.addEventListener('sync', event => {
+  if (event.tag === 'familyhub-sync') {
     event.waitUntil(
-      // Notify all open clients to run sync
-      self.clients.matchAll({ type: 'window' })
-        .then(clients => {
-          clients.forEach(client => {
-            client.postMessage({ type: 'BG_SYNC_NOTION' });
-          });
-        })
+      self.clients.matchAll({ type: 'window' }).then(cs =>
+        cs.forEach(c => c.postMessage({ type: 'BG_SYNC_TRIGGER' }))
+      )
     );
   }
 });
 
-// ── PUSH NOTIFICATIONS ────────────────────────────────────── //
-// Placeholder for Phase 7 — Firebase Cloud Messaging
-self.addEventListener('push', (event) => {
+// PUSH
+self.addEventListener('push', event => {
   if (!event.data) return;
-
-  let data;
-  try {
-    data = event.data.json();
-  } catch {
-    data = { title: 'FamilyHub', body: event.data.text() };
-  }
-
-  const options = {
-    body:    data.body || '',
-    icon:    './icons/icon-192.png',
-    badge:   './icons/icon-192.png',
-    tag:     data.tag || 'familyhub-general',
-    data:    data.url || '/',
-    actions: data.actions || [],
-    vibrate: [100, 50, 100],
-  };
-
+  let d; try { d = event.data.json(); } catch { d = { title: 'FamilyHub', body: event.data.text() }; }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'FamilyHub', options)
+    self.registration.showNotification(d.title || 'FamilyHub', {
+      body: d.body || '', icon: './icons/icon-192.png', badge: './icons/icon-192.png',
+      tag: d.tag || 'fh', data: d.url || '/', vibrate: [100, 50, 100],
+    })
   );
 });
 
-self.addEventListener('notificationclick', (event) => {
+self.addEventListener('notificationclick', event => {
   event.notification.close();
-
-  const targetUrl = event.notification.data || '/';
-
+  const url = event.notification.data || '/';
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then(clients => {
-        // Focus existing window if open
-        const existing = clients.find(c => c.url.includes(self.location.origin));
-        if (existing) {
-          existing.focus();
-          existing.navigate(targetUrl);
-          return;
-        }
-        // Otherwise open a new window
-        return self.clients.openWindow(targetUrl);
-      })
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+      const ex = cs.find(c => c.url.includes(self.location.origin));
+      if (ex) { ex.focus(); ex.navigate(url); return; }
+      return self.clients.openWindow(url);
+    })
   );
 });
 
-// ── MESSAGE HANDLER ───────────────────────────────────────── //
-self.addEventListener('message', (event) => {
+// MESSAGE
+self.addEventListener('message', event => {
   if (!event.data) return;
-
-  switch (event.data.type) {
-    case 'SKIP_WAITING':
-      // Triggered by update banner "Reload" button
-      self.skipWaiting();
-      break;
-
-    case 'CACHE_URLS':
-      // Dynamically cache additional URLs (for offline media, etc.)
-      if (Array.isArray(event.data.urls)) {
-        caches.open(CACHE_DYNAMIC)
-          .then(cache => cache.addAll(event.data.urls))
-          .catch(err => console.warn('[SW] Dynamic cache error:', err));
-      }
-      break;
-
-    default:
-      console.log('[SW] Unknown message:', event.data.type);
+  if (event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data.type === 'CACHE_URLS' && Array.isArray(event.data.urls)) {
+    caches.open(CACHE_DYNAMIC).then(c => c.addAll(event.data.urls)).catch(() => {});
   }
 });

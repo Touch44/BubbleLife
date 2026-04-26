@@ -28,6 +28,7 @@ import { getEntitiesByType, getEntity, getSetting,
 import { emit, on, EVENTS }                    from '../core/events.js';
 import { openEditForm }                         from '../components/entity-form.js';
 import { getAccount }                      from '../core/auth.js';
+import { toast }                            from '../core/toast.js';
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -907,26 +908,16 @@ function _prependCapturedItem(entity, type, dateStr, sectionRefs) {
 
 /**
  * Show a brief toast notification for capture feedback.
- * Uses the existing #toast-container / .toast system from layout.css
- * so styling, z-index, and animation are consistent app-wide.
+ * Delegates to core/toast.js for consistent styling and animation.
  * @param {string}  message
  * @param {boolean} isError
  */
 function _showCaptureToast(message, isError = false) {
-  const container = document.getElementById('toast-container');
-  if (!container) return; // fallback: no-op if container absent
-
-  const toast = document.createElement('div');
-  toast.className = 'toast' + (isError ? ' error' : ' success');
-  toast.textContent = message;
-  toast.setAttribute('role', 'status');
-  container.appendChild(toast);
-
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    toast.style.transition = 'opacity 0.25s';
-    setTimeout(() => toast.remove(), 260);
-  }, 1800);
+  if (isError) {
+    toast.error(message, { duration: 2500 });
+  } else {
+    toast.success(message, { duration: 1800 });
+  }
 }
 
 /**

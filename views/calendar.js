@@ -27,6 +27,8 @@ import { registerView }              from '../core/router.js';
 import { getEntitiesByType, getEntity, saveEntity } from '../core/db.js';
 import { emit, on, EVENTS }         from '../core/events.js';
 import { openEditForm }              from '../components/entity-form.js';
+import { getAccount }                from '../core/auth.js';
+import { toast }                     from '../core/toast.js';
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -656,6 +658,105 @@ function _buildMonthView(container, dateMap) {
 /** Escape key handler (stored so we can remove it) */
 let _popoverEscHandler = null;
 
+/**
+ * Show an inline quick-create popover anchored to a week timeslot (P-09).
+ * @param {HTMLElement} anchorEl
+ * @param {string} dateTime — ISO datetime e.g. '2026-04-26T14:00'
+ */
+function _showWeekSlotQuickCreate(anchorEl, dateTime) {
+  // Remove any existing quick-create
+  document.querySelector('.cal-slot-quickcreate')?.remove();
+
+  const box = document.createElement('div');
+  box.className = 'cal-slot-quickcreate cal-popover';
+  box.style.cssText = 'position:absolute;z-index:200;min-width:220px;padding:var(--space-3);';
+
+  const [datePart, timePart] = dateTime.split('T');
+  const label = document.createElement('div');
+  label.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2);';
+  label.textContent = `${datePart} at ${timePart}`;
+
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'input';
+  inp.placeholder = 'Event title… (Enter to save)';
+  inp.autocomplete = 'off';
+  inp.style.marginBottom = 'var(--space-2)';
+
+  const err = document.createElement('span');
+  err.style.cssText = 'display:none;color:var(--color-danger);font-size:var(--text-xs);';
+  err.textContent = 'Title is required';
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:var(--space-2);';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn btn-primary btn-xs';
+  saveBtn.textContent = 'Add Event';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn-ghost btn-xs';
+  cancelBtn.textContent = 'Cancel';
+  btnRow.append(saveBtn, cancelBtn);
+
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'btn btn-ghost btn-xs';
+  moreBtn.style.cssText = 'width:100%;margin-top:var(--space-1);font-size:var(--text-xs);';
+  moreBtn.textContent = 'More options…';
+
+  box.append(label, inp, err, btnRow, moreBtn);
+
+  async function _save() {
+    const title = inp.value.trim();
+    if (!title) { err.style.display = ''; inp.focus(); return; }
+    err.style.display = 'none';
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const acct = getAccount();
+      await saveEntity({ type: 'event', title, date: dateTime, status: 'confirmed' }, acct?.id);
+      box.remove();
+      document.removeEventListener('click', _outside);
+      toast.success('Event added');
+      renderCalendar({ _internal: true });
+    } catch(e) {
+      console.error('[cal] slot quick-create failed:', e);
+      toast.error('Could not create event');
+      saveBtn.disabled = false; saveBtn.textContent = 'Add Event';
+    }
+  }
+
+  function _close() {
+    box.remove();
+    document.removeEventListener('click', _outside);
+  }
+
+  function _outside(e) {
+    if (!box.contains(e.target)) _close();
+  }
+
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _save(); }
+    if (e.key === 'Escape') { e.stopPropagation(); _close(); }
+  });
+  inp.addEventListener('input', () => { err.style.display = 'none'; });
+  saveBtn.addEventListener('click', (ev) => { ev.stopPropagation(); _save(); });
+  cancelBtn.addEventListener('click', (ev) => { ev.stopPropagation(); _close(); });
+  moreBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    _close();
+    emit(EVENTS.FAB_CREATE, { entityType: 'event', prefill: { date: dateTime } });
+  });
+
+  // Position relative to anchor
+  const rect = anchorEl.getBoundingClientRect();
+  box.style.top  = `${rect.bottom + window.scrollY + 4}px`;
+  box.style.left = `${Math.min(rect.left + window.scrollX, window.innerWidth - 240)}px`;
+  document.body.appendChild(box);
+
+  setTimeout(() => {
+    inp.focus();
+    document.addEventListener('click', _outside);
+  }, 10);
+}
+
 /** Close any existing popover and remove Escape handler */
 function _closePopover() {
   const existing = document.querySelector('.cal-popover');
@@ -773,20 +874,88 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
   }
   popover.appendChild(list);
 
-  // "Add Event" button
-  const addBtn = document.createElement('button');
-  addBtn.className = 'btn btn-primary btn-sm cal-popover-add';
-  addBtn.textContent = '+ Add Event';
-  addBtn.addEventListener('click', (e) => {
+  // ── Quick-create input (P-09: click-to-create) ─────────── //
+  const quickCreate = document.createElement('div');
+  quickCreate.className = 'cal-quick-create';
+
+  const quickInput = document.createElement('input');
+  quickInput.type = 'text';
+  quickInput.className = 'input cal-quick-input';
+  quickInput.placeholder = 'New event title… (Enter to save)';
+  quickInput.autocomplete = 'off';
+
+  const quickErr = document.createElement('span');
+  quickErr.className = 'cal-quick-error';
+  quickErr.style.cssText = 'display:none;color:var(--color-danger);font-size:var(--text-xs);';
+  quickErr.textContent = 'Title is required';
+
+  const quickSave = document.createElement('button');
+  quickSave.className = 'btn btn-primary btn-xs';
+  quickSave.textContent = 'Add';
+
+  const quickCancel = document.createElement('button');
+  quickCancel.className = 'btn btn-ghost btn-xs';
+  quickCancel.textContent = 'Cancel';
+
+  async function _quickSave() {
+    const title = quickInput.value.trim();
+    if (!title) {
+      quickErr.style.display = '';
+      quickInput.focus();
+      return;
+    }
+    quickErr.style.display = 'none';
+    quickSave.disabled = true;
+    quickSave.textContent = 'Saving…';
+    try {
+      const acct = getAccount();
+      await saveEntity({
+        type:  'event',
+        title,
+        date:  dateStr + 'T12:00',
+        status: 'confirmed',
+      }, acct?.id);
+      toast.success('Event added');
+      _closePopover();
+      // Refresh calendar
+      renderCalendar({ _internal: true });
+    } catch (err) {
+      console.error('[cal] quick-create failed:', err);
+      toast.error('Could not create event');
+      quickSave.disabled = false;
+      quickSave.textContent = 'Add';
+    }
+  }
+
+  quickInput.addEventListener('input', () => { quickErr.style.display = 'none'; });
+  quickInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _quickSave(); }
+    if (e.key === 'Escape') { _closePopover(); }
+  });
+  quickSave.addEventListener('click', (e) => { e.stopPropagation(); _quickSave(); });
+  quickCancel.addEventListener('click', (e) => { e.stopPropagation(); _closePopover(); });
+
+  const quickBtns = document.createElement('div');
+  quickBtns.style.cssText = 'display:flex;gap:var(--space-2);margin-top:var(--space-2);';
+  quickBtns.append(quickSave, quickCancel);
+
+  quickCreate.append(quickInput, quickErr, quickBtns);
+  popover.appendChild(quickCreate);
+
+  // Also keep the "more options" link for full form
+  const moreOpts = document.createElement('button');
+  moreOpts.className = 'btn btn-ghost btn-xs';
+  moreOpts.style.cssText = 'width:100%;margin-top:var(--space-1);font-size:var(--text-xs);';
+  moreOpts.textContent = 'More options…';
+  moreOpts.addEventListener('click', (e) => {
     e.stopPropagation();
     _closePopover();
-    // Build an ISO datetime string for noon on this day as a reasonable default
-    emit(EVENTS.FAB_CREATE, {
-      entityType: 'event',
-      prefill: { date: dateStr + 'T12:00' },
-    });
+    emit(EVENTS.FAB_CREATE, { entityType: 'event', prefill: { date: dateStr + 'T12:00' } });
   });
-  popover.appendChild(addBtn);
+  popover.appendChild(moreOpts);
+
+  // Auto-focus the quick input
+  setTimeout(() => quickInput.focus(), 50);
 
   document.body.appendChild(popover);
 
@@ -1029,13 +1198,12 @@ function _buildWeekView(container, dateMap) {
       const slot = document.createElement('div');
       slot.className = 'cal-week-slot' + (isToday ? ' today-col' : '');
 
-      // Click slot → create event at this time
-      slot.addEventListener('click', () => {
+      // Click slot → quick-create popover (P-09)
+      slot.addEventListener('click', (e) => {
+        e.stopPropagation();
         const hourStr = String(h).padStart(2, '0');
-        emit(EVENTS.FAB_CREATE, {
-          entityType: 'event',
-          prefill: { date: `${ds}T${hourStr}:00` },
-        });
+        const dateTime = `${ds}T${hourStr}:00`;
+        _showWeekSlotQuickCreate(slot, dateTime);
       });
 
       // Drop target — reschedule to this day+hour

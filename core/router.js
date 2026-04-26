@@ -1,13 +1,15 @@
 /**
- * FamilyHub v2.0 — core/router.js
+ * FamilyHub v3.0 — core/router.js
  * View routing, navigation history, breadcrumbs, URL hash
- * Blueprint §4.1
+ * Blueprint §4.1 — upgraded to use viewRegistry (P-01)
+ * P-15 — action-based router: full action serialized to URL hash as query params
  *
  * Public API:
  *   import { navigate, back, forward, getCurrentView, getHistory } from './router.js';
  */
 
 import { emit, EVENTS } from './events.js';
+import { viewRegistry } from './registry.js';
 
 // ── Constants ────────────────────────────────────────────── //
 
@@ -65,22 +67,70 @@ let _history = [];
 /** Current position in _history (0 = oldest, _history.length-1 = newest) */
 let _cursor = -1;
 
-/** Registered view render functions: { [viewKey]: (params) => void } */
-const _renderers = new Map();
-
 // ── Registration ─────────────────────────────────────────── //
 
 /**
- * Register a view's render function.
- * Called by each view module during initialisation.
+ * Register a view's render function (eager) or a lazy import path (P-16).
+ * Delegates to viewRegistry (P-01).
+ *
  * @param {string} viewKey
- * @param {Function} renderFn - Receives params object
+ * @param {Function|string} renderFnOrPath
+ *   - Function: eager view, called immediately on navigate
+ *   - string:   lazy view — dynamic import path (e.g. './views/budget/budget.js')
  */
-export function registerView(viewKey, renderFn) {
-  if (typeof renderFn !== 'function') {
-    throw new TypeError(`[router] renderFn for "${viewKey}" must be a function`);
+export function registerView(viewKey, renderFnOrPath) {
+  if (typeof renderFnOrPath === 'string') {
+    // Lazy view: store as { lazy: true, path, cachedModule }
+    viewRegistry.add(viewKey, { lazy: true, path: renderFnOrPath, cachedModule: null });
+    return;
   }
-  _renderers.set(viewKey, renderFn);
+  if (typeof renderFnOrPath !== 'function') {
+    throw new TypeError(`[router] renderFn for "${viewKey}" must be a function or import path string`);
+  }
+  viewRegistry.add(viewKey, renderFnOrPath);
+}
+
+/** Module cache for lazy views: viewKey → renderFn */
+const _lazyCache = new Map();
+
+/**
+ * Skeleton screen templates for lazy views (P-16).
+ * Shown while the module loads.
+ */
+const SKELETONS = {
+  graph:     _skeletonGraph,
+  budget:    _skeletonGrid,
+  gallery:   _skeletonGrid,
+  documents: _skeletonList,
+};
+
+function _skeletonPulse() {
+  return 'skeleton-pulse';
+}
+
+function _skeletonGraph() {
+  return `<div class="skeleton-wrap" aria-label="Loading…" aria-busy="true">
+    <div class="skeleton-graph-canvas ${_skeletonPulse()}"></div>
+    <div class="skeleton-graph-panel">${Array(6).fill('<div class="skeleton-line"></div>').join('')}</div>
+  </div>`;
+}
+
+function _skeletonGrid() {
+  return `<div class="skeleton-wrap" aria-label="Loading…" aria-busy="true">
+    <div class="skeleton-grid">${Array(9).fill('<div class="skeleton-card"></div>').join('')}</div>
+  </div>`;
+}
+
+function _skeletonList() {
+  return `<div class="skeleton-wrap" aria-label="Loading…" aria-busy="true">
+    <div class="skeleton-list">${Array(8).fill('<div class="skeleton-row"></div>').join('')}</div>
+  </div>`;
+}
+
+function _defaultSkeleton() {
+  return `<div class="skeleton-wrap" aria-label="Loading…" aria-busy="true">
+    <div class="skeleton-list">${Array(5).fill('<div class="skeleton-row"></div>').join('')}</div>
+  </div>`;
 }
 
 // ── Navigation ───────────────────────────────────────────── //
@@ -94,13 +144,34 @@ export function registerView(viewKey, renderFn) {
  * @param {string} [label]        - Override breadcrumb label
  * @param {boolean} [replace=false] - Replace current history entry instead of pushing
  */
-export function navigate(viewKey, params = {}, label, replace = false) {
+/**
+ * Navigate to a view.
+ * Supports two call signatures:
+ *   navigate(viewKey, params?, label?, replace?)   — positional (legacy)
+ *   navigate({ view, entityType?, filter?, entityId?, label? })  — action object (P-15)
+ */
+export function navigate(viewKeyOrAction, params = {}, label, replace = false) {
+  // P-15: accept action object { view, entityType?, filter?, entityId?, label? }
+  let viewKey = viewKeyOrAction;
+  if (viewKeyOrAction && typeof viewKeyOrAction === 'object') {
+    const action = viewKeyOrAction;
+    viewKey  = action.view;
+    params   = {};
+    if (action.entityType) params.entityType = action.entityType;
+    if (action.filter)     params.filter     = action.filter;
+    if (action.entityId)   params.entityId   = action.entityId;
+    if (action.date)       params.date       = action.date;
+    label    = action.label;
+    replace  = action.replace ?? false;
+  }
   const resolvedLabel = label || _resolveLabel(viewKey, params);
 
   const entry = { viewKey, params, label: resolvedLabel };
 
+  let _skipApplyView = false;
   if (replace && _cursor >= 0) {
-    // Replace current position
+    // Replace current position — skip re-render if same view key (e.g. search-bar URL update)
+    _skipApplyView = _history[_cursor]?.viewKey === entry.viewKey;
     _history[_cursor] = entry;
   } else {
     // Deduplicate: if the new entry is the same view+params as current, replace it.
@@ -123,7 +194,7 @@ export function navigate(viewKey, params = {}, label, replace = false) {
     }
   }
 
-  _applyView(entry);
+  if (!_skipApplyView) _applyView(entry);
   _updateHash(viewKey, params);
   _renderBreadcrumbs();
 
@@ -195,6 +266,33 @@ export function jumpTo(targetCursor) {
  */
 export function getCurrentView() {
   return _cursor >= 0 ? _history[_cursor] : null;
+}
+
+/**
+ * Returns the current router state as an action object.
+ * P-08: used by hotkeyService to determine active scope,
+ * and by views that need to read their own URL params.
+ *
+ * Shape: { view: string, params: object, label: string }
+ * @returns {{ view: string, params: object, label: string }|null}
+ */
+/**
+ * Returns the current router action (P-15 full action shape).
+ * Shape: { view, params, entityType?, filter?, entityId?, date?, label? }
+ */
+export function getState() {
+  const cur = getCurrentView();
+  if (!cur) return null;
+  const p = cur.params || {};
+  return {
+    view:       cur.viewKey,
+    params:     p,
+    entityType: p.entityType || null,
+    filter:     p.filter     || null,
+    entityId:   p.entityId   || null,
+    date:       p.date       || null,
+    label:      cur.label    || '',
+  };
 }
 
 /**
@@ -270,31 +368,144 @@ function _applyView(entry) {
     }
   });
 
-  // Call registered renderer if available
-  if (_renderers.has(viewKey)) {
-    try {
-      _renderers.get(viewKey)(params);
-    } catch (err) {
-      console.error(`[router] Error rendering view "${viewKey}":`, err);
+  // Resolve view from viewRegistry — handles both eager and lazy (P-01, P-16)
+  if (viewRegistry.has(viewKey)) {
+    const registered = viewRegistry.get(viewKey);
+
+    if (typeof registered === 'function') {
+      // Eager view: call directly
+      try {
+        registered(params);
+      } catch (err) {
+        console.error(`[router] Error rendering view "${viewKey}":`, err);
+      }
+
+    } else if (registered?.lazy) {
+      // Lazy view: show skeleton, dynamic import, mount, fade in
+      _loadLazyView(viewKey, registered, params, viewEl);
     }
   }
 }
 
+
 /**
- * Update the browser URL hash without triggering hashchange listener.
+ * Dynamically load a lazy view module, show skeleton while loading (P-16).
+ * Caches the module so second navigation is instant.
+ * @param {string} viewKey
+ * @param {{ lazy: true, path: string, cachedModule: any }} registration
+ * @param {object} params
+ * @param {HTMLElement|null} viewEl
+ */
+async function _loadLazyView(viewKey, registration, params, viewEl) {
+  if (!viewEl) return;
+
+  // Check cache first
+  if (_lazyCache.has(viewKey)) {
+    try {
+      _lazyCache.get(viewKey)(params);
+    } catch (err) {
+      console.error(`[router] Cached lazy view "${viewKey}" error:`, err);
+    }
+    return;
+  }
+
+  // Show skeleton while loading
+  const skelFn = SKELETONS[viewKey] || _defaultSkeleton;
+  viewEl.innerHTML = skelFn();
+
+  try {
+    const mod = await import(/* @vite-ignore */ registration.path);
+    const renderFn = mod.default || mod[`render${viewKey.charAt(0).toUpperCase() + viewKey.slice(1)}`] || Object.values(mod).find(v => typeof v === 'function');
+
+    if (typeof renderFn !== 'function') {
+      throw new Error(`Lazy module at "${registration.path}" exports no render function`);
+    }
+
+    // Cache for future navigations
+    _lazyCache.set(viewKey, renderFn);
+    registration.cachedModule = renderFn;
+
+    // Fade out skeleton, mount view
+    viewEl.style.transition = 'opacity 0.1s ease';
+    viewEl.style.opacity    = '0';
+    await new Promise(r => setTimeout(r, 100));
+    viewEl.innerHTML = '';
+    renderFn(params);
+    viewEl.style.opacity = '1';
+
+  } catch (err) {
+    console.error(`[router] Failed to load lazy view "${viewKey}":`, err);
+    viewEl.innerHTML = `
+      <div class="lazy-error" role="alert">
+        <p>Failed to load this section.</p>
+        <button class="btn btn-primary lazy-retry">Retry</button>
+      </div>`;
+    viewEl.querySelector('.lazy-retry')?.addEventListener('click', () => {
+      _lazyCache.delete(viewKey);
+      _loadLazyView(viewKey, registration, params, viewEl);
+    });
+  }
+}
+
+/**
+ * Update the browser URL hash — serializes the full action as URL params (P-15).
+ * Format: #view=kanban&entityType=tasks&filter=overdue
+ * Maintains backward-compatible path-style hashes for common patterns.
  */
 function _updateHash(viewKey, params) {
-  let hash = viewKey;
-  if (viewKey === 'entity-type' && params.entityType) {
-    hash = `entity-type/${params.entityType}`;
-  }
-  // [minor] Fix: include date param in daily hash so browser back/forward restores correct date
-  if (viewKey === 'daily' && params.date) {
-    hash = `daily/${params.date}`;
-  }
   _suppressHashChange = true;
-  window.location.hash = hash;
-  _suppressHashChange = false;
+  try {
+    // Build query-style hash for rich state
+    const parts = [`view=${encodeURIComponent(viewKey)}`];
+    for (const [k, v] of Object.entries(params || {})) {
+      if (v !== undefined && v !== null && v !== '' && k !== '_internal') {
+        parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+      }
+    }
+    window.location.hash = parts.join('&');
+  } finally {
+    _suppressHashChange = false;
+  }
+}
+
+/**
+ * Parse a URL hash string into an action object (P-15).
+ * Supports:
+ *   #view=kanban&entityType=tasks&filter=overdue  (new action-style)
+ *   #kanban                                        (legacy plain view)
+ *   #entity-type/idea                              (legacy entity-type)
+ *   #daily/2026-04-26                              (legacy daily+date)
+ */
+function _parseHash(hash) {
+  if (!hash) return null;
+
+  // New action-style: starts with 'view='
+  if (hash.startsWith('view=')) {
+    const params = {};
+    for (const part of hash.split('&')) {
+      const [k, v] = part.split('=').map(decodeURIComponent);
+      if (k) params[k] = v ?? '';
+    }
+    const { view, ...rest } = params;
+    return view ? { viewKey: view, params: rest } : null;
+  }
+
+  // Legacy: entity panel #entity/{type}/{id}
+  const entityMatch = hash.match(/^entity\/([^/]+)\/([^/]+)$/);
+  if (entityMatch) return { viewKey: '__entity_panel__', params: { entityType: entityMatch[1], entityId: entityMatch[2] } };
+
+  // Legacy: entity-type #entity-type/{typeKey}
+  const typeMatch = hash.match(/^entity-type\/([^/]+)$/);
+  if (typeMatch) return { viewKey: 'entity-type', params: { entityType: typeMatch[1] } };
+
+  // Legacy: daily with date #daily/YYYY-MM-DD
+  const dailyMatch = hash.match(/^daily\/(\d{4}-\d{2}-\d{2})$/);
+  if (dailyMatch) return { viewKey: 'daily', params: { date: dailyMatch[1] } };
+
+  // Legacy: plain view #kanban
+  if (Object.values(VIEW_KEYS).includes(hash)) return { viewKey: hash, params: {} };
+
+  return null;
 }
 
 let _suppressHashChange = false;
@@ -385,52 +596,37 @@ function _paramsKey(params) {
 // ── Hash-Based Deep Linking ───────────────────────────────── //
 
 /**
- * Parse the current URL hash and navigate accordingly.
- * Handles: #daily, #kanban, #entity-type/idea, #entity/task/abc123
+ * Parse the current URL hash and navigate accordingly (P-15 action-based router).
+ * Supports both new action-style (#view=kanban&filter=overdue) and all legacy formats.
  */
 export function handleInitialHash() {
-  const hash = window.location.hash.slice(1); // strip '#'
+  const hash = window.location.hash.slice(1);
   if (!hash) return false;
 
-  // Entity panel deep link: #entity/{type}/{id}
-  const entityMatch = hash.match(/^entity\/([^/]+)\/([^/]+)$/);
-  if (entityMatch) {
-    const [, entityType, entityId] = entityMatch;
+  const action = _parseHash(hash);
+  if (!action) return false;
+
+  // Special case: entity panel deep link
+  if (action.viewKey === '__entity_panel__') {
     navigate(VIEW_KEYS.DAILY);
-    emit(EVENTS.PANEL_OPENED, { entityType, entityId });
+    emit(EVENTS.PANEL_OPENED, action.params);
     return true;
   }
 
-  // Entity type view: #entity-type/{typeKey}
-  const typeMatch = hash.match(/^entity-type\/([^/]+)$/);
-  if (typeMatch) {
-    navigate(VIEW_KEYS.ENTITY_TYPE, { entityType: typeMatch[1] });
-    return true;
-  }
-
-  // [minor] Fix: daily view with date: #daily/YYYY-MM-DD
-  const dailyMatch = hash.match(/^daily\/(\d{4}-\d{2}-\d{2})$/);
-  if (dailyMatch) {
-    navigate(VIEW_KEYS.DAILY, { date: dailyMatch[1] });
-    return true;
-  }
-
-  // Standard view: #daily, #kanban, etc.
-  if (Object.values(VIEW_KEYS).includes(hash)) {
-    navigate(hash);
-    return true;
-  }
-
-  return false;
+  navigate(action.viewKey, action.params);
+  return true;
 }
 
 /**
  * Listen for browser back/forward (popstate-equivalent via hashchange).
+ * Guard for non-browser environments (Node.js, SSR).
  */
-window.addEventListener('hashchange', () => {
-  if (_suppressHashChange) return;
-  handleInitialHash();
-});
+if (typeof window !== 'undefined') {
+  window.addEventListener('hashchange', () => {
+    if (_suppressHashChange) return;
+    handleInitialHash();
+  });
+}
 
 // ── Sidebar Nav Click Wiring ──────────────────────────────── //
 

@@ -13,6 +13,8 @@
 import { saveEntity, saveEdge, getEntitiesByType } from '../core/db.js';
 import { getEntityTypeConfig, getAllEntityTypes }        from '../core/graph-engine.js';
 import { emit, EVENTS }                                from '../core/events.js';
+import { toast }                                       from '../core/toast.js';
+import { getAccount }                                  from '../core/auth.js';
 
 // ── Module-level state ────────────────────────────────────── //
 
@@ -1011,7 +1013,8 @@ async function _submitForm() {
     entityData.type = _typeKey;
 
     // ── Save entity ───────────────────────────────────────── //
-    const saved = await saveEntity(entityData);
+    const account = getAccount();
+    const saved = await saveEntity(entityData, account?.id);
 
     // ── Save relation edges ───────────────────────────────── //
     for (const field of config.fields) {
@@ -1037,9 +1040,11 @@ async function _submitForm() {
     // update state first. The callback then has fresh data if it queries anything.
     const cb = _onSave;
     const wasNew = !_editEntity;
+    const entityLabel = config?.label || 'item';
     closeForm();
     emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: wasNew });
     cb?.(saved);
+    toast.success(wasNew ? `${entityLabel} created` : `${entityLabel} saved`);
 
   } catch (err) {
     console.error('[entity-form] Save failed:', err);

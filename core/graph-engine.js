@@ -144,7 +144,19 @@ const BUILT_IN_ENTITY_TYPES = [
       field('checklist',  'checklist',  { label: 'Checklist', isTitle: false }),
       field('blockedBy',  'relation',   { label: 'Blocked By', relatesTo: 'task' }),
       field('effort',     'select',   { label: 'Effort', options: ['XS', 'S', 'M', 'L', 'XL'] }),
+      field('urgency',    'select',   { label: 'Urgency', options: ['Normal', 'Urgent', 'Overdue'], hidden: true }),
     ],
+    // P-27: field-level onChange cascading
+    onChanges: {
+      dueDate: (entity, newVal) => {
+        if (!newVal) return { urgency: 'Normal' };
+        const today = new Date().toISOString().slice(0, 10);
+        const due   = String(newVal).slice(0, 10);
+        if (due < today) return { urgency: 'Overdue' };
+        if (due === today) return { urgency: 'Urgent' };
+        return { urgency: 'Normal' };
+      },
+    },
   },
 
   // ── 2. person ───────────────────────────────────────────── //

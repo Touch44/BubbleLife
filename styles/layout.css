@@ -148,7 +148,7 @@ body {
 }
 
 #topbar-spacer {
-  flex: 1;
+  flex: 0 0 var(--space-3); /* search bar provides flex growth now */
 }
 
 #topbar-search-btn {
@@ -1091,3 +1091,5 @@ body {
 .scroll-y::-webkit-scrollbar { width: var(--scrollbar-width); }
 .scroll-y::-webkit-scrollbar-track { background: transparent; }
 .scroll-y::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+
+#topbar-search { flex: 1; min-width: 200px; max-width: 440px; }
