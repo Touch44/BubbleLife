@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '3.0.0';
+const APP_VERSION   = '3.0.1';
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -16,7 +16,6 @@ const SHELL_FILES = [
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
-  './i18n/en.json',
   './services/notification.js', './services/dialog.js', './services/hotkey.js',
   './services/history.js', './services/command.js', './services/effects.js',
   './services/theme.js', './services/sync.js',
@@ -24,7 +23,6 @@ const SHELL_FILES = [
   './components/search.js', './components/search-bar.js', './components/command-palette.js',
   './components/systray.js', './components/graph-canvas.js',
   './components/activity-stream.js', './components/view-switcher.js',
-  './core/debug.js', './core/tour.js', './core/pwa.js',
   './core/debug.js', './core/tour.js', './core/pwa.js',
   './views/daily.js', './views/kanban.js', './views/calendar.js',
   './views/family-wall.js', './views/stub-views.js',

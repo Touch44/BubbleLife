@@ -895,11 +895,23 @@
       await initAuth();
 
       // 11. Auto-start onboarding tour on first login (P-31)
+      // Only auto-start if: tour not yet completed AND user has no existing entities
+      // (existing users upgrading to v3 should not see the tour)
       {
         const tourDone = await isTourComplete('onboarding').catch(() => false);
         if (!tourDone) {
-          // Small delay so the view renders first
-          setTimeout(() => startTour('onboarding', window._fhEnv), 800);
+          const { countByType } = await import('./core/db.js');
+          const counts   = await countByType().catch(() => ({}));
+          const total    = Object.values(counts).reduce((a, b) => a + b, 0);
+          const isNewUser = total === 0;
+          if (isNewUser) {
+            // Small delay so the view renders first
+            setTimeout(() => startTour('onboarding', window._fhEnv), 800);
+          } else {
+            // Existing user: mark tour as done so it never fires again
+            const { setSetting } = await import('./core/db.js');
+            setSetting('tours:onboarding:completed', true).catch(() => {});
+          }
         }
       }
 
@@ -988,7 +1000,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=3.0.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=3.0.1', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
