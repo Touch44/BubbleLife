@@ -14,6 +14,7 @@
  */
 
 import { getEntitiesByType, getEntity, getEdgesFrom, getEdgesTo } from '../core/db.js';
+import { filterByContext } from '../core/context.js'; // CS-06
 import { getAllEntityTypes, getEntityTypeConfig, getRelationLabel } from '../core/graph-engine.js';
 import { emit, on, off, EVENTS } from '../core/events.js';
 
@@ -276,9 +277,10 @@ async function _buildGraph() {
 
   for (const typeConfig of visibleTypes) {
     try {
-      const entities = await getEntitiesByType(typeConfig.key);
+      const rawEntities = await getEntitiesByType(typeConfig.key);
+      // CS-06: apply context filtering so graph respects active context
+      const entities = filterByContext(rawEntities.filter(e => !e.deleted));
       for (const ent of entities) {
-        if (ent.deleted) continue;
         entityMap.set(ent.id, ent);
       }
     } catch (err) {

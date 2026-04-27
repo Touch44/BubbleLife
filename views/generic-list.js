@@ -14,10 +14,23 @@
 
 import { registerView } from '../core/router.js';
 import { getEntitiesByType } from '../core/db.js';
-import { getEntityTypeConfig } from '../core/graph-engine.js';
 import { emit, on, EVENTS } from '../core/events.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { openForm } from '../components/entity-form.js';
+
+// ── Inject CSS once to reset .view padding for all generic list views ─────────
+(function _injectStyles() {
+  if (document.getElementById('generic-list-view-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'generic-list-view-styles';
+  style.textContent = `
+    #view-budget.active, #view-recipes.active, #view-documents.active,
+    #view-contacts.active, #view-gallery.active, #view-family-matters.active {
+      padding: 0;
+    }
+  `;
+  document.head.appendChild(style);
+})();
 
 // ── View-specific config ───────────────────────────────────────
 const VIEW_CONFIG = {
@@ -63,10 +76,16 @@ function _getSubtitle(entity) {
   if (entity.category) parts.push(entity.category);
   if (entity.cuisine) parts.push(entity.cuisine);
   if (entity.status) parts.push(entity.status);
-  // budgetEntry: entity.type holds 'Income'/'Expense' (the Type select field)
-  if (entity.amount != null && (entity.type === 'Income' || entity.type === 'Expense')) {
-    const prefix = entity.type === 'Income' ? '+' : '-';
+  // budgetEntry: 'type' select field (Income/Expense) is stored as entity._subtype
+  // because entity.type is always the structural type key ('budgetEntry').
+  // entity._subtype is set by entity-form._submitForm and entity-panel._save.
+  const entryKind = entity._subtype;
+  if (entity.amount != null && (entryKind === 'Income' || entryKind === 'Expense')) {
+    const prefix = entryKind === 'Income' ? '+' : '-';
     parts.push(`${prefix}$${Number(entity.amount).toFixed(2)}`);
+  } else if (entity.amount != null) {
+    // amount present but no subtype set — show raw amount
+    parts.push(`$${Number(entity.amount).toFixed(2)}`);
   }
   if (entity.dueDate || entity.date || entity.deadline) {
     parts.push(entity.dueDate || entity.date || entity.deadline);

@@ -87,6 +87,40 @@ export function initEntityPanel() {
     return;
   }
 
+  // M-02: Wire backdrop — tap to close on mobile
+  const _backdrop = document.getElementById('entity-panel-backdrop');
+  if (_backdrop) {
+    _backdrop.addEventListener('click', () => closePanel());
+  }
+
+  // M-02: Swipe-down gesture on the drag handle to close on mobile
+  // Only triggers when touch begins in the top 64px (drag handle + panel header region)
+  // to prevent false positives from scrolling panel body content.
+  let _touchStartY         = 0;
+  let _touchStartTime      = 0;
+  let _touchStartPanelTop  = 0;
+  let _swipeEligible       = false;
+
+  _panel.addEventListener('touchstart', (e) => {
+    _touchStartY        = e.touches[0].clientY;
+    _touchStartTime     = Date.now();
+    _touchStartPanelTop = _panel.getBoundingClientRect().top;
+    // Only eligible if touch started within 64px of panel top (drag handle area)
+    const relativeY = _touchStartY - _touchStartPanelTop;
+    _swipeEligible  = relativeY >= 0 && relativeY <= 64;
+  }, { passive: true });
+
+  _panel.addEventListener('touchend', (e) => {
+    if (!_panel.classList.contains('open') || !_swipeEligible) return;
+    const dy       = e.changedTouches[0].clientY - _touchStartY;
+    const elapsed  = Date.now() - _touchStartTime;
+    const velocity = dy / elapsed;  // px/ms
+    // Close if dragged down >60px, or fast flick (>0.4 px/ms) within 350ms
+    if (dy > 60 || (velocity > 0.4 && elapsed < 350 && dy > 20)) {
+      closePanel();
+    }
+  }, { passive: true });
+
   // Esc key closes panel
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && _panel.classList.contains('open')) {
@@ -199,10 +233,18 @@ export function initEntityPanel() {
 
     // BUG-2 fix: close the panel on ANY view change (sidebar clicks, hotkeys, etc.)
     // This prevents the panel from hanging over a completely different view.
-    // Discard dirty state silently on navigation (Escape shows confirm dialog instead).
     if (_panel && _panel.classList.contains('open') && !_graphViewActive) {
+      // Auto-save if dirty before closing — prevents silent data loss on navigation
+      if (_dirty && _entity) {
+        _save().catch(() => {});  // best-effort; error shown by _save() internally
+        import('../core/toast.js').then(({ toast }) => {
+          toast.info('Changes saved automatically.');
+        }).catch(() => {});
+      }
       _panel.classList.remove('open');
       _panel.setAttribute('aria-hidden', 'true');
+      // M-02: hide backdrop
+      document.getElementById('entity-panel-backdrop')?.classList.remove('visible');
       _dirty    = false;
       _snapshot = null;
       _entity   = null;
@@ -444,6 +486,9 @@ export async function openPanel(entityId, entityTypeHint) {
     _dirty     = false;
     _snapshot  = JSON.stringify(entity);  // P-26: snapshot for dirty detection
     _updateDirtyIndicator();
+    // Clear saved tab scroll positions — new entity starts fresh
+    Object.keys(_tabScrollPos).forEach(k => delete _tabScrollPos[k]);
+    if (_panelBody) delete _panelBody.dataset.renderedTab;
 
     // Auto-link entity to its Daily Note(s) in background
     // Skip in graph mode — graph browsing shouldn't create new DR edges
@@ -457,6 +502,15 @@ export async function openPanel(entityId, entityTypeHint) {
 
     _panel.classList.add('open');
     _panel.setAttribute('aria-hidden', 'false');
+    // M-02: show backdrop on mobile
+    document.getElementById('entity-panel-backdrop')?.classList.add('visible');
+    // Auto-close notification drawer so it doesn't stack on top of the panel
+    const notifsDrawer = document.getElementById('notification-drawer');
+    const notifsBtn    = document.getElementById('topbar-notifications-btn');
+    if (notifsDrawer?.classList.contains('open')) {
+      notifsDrawer.classList.remove('open');
+      notifsBtn?.setAttribute('aria-expanded', 'false');
+    }
 
   } catch (err) {
     console.error('[entity-panel] openPanel failed:', err);
@@ -478,6 +532,8 @@ export function closePanel() {
 
   _panel.classList.remove('open');
   _panel.setAttribute('aria-hidden', 'true');
+  // M-02: hide backdrop
+  document.getElementById('entity-panel-backdrop')?.classList.remove('visible');
 
   _entity   = null;
   _config   = null;
@@ -977,9 +1033,20 @@ function _getContentField(entity, config) {
   return field;
 }
 
+// Track which tab had which scroll position so switching back feels natural
+const _tabScrollPos = {};
+
 function _renderActiveTab() {
   if (!_panelBody) return;
+
+  // Save current scroll position for the tab we're leaving
+  const prevTab = _panelBody.dataset.renderedTab;
+  if (prevTab) {
+    _tabScrollPos[prevTab] = _panelBody.scrollTop;
+  }
+
   _panelBody.innerHTML = '';
+  _panelBody.dataset.renderedTab = _activeTab;
 
   const container = document.createElement('div');
   container.className = 'panel-view-container';
@@ -997,6 +1064,12 @@ function _renderActiveTab() {
   // BUG-1 fix: always remount activity stream after tab renders
   // (all callers that clear _panelBody need the stream re-attached)
   if (_entity) _mountActivityStream();
+
+  // Restore scroll position if returning to a previously visited tab
+  const savedScroll = _tabScrollPos[_activeTab] || 0;
+  if (savedScroll > 0) {
+    requestAnimationFrame(() => { _panelBody.scrollTop = savedScroll; });
+  }
 }
 
 /**
@@ -1260,13 +1333,32 @@ function _renderFieldValue(wrap, field) {
       const list = document.createElement('div');
       list.style.cssText = 'display:flex;flex-direction:column;gap:var(--space-1-5);';
 
-      // Live-updating progress counter — updated on each toggle without re-render
+      // Live-updating progress bar + counter — matches kanban K-02 visual style
       const prog = document.createElement('div');
-      prog.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-1);';
+      prog.style.cssText = 'margin-top:var(--space-2);';
+      prog.innerHTML = `
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="panel-cl-count" style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);min-width:32px;">0/${items.length}</span>
+          <div style="flex:1;height:5px;background:var(--color-border);border-radius:99px;overflow:hidden;">
+            <div class="panel-cl-fill" style="height:100%;background:var(--color-accent);border-radius:99px;transition:width 0.25s ease;width:0%"></div>
+          </div>
+        </div>
+      `;
+      const _clCount = prog.querySelector('.panel-cl-count');
+      const _clFill  = prog.querySelector('.panel-cl-fill');
       const _updateProg = () => {
-        const doneCount = (Array.isArray(_entity[field.key]) ? _entity[field.key] : [])
-          .filter(it => it.done).length;
-        prog.textContent = `${doneCount}/${items.length} completed`;
+        const current = Array.isArray(_entity[field.key]) ? _entity[field.key] : [];
+        const doneCount = current.filter(it => it.done).length;
+        const pct = items.length ? Math.round((doneCount / items.length) * 100) : 0;
+        const complete = doneCount === items.length && items.length > 0;
+        if (_clCount) {
+          _clCount.textContent = `${doneCount}/${items.length}`;
+          _clCount.style.color = complete ? 'var(--color-success)' : 'var(--color-text-muted)';
+        }
+        if (_clFill) {
+          _clFill.style.width = `${pct}%`;
+          _clFill.style.background = complete ? 'var(--color-success)' : 'var(--color-accent)';
+        }
       };
       _updateProg();
 
@@ -1330,11 +1422,16 @@ function _renderFieldValue(wrap, field) {
         cursor: pointer; padding: var(--space-1-5) var(--space-2);
         border-radius: var(--radius-sm); font-size: var(--text-sm);
         color: ${value ? 'var(--color-text)' : 'var(--color-text-muted)'};
-        white-space: pre-wrap; word-break: break-word; max-height: 120px;
+        word-break: break-word; max-height: 120px;
         overflow: hidden; line-height: var(--leading-relaxed);
         transition: background var(--transition-fast);
       `;
-      display.textContent = value || 'Click to edit…';
+      // Use innerHTML to render HTML content; fall back to placeholder text
+      if (value) {
+        display.innerHTML = value;
+      } else {
+        display.textContent = 'Click to edit…';
+      }
 
       display.addEventListener('click', () => {
         _editRichtext(wrap, field);
@@ -1663,27 +1760,51 @@ function _editRichtext(wrap, field) {
   const current = _entity[field.key] ?? '';
   wrap.innerHTML = '';
 
-  const textarea = document.createElement('textarea');
-  textarea.className = 'textarea';
-  textarea.value     = current;
-  textarea.style.cssText = 'padding: var(--space-2); font-size: var(--text-sm); min-height: 100px; resize: vertical;';
-  wrap.appendChild(textarea);
-  textarea.focus();
+  // Use contenteditable div to preserve HTML formatting (bold, italic, lists from Quill)
+  const editor = document.createElement('div');
+  editor.contentEditable = 'true';
+  editor.className = 'panel-richtext-inline-editor';
+  editor.style.cssText = `
+    padding: var(--space-2); font-size: var(--text-sm); min-height: 80px;
+    border: 1px solid var(--color-accent); border-radius: var(--radius-sm);
+    outline: none; line-height: var(--leading-relaxed);
+    color: var(--color-text); background: var(--color-bg);
+    word-break: break-word; white-space: pre-wrap;
+    resize: vertical; overflow-y: auto; max-height: 320px;
+  `;
+  editor.innerHTML = current;
+  wrap.appendChild(editor);
+
+  // Focus and place cursor at end
+  editor.focus();
+  const range = document.createRange();
+  const sel = window.getSelection();
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
 
   const commit = async () => {
-    const val = textarea.value.trim();
-    if (val !== current) {
-      _entity[field.key] = val || null;
+    const val = editor.innerHTML;
+    // Treat empty editor (just <br> or empty) as null
+    const cleaned = (val === '<br>' || val === '' || val === '<div><br></div>') ? null : val;
+    if (cleaned !== (current || null)) {
+      _entity[field.key] = cleaned;
       _markDirty();
       await _save();
     }
     _renderFieldValue(wrap, field);
   };
 
-  textarea.addEventListener('blur', commit);
-  textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); textarea.value = current; textarea.blur(); }
-    // Allow Enter for newlines in richtext — no commit on Enter
+  editor.addEventListener('blur', commit);
+  editor.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      editor.innerHTML = current;
+      editor.removeEventListener('blur', commit);
+      _renderFieldValue(wrap, field);
+    }
+    // Allow Enter for newlines — no commit on Enter
   });
 }
 
@@ -3005,6 +3126,8 @@ function _showGraphPanel() {
   _panel.classList.remove('graph-panel-empty');
   _panel.classList.add('open');
   _panel.setAttribute('aria-hidden', 'false');
+  // M-02: show backdrop on mobile
+  document.getElementById('entity-panel-backdrop')?.classList.add('visible');
 }
 
 /**

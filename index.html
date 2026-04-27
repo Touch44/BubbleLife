@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v3.1.0 -->
+  <!-- Build: v3.4.4 -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=3.1.0" />
-  <link rel="stylesheet" href="./styles/layout.css?v=3.1.0" />
-  <link rel="stylesheet" href="./styles/components.css?v=3.1.0" />
-  <link rel="stylesheet" href="./styles/dark.css?v=3.1.0" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=3.4.4" />
+  <link rel="stylesheet" href="./styles/layout.css?v=3.4.4" />
+  <link rel="stylesheet" href="./styles/components.css?v=3.4.4" />
+  <link rel="stylesheet" href="./styles/dark.css?v=3.4.4" />
 </head>
 <body>
 
@@ -698,6 +698,7 @@
   import './views/projects.js';                               // V-02: registers 'projects' view
   import './views/settings.js';                               // V-03: registers 'settings' view
   import './views/generic-list.js';                            // V-04: registers 6 generic list views
+  import './views/graph-view.js';                            // CS-06: graph view with context chips
   import './views/stub-views.js';                             // registers placeholder views
   import { on, emit, EVENTS }        from './core/events.js';
   import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS }
@@ -922,6 +923,7 @@
       {
         const { setActiveContext, getActiveContext } = await import('./core/context.js');
         const { getAccount: _getAcct } = await import('./core/auth.js');
+        const { on: _ctxOn } = await import('./core/events.js');
 
         const CTX_LABELS = { all: 'All Contexts', family: 'Family', personal: 'Personal', business: 'Business' };
         const CTX_COLORS = { all: '#0a7b6c', family: '#0891b2', personal: '#7c3aed', business: '#b45309' };
@@ -936,13 +938,13 @@
           });
         }
 
-        // Bind click handlers
+        // Bind click handlers — setActiveContext emits context:changed which drives _updateSwitcherUI
         document.querySelectorAll('.ctx-btn').forEach(btn => {
-          btn.addEventListener('click', () => {
-            setActiveContext(btn.dataset.ctx);
-            _updateSwitcherUI(btn.dataset.ctx);
-          });
+          btn.addEventListener('click', () => setActiveContext(btn.dataset.ctx));
         });
+
+        // Always keep UI in sync with context state via event
+        _ctxOn('context:changed', ({ context }) => _updateSwitcherUI(context));
 
         // Hide Personal/Business for child accounts
         const acct = _getAcct();
@@ -1061,7 +1063,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=3.1.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=3.4.4', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -1135,7 +1137,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '3.1.0', emit, on, env: window._fhEnv,
+        version: '3.4.4', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

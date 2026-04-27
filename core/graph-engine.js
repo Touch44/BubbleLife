@@ -151,7 +151,8 @@ const BUILT_IN_ENTITY_TYPES = [
     onChanges: {
       dueDate: (entity, newVal) => {
         if (!newVal) return { urgency: 'Normal' };
-        const today = new Date().toISOString().slice(0, 10);
+        const _d = new Date();
+        const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
         const due   = String(newVal).slice(0, 10);
         if (due < today) return { urgency: 'Overdue' };
         if (due === today) return { urgency: 'Urgent' };

@@ -57,6 +57,13 @@ const SECTION_DEFAULTS = {
 /** Currently viewed date as a Date object (local midnight) */
 let _currentDate = _todayLocal();
 
+/**
+ * D-04: Local context override for daily view.
+ * null → use global getActiveContext().
+ * 'all' | 'family' | 'personal' | 'business' → override for this view only.
+ */
+let _dailyCtxOverride = null;
+
 // ── Utility helpers ───────────────────────────────────────── //
 
 /** Return a new Date set to local midnight today */
@@ -174,14 +181,14 @@ async function _loadData(dateStr) {
   const projectMap = new Map(projects.map(pr => [pr.id, pr.name || pr.title || pr.id]));
 
   // CS-04: Apply context filtering (persons, auditLog, projects are NOT filtered)
-  const fTasks        = filterByContext(tasks);
-  const fEvents       = filterByContext(events);
-  const fNotes        = filterByContext(notes);
-  const fComments     = filterByContext(comments);
-  const fPosts        = filterByContext(posts);
-  const fAppointments = filterByContext(appointments);
-  const fDateEntities = filterByContext(dateEntities);
-  const fMealPlans    = filterByContext(mealPlans);
+  const fTasks        = _filterByDailyContext(tasks);
+  const fEvents       = _filterByDailyContext(events);
+  const fNotes        = _filterByDailyContext(notes);
+  const fComments     = _filterByDailyContext(comments);
+  const fPosts        = _filterByDailyContext(posts);
+  const fAppointments = _filterByDailyContext(appointments);
+  const fDateEntities = _filterByDailyContext(dateEntities);
+  const fMealPlans    = _filterByDailyContext(mealPlans);
 
   const accountMap = new Map();
   const accounts = authData?.accounts || [];
@@ -636,6 +643,9 @@ function _buildTopBar(container, dateStr) {
       if (['task'].includes(key))         prefill.dueDate  = dateStr;
       if (['event', 'appointment', 'mealPlan', 'budgetEntry'].includes(key)) prefill.date = dateStr;
       if (key === 'note')                  prefill.category = 'Daily';
+      // D-04: pass daily-local context so newly created entities respect chip override
+      const addCtx = _getDailyContext();
+      prefill.context = addCtx === 'all' ? 'family' : addCtx;
       _createAndLink(key, dateStr, prefill);
     });
     addMenu.appendChild(item);
@@ -668,6 +678,74 @@ function _closeAddMenu(btn, menu) {
   menu.hidden = true;
   btn.setAttribute('aria-expanded', 'false');
 }
+
+/**
+ * D-04: Build context filter chip row for the daily view.
+ * Overrides global context locally — daily is the only view where
+ * you intentionally want to see All contexts at once.
+ * @param {HTMLElement} container
+ */
+function _buildContextChips(container) {
+  const chips = [
+    { key: 'all',      label: 'All',      icon: '🌐' },
+    { key: 'family',   label: 'Family',   icon: '🏠' },
+    { key: 'personal', label: 'Personal', icon: '👤' },
+    { key: 'business', label: 'Business', icon: '💼' },
+  ];
+
+  const row = document.createElement('div');
+  row.id = 'daily-ctx-chips';
+  row.className = 'daily-ctx-chips';
+  row.setAttribute('role', 'group');
+  row.setAttribute('aria-label', 'Context filter');
+
+  const activeKey = _dailyCtxOverride ?? getActiveContext();
+
+  for (const chip of chips) {
+    const btn = document.createElement('button');
+    btn.className = 'daily-ctx-chip' + (chip.key === activeKey ? ' active' : '');
+    btn.dataset.ctx = chip.key;
+    btn.setAttribute('aria-pressed', String(chip.key === activeKey));
+    btn.title = `Show ${chip.label} only`;
+    btn.innerHTML = `${chip.icon} <span>${chip.label}</span>`;
+
+    btn.addEventListener('click', () => {
+      _dailyCtxOverride = chip.key;
+      // Update chip active states without full reload
+      row.querySelectorAll('.daily-ctx-chip').forEach(b => {
+        const isActive = b.dataset.ctx === chip.key;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-pressed', String(isActive));
+      });
+      // Re-render daily view with new local override
+      renderDaily({ _internal: true });
+    });
+
+    row.appendChild(btn);
+  }
+
+  container.appendChild(row);
+}
+
+/**
+ * D-04: Get the effective context for the daily view.
+ * Respects local override if set, otherwise falls back to global.
+ */
+function _getDailyContext() {
+  return _dailyCtxOverride ?? getActiveContext();
+}
+
+/**
+ * D-04: Apply local daily context filtering.
+ * Delegates entirely to filterByContext() with the local override context,
+ * which correctly handles ALWAYS_SHARED_TYPES, FAMILY_ONLY_TYPES,
+ * ALWAYS_PERSONAL_TYPES, personal privacy, and legacy-entity defaulting.
+ */
+function _filterByDailyContext(entities) {
+  // Pass override (or undefined when null so filterByContext uses global)
+  return filterByContext(entities, _dailyCtxOverride || undefined);
+}
+
 
 /**
  * Build the inline quick-capture bar.
@@ -750,11 +828,15 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
       const account = getAccount();
       const now     = new Date().toISOString();
 
+      // D-04: use daily-local context override for entity creation
+      const captureCtx = _getDailyContext();
+      const entityCtx  = captureCtx === 'all' ? 'family' : captureCtx;
+
       // Build entity based on type
-      const entityData = { type: selectedType, title, createdAt: now, updatedAt: now };
+      const entityData = { type: selectedType, title, createdAt: now, updatedAt: now, context: entityCtx };
       if (selectedType === 'task') {
         entityData.dueDate = dateStr;
-        entityData.status  = 'Todo';
+        entityData.status  = 'Inbox';
         entityData.priority = 'Medium';
       } else if (selectedType === 'note') {
         entityData.category = 'Daily';
@@ -799,8 +881,9 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
       doSave();
     } else if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
-      // Open full entity form
-      const prefill = {};
+      // Open full entity form with daily-local context
+      const shiftCtx = _getDailyContext();
+      const prefill = { context: shiftCtx === 'all' ? 'family' : shiftCtx };
       if (selectedType === 'task') { prefill.dueDate = dateStr; prefill.title = inp.value.trim(); }
       if (selectedType === 'note') { prefill.category = 'Daily'; prefill.title = inp.value.trim(); }
       if (selectedType === 'idea') { prefill.title = inp.value.trim(); }
@@ -1269,11 +1352,20 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap) {
     const projectName  = task.project    ? (projectMap.get(task.project)   || null) : null;
     const assigneeName = task.assignedTo ? (personMap.get(task.assignedTo) || null) : null;
 
-    // Checklist progress (compute done count once to avoid double filter)
+    // Checklist progress — visual bar matching kanban K-02 style
     const cl = Array.isArray(task.checklist) ? task.checklist : [];
     const clDone = cl.filter(i => i.done).length;
+    const clPct  = cl.length ? Math.round((clDone / cl.length) * 100) : 0;
+    const clComplete = cl.length > 0 && clDone === cl.length;
     const clHtml = cl.length
-      ? `<span class="daily-task-checklist-prog" title="${clDone} of ${cl.length} items done">${clDone}/${cl.length}</span>`
+      ? `<div class="daily-task-checklist-prog" title="${clDone} of ${cl.length} items done">
+          <div class="daily-task-cl-bar-row">
+            <span class="daily-task-cl-count${clComplete ? ' cl-done' : ''}">${clDone}/${cl.length}</span>
+            <div class="daily-task-cl-bar">
+              <div class="daily-task-cl-fill${clComplete ? ' cl-done' : ''}" style="width:${clPct}%"></div>
+            </div>
+          </div>
+        </div>`
       : '';
 
     const dueBadge = isOverdue
@@ -1991,6 +2083,59 @@ function _injectStyles() {
     .daily-note-row-title   { font-size: var(--text-sm); font-weight: var(--weight-medium); }
     .daily-note-row-preview { font-size: var(--text-xs); color: var(--color-text-muted); }
 
+    /* ── Daily Task Checklist Progress Bar ───────────── */
+    .daily-task-checklist-prog { margin: 2px 0; }
+    .daily-task-cl-bar-row {
+      display: flex; align-items: center; gap: 5px;
+    }
+    .daily-task-cl-count {
+      font-size: 10px; font-weight: var(--weight-semibold);
+      color: var(--color-text-muted); min-width: 28px; flex-shrink: 0;
+    }
+    .daily-task-cl-count.cl-done { color: var(--color-success); }
+    .daily-task-cl-bar {
+      flex: 1; height: 4px; background: var(--color-border);
+      border-radius: 99px; overflow: hidden;
+    }
+    .daily-task-cl-fill {
+      height: 100%; background: var(--color-accent);
+      border-radius: 99px; transition: width 0.3s ease;
+    }
+    .daily-task-cl-fill.cl-done { background: var(--color-success); }
+
+    /* ── D-04: Context Filter Chips ──────────────────── */
+    .daily-ctx-chips {
+      display: flex;
+      gap: var(--space-1-5);
+      align-items: center;
+      flex-wrap: wrap;
+      padding: var(--space-1) 0 var(--space-2);
+    }
+    .daily-ctx-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: 4px 12px;
+      border-radius: 999px;
+      border: 1.5px solid var(--color-border);
+      background: var(--color-surface);
+      color: var(--color-text-muted);
+      font-size: var(--text-xs);
+      font-weight: var(--weight-semibold);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+    .daily-ctx-chip:hover {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+    }
+    .daily-ctx-chip.active {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+      color: #fff;
+    }
+
     /* ── Quick Capture Bar ───────────────────────────── */
     .daily-capture-bar {
       display: flex;
@@ -2243,6 +2388,9 @@ async function renderDaily(params = {}) {
     // ── Top bar ──────────────────────────────────────────────
     _buildTopBar(viewEl, dateStr);
 
+    // ── D-04: Context filter chips ───────────────────────────
+    _buildContextChips(viewEl);
+
     // ── sectionRefs: live DOM body refs for capture-bar prepend ──
     const sectionRefs = { notesBody: null, tasksBody: null };
 
@@ -2360,7 +2508,9 @@ on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
 });
 
 // CS-04: Re-render daily view when context changes
+// D-04: Reset local override so global context takes effect
 on('context:changed', () => {
+  _dailyCtxOverride = null;  // clear local override on global switch
   if (document.getElementById('view-daily')?.classList.contains('active')) {
     renderDaily({ _internal: true });
   }

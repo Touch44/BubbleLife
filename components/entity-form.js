@@ -10,7 +10,7 @@
  *   initEntityForm()                           — wire FAB events (call once on boot)
  */
 
-import { saveEntity, saveEdge, getEntitiesByType } from '../core/db.js';
+import { saveEntity, saveEdge, getEntitiesByType, getEntity } from '../core/db.js';
 import { getEntityTypeConfig, getAllEntityTypes }        from '../core/graph-engine.js';
 import { emit, EVENTS }                                from '../core/events.js';
 import { toast }                                       from '../core/toast.js';
@@ -116,7 +116,69 @@ export function openForm(typeKey, prefill = {}, onSave = null) {
   _relationValues.clear();
   _tagValues.clear();
 
+  // Pre-populate relation fields from prefill ID values.
+  // When callers pass { project: 'some-id' }, the form should show that relation
+  // pre-selected rather than leaving the picker empty.
+  // We do async look-ups after mounting so the form renders first (non-blocking).
+  _preFillRelations(config, prefill);
+
   _buildAndMount(config);
+}
+
+/**
+ * Pre-populate _relationValues for any relation field whose key appears in prefill
+ * as a plain entity ID string. Runs async after mount so UI renders without delay.
+ * @param {object} config  - entity type config
+ * @param {object} prefill - caller-provided prefill values
+ */
+async function _preFillRelations(config, prefill) {
+  for (const field of config.fields) {
+    if (field.type !== 'relation') continue;
+    const prefillVal = prefill[field.key];
+    // Accept a plain ID string or an array of ID strings
+    const ids = Array.isArray(prefillVal)
+      ? prefillVal
+      : (typeof prefillVal === 'string' && prefillVal ? [prefillVal] : []);
+    if (!ids.length) continue;
+
+    const entities = await Promise.all(ids.map(id => getEntity(id).catch(() => null)));
+    const valid = entities.filter(Boolean);
+    if (valid.length) {
+      _relationValues.set(field.key, valid);
+      // Refresh the relation control UI if the form is still open
+      const control = _overlay?.querySelector(`[data-field="${field.key}"] .ef-relation-control`);
+      if (control) _refreshRelationChips(control, field);
+    }
+  }
+}
+
+/**
+ * Refresh the displayed chips in a relation control after async prefill.
+ * @param {HTMLElement} control
+ * @param {object} field
+ */
+function _refreshRelationChips(control, field) {
+  const chipWrap = control.querySelector('.ef-relation-chips');
+  if (!chipWrap) return;
+  chipWrap.innerHTML = '';
+  const vals = _relationValues.get(field.key) || [];
+  for (const entity of vals) {
+    const chip = document.createElement('span');
+    chip.className = 'ef-relation-chip';
+    chip.textContent = entity.title || entity.name || entity.label || entity.id;
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:var(--color-accent);color:#fff;border-radius:99px;font-size:var(--text-xs);font-weight:var(--weight-semibold);';
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.textContent = '×';
+    rm.style.cssText = 'background:none;border:none;color:inherit;cursor:pointer;padding:0 0 0 4px;font-size:1em;line-height:1;';
+    rm.addEventListener('click', () => {
+      const arr = _relationValues.get(field.key) || [];
+      _relationValues.set(field.key, arr.filter(e => e.id !== entity.id));
+      chip.remove();
+    });
+    chip.appendChild(rm);
+    chipWrap.appendChild(chip);
+  }
 }
 
 /**
@@ -585,45 +647,115 @@ function _buildFieldControl(field, config) {
       return wrap;
     }
 
-    // ── RICHTEXT ─────────────────────────────────────────── //
-    // Toolbar removed: Ctrl+B/I/U work natively; toolbar buttons added noise
-    // without value (duplicated shortcuts, invisible on mobile native keyboard).
+    // ── RICHTEXT (Quill.js) — N-01 ───────────────────────── //
+    // N-01: Quill.js integration for rich text editing.
+    // Falls back gracefully to contenteditable if Quill fails to load.
     case 'richtext': {
-      const editor = document.createElement('div');
-      editor.id              = `ef-field-${field.key}`;
-      editor.contentEditable = 'true';
-      editor.className       = 'ef-richtext-editor';
-      editor.style.cssText   = `
-        min-height: 80px; padding: var(--space-3);
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;flex-direction:column;gap:0;';
+
+      const editorContainer = document.createElement('div');
+      editorContainer.id = `ef-field-${field.key}`;
+      editorContainer.className = 'ef-quill-container';
+      editorContainer.style.cssText = `
         border: 1px solid var(--color-border);
         border-radius: var(--radius-sm);
-        font-size: var(--text-sm); line-height: var(--leading-relaxed);
-        outline: none; color: var(--color-text);
         background: var(--color-bg);
         transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+        overflow: hidden;
+        min-height: 120px;
       `;
-      editor.setAttribute('role', 'textbox');
-      editor.setAttribute('aria-multiline', 'true');
-      editor.setAttribute('aria-label', field.label);
-      editor.setAttribute('spellcheck', 'true');
-      editor.dataset.placeholder = `${field.label}… (Ctrl+B bold, Ctrl+I italic)`;
 
-      if (existing) editor.innerHTML = existing;
+      wrap.appendChild(editorContainer);
 
-      editor.addEventListener('focus', () => {
-        editor.style.borderColor = 'var(--color-accent)';
-        editor.style.boxShadow   = 'var(--shadow-focus)';
-      });
-      editor.addEventListener('blur', () => {
-        editor.style.borderColor = 'var(--color-border)';
-        editor.style.boxShadow   = 'none';
-        _draft[field.key] = editor.innerHTML.trim() || null;
-      });
-      editor.addEventListener('input', () => {
-        _draft[field.key] = editor.innerHTML.trim() || null;
-      });
+      const initialContent = existing || '';
+      _draft[field.key] = initialContent || null;
 
-      return editor;
+      const _installFallback = () => {
+        editorContainer.innerHTML = '';
+        const fallback = document.createElement('div');
+        fallback.contentEditable = 'true';
+        fallback.className = 'ef-richtext-editor ef-richtext-fallback';
+        fallback.style.cssText = `min-height:100px;padding:var(--space-3);font-size:var(--text-sm);line-height:var(--leading-relaxed);outline:none;color:var(--color-text);`;
+        fallback.setAttribute('data-placeholder', `${field.label}… (Ctrl+B bold, Ctrl+I italic)`);
+        if (initialContent) fallback.innerHTML = initialContent;
+        fallback.addEventListener('input', () => { if (_draft) _draft[field.key] = fallback.innerHTML.trim() || null; });
+        fallback.addEventListener('blur',  () => { if (_draft) _draft[field.key] = fallback.innerHTML.trim() || null; });
+        editorContainer.appendChild(fallback);
+      };
+
+      const _initQuill = () => {
+        // Bail if container was removed from DOM (form closed before Quill loaded)
+        if (!editorContainer.isConnected || !_draft) { return; }
+        if (typeof window.Quill === 'undefined') { _installFallback(); return; }
+        try {
+          const quill = new window.Quill(editorContainer, {
+            theme: 'snow',
+            placeholder: `${field.label}…`,
+            modules: {
+              toolbar: [
+                [{ header: [1, 2, 3, false] }],
+                ['bold', 'italic', 'underline', 'strike'],
+                [{ list: 'ordered' }, { list: 'bullet' }],
+                ['blockquote', 'code-block'],
+                ['link'],
+                ['clean'],
+              ],
+            },
+          });
+          if (initialContent) quill.clipboard.dangerouslyPasteHTML(initialContent);
+
+          quill.on('text-change', () => {
+            if (!_draft) return;  // form already closed
+            const html = editorContainer.querySelector('.ql-editor')?.innerHTML || '';
+            _draft[field.key] = (html === '<p><br></p>' || !html) ? null : html;
+          });
+          quill.on('selection-change', (range) => {
+            if (range) {
+              editorContainer.style.borderColor = 'var(--color-accent)';
+              editorContainer.style.boxShadow   = 'var(--shadow-focus)';
+            } else {
+              editorContainer.style.borderColor = 'var(--color-border)';
+              editorContainer.style.boxShadow   = 'none';
+              if (!_draft) return;  // form already closed
+              const html = editorContainer.querySelector('.ql-editor')?.innerHTML || '';
+              _draft[field.key] = (html === '<p><br></p>' || !html) ? null : html;
+            }
+          });
+        } catch (err) {
+          console.warn('[entity-form] Quill init failed, using fallback:', err);
+          _installFallback();
+        }
+      };
+
+      // Lazily load Quill from CDN if not already present, then init
+      if (typeof window.Quill !== 'undefined') {
+        setTimeout(_initQuill, 0);
+      } else {
+        if (!document.getElementById('quill-css')) {
+          const link = document.createElement('link');
+          link.id   = 'quill-css';
+          link.rel  = 'stylesheet';
+          link.href = 'https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.7/quill.snow.min.css';
+          document.head.appendChild(link);
+        }
+        if (!document.getElementById('quill-js')) {
+          const script    = document.createElement('script');
+          script.id       = 'quill-js';
+          script.src      = 'https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.7/quill.min.js';
+          script.onload   = _initQuill;
+          script.onerror  = _installFallback;
+          document.head.appendChild(script);
+        } else {
+          // Script tag exists but Quill may still be loading — poll
+          const poll = setInterval(() => {
+            if (typeof window.Quill !== 'undefined') { clearInterval(poll); _initQuill(); }
+          }, 50);
+          setTimeout(() => { clearInterval(poll); if (typeof window.Quill === 'undefined') _installFallback(); }, 5000);
+        }
+      }
+
+      return wrap;
     }
 
     // ── CHECKLIST ────────────────────────────────────────── //
@@ -835,6 +967,7 @@ function _buildRelationControl(field, config) {
   wrap.dataset.key = field.key;
 
   const chipRow = document.createElement('div');
+  chipRow.className = 'ef-relation-chips';
   chipRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-1);';
   wrap.appendChild(chipRow);
 
@@ -1112,10 +1245,20 @@ function _saveDraftFromForm() {
     }
   }
 
-  // Sync richtext editors (innerHTML preserves bold/italic/lists applied via Ctrl+B/I)
-  _overlay.querySelectorAll('.ef-richtext-editor').forEach(ed => {
+  // Sync richtext editors — handles both Quill (.ef-quill-container) and fallback (.ef-richtext-fallback)
+  _overlay.querySelectorAll('.ef-richtext-fallback').forEach(ed => {
     const key = ed.closest('[data-field]')?.dataset.field;
     if (key) _draft[key] = ed.innerHTML.trim() || null;
+  });
+  // Quill containers: read from .ql-editor inside each .ef-quill-container
+  _overlay.querySelectorAll('.ef-quill-container').forEach(container => {
+    const key = container.closest('[data-field]')?.dataset.field;
+    if (!key) return;
+    const qlEditor = container.querySelector('.ql-editor');
+    if (qlEditor) {
+      const html = qlEditor.innerHTML || '';
+      _draft[key] = (html === '<p><br></p>' || !html) ? null : html;
+    }
   });
 }
 

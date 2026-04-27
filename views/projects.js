@@ -35,6 +35,17 @@ const STATUS_COLORS = {
 
 const FILTER_OPTIONS = ['All', 'Active', 'On Hold', 'Complete', 'Archived'];
 
+// ── Inject CSS once to reset .view padding for this full-bleed view ──────────
+(function _injectStyles() {
+  if (document.getElementById('projects-view-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'projects-view-styles';
+  style.textContent = `
+    #view-projects.active { padding: 0; }
+  `;
+  document.head.appendChild(style);
+})();
+
 // ── Helpers ────────────────────────────────────────────────────
 function _esc(str) {
   return String(str || '')
@@ -77,9 +88,26 @@ async function renderProjects(params = {}) {
   const el = document.getElementById('view-projects');
   if (!el) return;
 
-  await _loadData();
+  // Only reload from IDB on fresh navigation — not on internal filter/context re-renders
+  if (!params._internal) {
+    try {
+      await _loadData();
+    } catch (err) {
+      console.error('[projects] _loadData failed:', err);
+      el.innerHTML = `<div style="padding:var(--space-6);color:var(--color-text-muted);text-align:center;">Failed to load projects. Please try again.</div>`;
+      return;
+    }
+  }
 
   el.innerHTML = '';
+
+  // ── Compute filtered count early so header count is accurate ──
+  const _filteredCount = _activeFilter === 'All'
+    ? _projects.length
+    : _projects.filter(p => p.status === _activeFilter).length;
+  const _countLabel = _activeFilter === 'All'
+    ? `${_projects.length}`
+    : `${_filteredCount} of ${_projects.length}`;
 
   // ── Header ──────────────────────────────────────────────────
   const header = document.createElement('div');
@@ -91,7 +119,7 @@ async function renderProjects(params = {}) {
     <div style="display:flex;align-items:center;gap:var(--space-2);">
       <span style="font-size:1.3em;">📁</span>
       <span style="font-weight:var(--weight-bold);font-size:var(--text-lg);color:var(--color-text);">Projects</span>
-      <span style="font-size:var(--text-sm);color:var(--color-text-muted);">(${_projects.length})</span>
+      <span style="font-size:var(--text-sm);color:var(--color-text-muted);">(${_countLabel})</span>
     </div>
   `;
   const newBtn = document.createElement('button');
@@ -274,19 +302,21 @@ async function renderProjects(params = {}) {
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   if ((entity?.type === 'project' || entity?.type === 'task') &&
       document.getElementById('view-projects')?.classList.contains('active')) {
-    renderProjects({ _internal: true });
+    // Full reload — entity data has changed
+    renderProjects();
   }
 });
 
 on(EVENTS.ENTITY_DELETED, () => {
   if (document.getElementById('view-projects')?.classList.contains('active')) {
-    renderProjects({ _internal: true });
+    renderProjects();
   }
 });
 
 on('context:changed', () => {
   if (document.getElementById('view-projects')?.classList.contains('active')) {
-    renderProjects({ _internal: true });
+    // Full reload — context changes what data is visible
+    renderProjects();
   }
 });
 

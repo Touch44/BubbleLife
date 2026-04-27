@@ -544,11 +544,16 @@ body {
 
 /* Backdrop — lightweight for right panel */
 #entity-panel-backdrop {
-  display: none; /* right-side panel does not need a backdrop */
+  display: none; /* right-side panel does not need a backdrop on desktop */
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: calc(var(--z-panel) - 1);
+  cursor: pointer;
 }
 
 #entity-panel-backdrop.visible {
-  display: none;
+  display: none; /* still hidden on desktop — mobile override below */
 }
 
 #entity-panel {
@@ -1036,6 +1041,17 @@ body {
     transform: translateY(0);
   }
 
+  /* M-02: Show backdrop on mobile when panel is open */
+  #entity-panel-backdrop.visible {
+    display: block;
+    animation: fadeIn 0.2s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
   /* Panel drag handle on mobile */
   #entity-panel::before {
     content: '';
@@ -1060,6 +1076,89 @@ body {
   #fab {
     bottom: var(--space-4);
     right: var(--space-4);
+  }
+
+  /* ── M-01: FAB bottom sheet on mobile ───────────────── */
+  /* Backdrop overlay behind the sheet */
+  #fab.fab-expanded::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: -1;
+    animation: fadeIn 0.2s ease;
+    pointer-events: none; /* Fix 5: let clicks pass through to document click handler */
+  }
+
+  /* Sheet container */
+  .fab-expanded .fab-radial {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    width: 100%;
+    background: var(--color-bg);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: 0 -4px 32px rgba(0,0,0,0.18);
+    padding: var(--space-2) 0 calc(env(safe-area-inset-bottom, 0px) + var(--space-4));
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    z-index: calc(var(--z-fab) - 1);
+    animation: sheetUp 0.25s cubic-bezier(0.32, 0.72, 0, 1) both;
+    max-height: 70dvh;
+    overflow-y: auto;
+  }
+
+  @keyframes sheetUp {
+    from { transform: translateY(100%); opacity: 0.8; }
+    to   { transform: translateY(0);    opacity: 1; }
+  }
+
+  /* Sheet items become full-width rows — icon left, label right */
+  .fab-radial-item {
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-5);
+    border-radius: 0;
+    animation: none;
+  }
+
+  /* Drag handle at top of sheet */
+  .fab-expanded .fab-radial::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    background: var(--color-border);
+    border-radius: 99px;
+    margin: var(--space-2) auto var(--space-3);
+    flex-shrink: 0;
+  }
+
+  .fab-radial-label {
+    background: none;
+    color: var(--color-text);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
+    padding: 0;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  .fab-radial-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+
+  /* FAB main button stays in corner */
+  #fab-main-btn {
+    position: relative;
+    z-index: var(--z-fab);
   }
 
   .view {

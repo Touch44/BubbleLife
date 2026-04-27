@@ -18,6 +18,17 @@ import { exportAll, importAll, getStorageUsage } from '../core/db.js';
 import { getAccount, getAllAccounts, generateInvite } from '../core/auth.js';
 import { startTour } from '../core/tour.js';
 
+// ── Inject CSS once ────────────────────────────────────────────
+(function _injectStyles() {
+  if (document.getElementById('settings-view-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'settings-view-styles';
+  style.textContent = `
+    #view-settings.active { padding: 0; overflow-y: auto; }
+  `;
+  document.head.appendChild(style);
+})();
+
 // ── Helpers ────────────────────────────────────────────────────
 function _esc(str) {
   return String(str || '')
@@ -161,7 +172,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v3.0.0</div>
+          <div><strong>FamilyHub</strong> v3.4.4</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);

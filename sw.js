@@ -4,15 +4,15 @@
  */
 'use strict';
 
-const APP_VERSION   = '3.1.0';
+const APP_VERSION   = '3.4.4';
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
   './', './index.html', './manifest.json',
-  './styles/tokens.css?v=3.1.0', './styles/layout.css?v=3.1.0',
-  './styles/components.css?v=3.1.0', './styles/dark.css?v=3.1.0',
+  './styles/tokens.css?v=3.4.4', './styles/layout.css?v=3.4.4',
+  './styles/components.css?v=3.4.4', './styles/dark.css?v=3.4.4',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',

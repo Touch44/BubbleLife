@@ -35,15 +35,26 @@ async function _refreshData() {
   const data = _env.services.data;
   const now  = new Date();
 
+  // Helper: local YYYY-MM-DD string (avoids UTC offset shift)
+  function _localDateStr(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   try {
-    // Overdue tasks: dueDate < today and not done/deleted
+    // Overdue tasks: dueDate < today (local) and not done/deleted
+    // Bug fix: use local date string, not UTC (toISOString shifts in UTC-negative zones)
+    // Bug fix: task status is 'Done' (capital D), not 'done'
     const tasks = await data.getEntitiesByType('task') || [];
-    const today = now.toISOString().slice(0, 10);
+    const today = _localDateStr(now);
+    const DONE_STATUSES = new Set(['Done', 'done', 'Completed', 'completed', 'Cancelled', 'cancelled']);
     _overdueTasks.value = tasks.filter(t =>
       !t.deleted &&
       t.dueDate &&
-      t.dueDate < today &&
-      !['done', 'completed', 'cancelled'].includes(t.status)
+      t.dueDate.slice(0, 10) < today &&
+      !DONE_STATUSES.has(t.status)
     );
   } catch { _overdueTasks.value = []; }
 
@@ -57,16 +68,21 @@ async function _refreshData() {
   } catch { _upcomingEvents.value = []; }
 
   try {
-    // Birthday alert: contacts with birthday within 3 days
+    // Birthday alert: contacts with birthday (MM-DD) within next 3 days
+    // Bug fix: handle year-wrap correctly (e.g. Dec 29 → Jan 2)
     const contacts = await data.getEntitiesByType('contact') || [];
-    const in3 = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-    const todayMMDD = now.toISOString().slice(5, 10);
-    const in3MMDD   = in3.toISOString().slice(5, 10);
+    const now3 = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    // Build set of MM-DD strings for the next 3 days (handles year-wrap)
+    const upcomingMMDD = new Set();
+    for (let i = 0; i <= 3; i++) {
+      const d = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
+      upcomingMMDD.add(`${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    }
 
     _birthdayAlert.value = contacts.some(c => {
       const bday = c.birthday ? String(c.birthday).slice(5, 10) : null;
-      if (!bday) return false;
-      return bday >= todayMMDD && bday <= in3MMDD;
+      return bday ? upcomingMMDD.has(bday) : false;
     });
   } catch { _birthdayAlert.value = false; }
 }
@@ -135,7 +151,8 @@ function _buildEventsItem() {
   });
 
   el.addEventListener('click', () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     navigate('calendar', { date: today });
   });
 

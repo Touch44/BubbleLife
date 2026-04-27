@@ -815,9 +815,15 @@ async function _buildCard(post, pm, apm) {
     b.innerHTML=`${emoji}${ms.length?` <span class="fw-rxn-c">${ms.length}</span>`:''}`;
     b.addEventListener('click',async e=>{
       e.stopPropagation();
-      if(my) await deleteEdge(my.edgeId,acct?.id);
-      else await saveEdge({fromId:myPid,toId:post.id,relation:'reacts-to',metadata:{emoji}},acct?.id);
-      renderWall({_internal:true});
+      if (!myPid) { toast.error('You need a member profile to react.'); return; }
+      try {
+        if(my) await deleteEdge(my.edgeId,acct?.id);
+        else await saveEdge({fromId:myPid,toId:post.id,relation:'reacts-to',metadata:{emoji}},acct?.id);
+        renderWall({_internal:true});
+      } catch(err) {
+        console.error('[fw] reaction failed:', err);
+        toast.error('Could not save reaction — please try again.');
+      }
     });
     rb.appendChild(b);
   }

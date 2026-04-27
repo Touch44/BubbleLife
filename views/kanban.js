@@ -33,6 +33,18 @@ const COLUMNS = [
 ];
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+// K-03: Map person.color select values → CSS colors for avatars
+const PERSON_COLOR_MAP = {
+  Red:    '#ef4444',
+  Orange: '#f97316',
+  Yellow: '#eab308',
+  Green:  '#22c55e',
+  Teal:   '#14b8a6',
+  Blue:   '#3b82f6',
+  Purple: '#a855f7',
+  Pink:   '#ec4899',
+};
+
 const PRIORITY_COLORS = {
   Critical: 'var(--color-danger)',
   High:     'var(--color-warning)',
@@ -302,6 +314,24 @@ function _rerenderColumns() {
 
   const filtered = _applyFilters(_tasks);
 
+  // Show a friendly empty state banner when filters yield no results
+  const anyFilter = _filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue;
+  if (anyFilter && filtered.length === 0) {
+    const banner = document.createElement('div');
+    banner.style.cssText = [
+      'grid-column:1/-1;display:flex;flex-direction:column;align-items:center;',
+      'justify-content:center;padding:var(--space-10) var(--space-6);gap:var(--space-3);',
+      'color:var(--color-text-muted);text-align:center;',
+    ].join('');
+    banner.innerHTML = `
+      <div style="font-size:2rem;opacity:0.35;">🔍</div>
+      <div style="font-size:var(--text-base);font-weight:var(--weight-semibold);color:var(--color-text);">No tasks match your filters</div>
+      <div style="font-size:var(--text-sm);">Try adjusting or clearing the active filters above.</div>
+    `;
+    _boardEl.appendChild(banner);
+    return;
+  }
+
   for (const col of COLUMNS) {
     const colTasks = _sortTasks(
       filtered.filter(t => t.status === col.key),
@@ -385,8 +415,12 @@ function _buildCard(task) {
 
   // Assignee avatar
   const assignee = task.assignedTo ? _personMap.get(task.assignedTo) : null;
+  // K-03: Use person.color field for avatar background
+  const avatarBg = assignee?.color && PERSON_COLOR_MAP[assignee.color]
+    ? PERSON_COLOR_MAP[assignee.color]
+    : 'var(--color-accent)';
   const assigneeEl = assignee
-    ? `<span class="kanban-card-avatar" title="${_esc(assignee.name || '')}">${(assignee.name || '?').charAt(0).toUpperCase()}</span>`
+    ? `<span class="kanban-card-avatar" title="${_esc(assignee.name || '')}" style="background:${avatarBg}">${(assignee.name || '?').charAt(0).toUpperCase()}</span>`
     : '';
 
   // Priority dot
@@ -413,11 +447,20 @@ function _buildCard(task) {
     ? `<span class="kanban-card-blocker" title="Blocked by another task">🚫</span>`
     : '';
 
-  // Checklist progress
+  // Checklist progress — K-02: visual progress bar + count
   const cl = Array.isArray(task.checklist) ? task.checklist : [];
   const clDone = cl.filter(i => i.done).length;
+  const clPct  = cl.length ? Math.round((clDone / cl.length) * 100) : 0;
+  const clComplete = cl.length > 0 && clDone === cl.length;
   const clProgress = cl.length
-    ? `<span class="kanban-card-checklist-prog" title="${clDone} of ${cl.length} items done">${clDone}/${cl.length}</span>`
+    ? `<div class="kanban-card-checklist-prog" title="${clDone} of ${cl.length} checklist items done">
+        <div class="kanban-card-checklist-bar-row">
+          <span class="kanban-card-checklist-count${clComplete ? ' cl-complete' : ''}">${clDone}/${cl.length}</span>
+          <div class="kanban-card-checklist-bar" role="progressbar" aria-valuenow="${clPct}" aria-valuemin="0" aria-valuemax="100">
+            <div class="kanban-card-checklist-fill${clComplete ? ' cl-complete' : ''}" style="width:${clPct}%"></div>
+          </div>
+        </div>
+      </div>`
     : '';
 
   // Kanban state dot (P-23)
@@ -629,11 +672,13 @@ function _buildQuickAdd(statusKey) {
     }
     const account = getAccount();
     try {
+      const ctx = getActiveContext();
       await saveEntity({
         type:     'task',
         title,
         status:   statusKey,
         priority: 'Medium',
+        context:  ctx === 'all' ? 'family' : ctx,
       }, account?.id);
       input.value = '';
       await _loadData();
@@ -1049,10 +1094,39 @@ function _injectStyles() {
       line-height: 1.35;
     }
     .kanban-card-checklist-prog {
-      font-size: 11px;
-      color: var(--color-text-muted);
-      margin: 2px 0 0 2px;
+      margin: 4px 0 2px;
       display: block;
+    }
+    .kanban-card-checklist-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .kanban-card-checklist-count {
+      font-size: 10px;
+      font-weight: var(--weight-semibold);
+      color: var(--color-text-muted);
+      flex-shrink: 0;
+      min-width: 28px;
+    }
+    .kanban-card-checklist-count.cl-complete {
+      color: var(--color-success);
+    }
+    .kanban-card-checklist-bar {
+      flex: 1;
+      height: 4px;
+      background: var(--color-border);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .kanban-card-checklist-fill {
+      height: 100%;
+      background: var(--color-accent);
+      border-radius: 99px;
+      transition: width 0.3s ease;
+    }
+    .kanban-card-checklist-fill.cl-complete {
+      background: var(--color-success);
     }
     .kanban-card-prio-dot {
       width: 8px; height: 8px;
@@ -1196,6 +1270,11 @@ async function renderKanban(params = {}) {
     </div>
   `;
 
+  // Apply navigation params — e.g. systray overdue badge navigates here with filter:'overdue'
+  if (params.filter === 'overdue') {
+    _filterOverdue = true;
+  }
+
   try {
     await _loadData();
     viewEl.innerHTML = '';
@@ -1216,14 +1295,16 @@ async function renderKanban(params = {}) {
 // ── Listen for entity saves to refresh board ──────────────── //
 
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
-  if (entity?.type === 'task' && _boardEl) {
+  if (entity?.type === 'task' && _boardEl &&
+      document.getElementById('view-kanban')?.classList.contains('active')) {
     _loadData().then(() => _rerenderColumns()).catch(() => {});
   }
 });
 
 // BUG-1 fix: re-render board when a task is deleted
 on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
-  if ((entityType === 'task' || !entityType) && _boardEl) {
+  if ((entityType === 'task' || !entityType) && _boardEl &&
+      document.getElementById('view-kanban')?.classList.contains('active')) {
     _loadData().then(() => _rerenderColumns()).catch(() => {});
   }
 });
@@ -1241,9 +1322,11 @@ on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
 
 // ── Registration ──────────────────────────────────────────── //
 
-// CS-04: Re-render board when context changes
+// CS-04: Re-render board when context changes (only when kanban is the active view)
 on('context:changed', () => {
-  if (_boardEl) _loadData().then(() => _rerenderColumns()).catch(() => {});
+  if (_boardEl && document.getElementById('view-kanban')?.classList.contains('active')) {
+    _loadData().then(() => _rerenderColumns()).catch(() => {});
+  }
 });
 
 registerView('kanban', renderKanban);

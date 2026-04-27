@@ -14,6 +14,7 @@ import { getEntitiesByType, getSetting, setSetting } from '../core/db.js';
 import { navigate, VIEW_KEYS }                         from '../core/router.js';
 import { emit, on, EVENTS }                        from '../core/events.js';
 import { openForm }                                from './entity-form.js';
+import { filterByContext }                         from '../core/context.js';
 
 // ── DOM refs ──────────────────────────────────────────────── //
 let _overlay, _input, _results;
@@ -199,34 +200,91 @@ async function _renderSearchResults(query) {
 
   const lq       = query.toLowerCase();
   const types    = getAllEntityTypes();
-  const groups   = new Map();   // typeKey → [{entity, config}]
+  const allMatches = []; // flat: { entity, config, score }
+
+  /** SR-01: Strip HTML tags for richtext field matching */
+  function _stripHtml(html) {
+    if (!html) return '';
+    return String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /** SR-01: Compute relevance score for a matched entity */
+  function _scoreEntity(entity, cfg, titleMatch) {
+    let score = 0;
+    const now = Date.now();
+    const updatedAt = entity.updatedAt ? new Date(entity.updatedAt).getTime() : 0;
+    const ageMs = now - updatedAt;
+
+    // Recency bonus
+    if (ageMs < 7 * 86400000)  score += 20;
+    else if (ageMs < 30 * 86400000) score += 10;
+    else if (ageMs < 90 * 86400000) score += 5;
+
+    // Title match quality
+    const title = (entity.title || entity.name || entity.label || '').toLowerCase();
+    if (title === lq)               score += 30;
+    else if (title.startsWith(lq))  score += 20;
+    else if (titleMatch)            score += 10;
+
+    // Type priority
+    const typePriority = { task: 15, event: 10, note: 8, project: 6 };
+    score += typePriority[cfg.key] || 0;
+
+    // Overdue task urgency — use local date string to avoid UTC offset shift
+    if (cfg.key === 'task' && entity.dueDate) {
+      const dueDate = entity.dueDate.slice(0, 10);
+      const d = new Date();
+      const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      if (dueDate < today && entity.status !== 'Done' && entity.status !== 'done') {
+        score += 25;
+      }
+    }
+
+    return score;
+  }
 
   // Search all types in parallel
   await Promise.all(types.map(async (cfg) => {
     let entities = [];
     try { entities = await getEntitiesByType(cfg.key); } catch { return; }
 
-    const titleField   = cfg.fields.find(f => f.isTitle);
+    // SR-01: Include richtext in detail fields; expand slice limit to 5
     const detailFields = cfg.fields.filter(f =>
       !f.isTitle && ['text', 'select', 'date', 'email', 'phone', 'url', 'richtext'].includes(f.type)
-    ).slice(0, 3);
+    ).slice(0, 5);
 
-    const matches = entities.filter(e => {
-      if (e.deleted) return false;
+    for (const e of entities) {
+      if (e.deleted) continue;
+
       const displayTitle = _getDisplayTitle(e).toLowerCase();
-      if (displayTitle.includes(lq)) return true;
-      // Also search secondary text fields
-      return detailFields.some(f => (e[f.key] || '').toString().toLowerCase().includes(lq));
-    }).slice(0, 5);
+      const titleMatch   = displayTitle.includes(lq);
 
-    if (matches.length > 0) {
-      groups.set(cfg.key, matches.map(e => ({ entity: e, config: cfg })));
+      // SR-01: Strip HTML from richtext fields before matching
+      const detailMatch = detailFields.some(f => {
+        const val = e[f.key];
+        if (!val) return false;
+        const text = f.type === 'richtext' ? _stripHtml(val) : String(val);
+        return text.toLowerCase().includes(lq);
+      });
+
+      if (!titleMatch && !detailMatch) continue;
+
+      allMatches.push({
+        entity: e,
+        config: cfg,
+        score:  _scoreEntity(e, cfg, titleMatch),
+      });
     }
   }));
 
+  // SR-01: Apply context filtering
+  const contextFiltered = filterByContext(allMatches.map(m => m.entity));
+  const filteredIds     = new Set(contextFiltered.map(e => e.id));
+  const contextMatches  = allMatches.filter(m => filteredIds.has(m.entity.id));
+
   _results.innerHTML = '';
 
-  if (groups.size === 0) {
+  if (contextMatches.length === 0) {
     _results.innerHTML = `
       <div style="padding: var(--space-6) var(--space-5); color: var(--color-text-muted);
                   font-size: var(--text-sm); text-align: center;">
@@ -235,35 +293,48 @@ async function _renderSearchResults(query) {
     return;
   }
 
-  // Render each group
-  for (const [typeKey, hits] of groups) {
-    const cfg = hits[0].config;
+  // SR-01: Sort by score descending (unified ranked list, not grouped by type)
+  contextMatches.sort((a, b) => b.score - a.score);
 
-    const section = _makeSection(`${cfg.icon} ${cfg.labelPlural || cfg.label} (${hits.length})`);
-    _results.appendChild(section.header);
+  // Cap at 20 results
+  const ranked = contextMatches.slice(0, 20);
 
-    for (const { entity, config } of hits) {
-      const title       = _getDisplayTitle(entity);
-      const detailField = config.fields.find(f =>
-        !f.isTitle && ['date', 'select', 'text', 'email'].includes(f.type) && entity[f.key]
-      );
-      const detail = detailField
-        ? `${detailField.label}: ${_formatFieldValue(entity[detailField.key], detailField.type)}`
-        : '';
+  const section = _makeSection(`Results (${ranked.length})`);
+  _results.appendChild(section.header);
 
-      const item = _makeResultItem({
-        icon:      config.icon,
-        title,
-        detail,
-        color:     config.color,
-        onActivate: () => {
-          closeSearch();
-          emit(EVENTS.PANEL_OPENED, { entityId: entity.id });
-        },
-      });
-      _results.appendChild(item.el);
-      _currentItems.push(item);
+  for (const { entity, config, score: _s } of ranked) {
+    const title = _getDisplayTitle(entity);
+    // Detail: prefer date/select/text field, but also show richtext snippet
+    const detailField = config.fields.find(f =>
+      !f.isTitle && ['date', 'select', 'text', 'email'].includes(f.type) && entity[f.key]
+    );
+    let detail = detailField
+      ? `${detailField.label}: ${_formatFieldValue(entity[detailField.key], detailField.type)}`
+      : '';
+    // If no short detail, try richtext snippet
+    if (!detail) {
+      const rtField = config.fields.find(f => f.type === 'richtext' && entity[f.key]);
+      if (rtField) {
+        const plain = String(entity[rtField.key] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (plain.length > 0) detail = plain.slice(0, 60) + (plain.length > 60 ? '…' : '');
+      }
     }
+    // SR-01: Append type label to detail line so the icon slot is not repeated in the title
+    const typeSuffix = config.label || config.key;
+    const detailWithType = detail ? `${detail} · ${typeSuffix}` : typeSuffix;
+
+    const item = _makeResultItem({
+      icon:      config.icon,
+      title,
+      detail:    detailWithType,
+      color:     config.color,
+      onActivate: () => {
+        closeSearch();
+        emit(EVENTS.PANEL_OPENED, { entityId: entity.id });
+      },
+    });
+    _results.appendChild(item.el);
+    _currentItems.push(item);
   }
 }
 

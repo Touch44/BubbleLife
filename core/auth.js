@@ -1278,6 +1278,17 @@ function _wireAuthForms() {
 
   if (inviteJoinBtn) inviteJoinBtn.addEventListener('click', handleInviteJoin);
 
+  // Enter key navigation: code → username → password → submit
+  document.getElementById('invite-code')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('invite-username')?.focus();
+  });
+  document.getElementById('invite-username')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('invite-password')?.focus();
+  });
+  document.getElementById('invite-password')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleInviteJoin();
+  });
+
   // ── First run form ──────────────────────────────────────
   const firstRunBtn = document.getElementById('firstrun-btn');
   const firstRunErr = document.getElementById('firstrun-error');
@@ -1313,6 +1324,16 @@ function _wireAuthForms() {
 
   if (firstRunBtn) firstRunBtn.addEventListener('click', handleFirstRun);
 
+  // Enter advances to next field; final field submits
+  document.getElementById('firstrun-family')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('firstrun-displayname')?.focus();
+  });
+  document.getElementById('firstrun-displayname')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('firstrun-username')?.focus();
+  });
+  document.getElementById('firstrun-username')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('firstrun-password')?.focus();
+  });
   document.getElementById('firstrun-password')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') handleFirstRun();
   });

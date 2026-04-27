@@ -28,7 +28,7 @@ import { getEntitiesByType, getEntity, saveEntity } from '../core/db.js';
 import { emit, on, EVENTS }         from '../core/events.js';
 import { openEditForm }              from '../components/entity-form.js';
 import { getAccount }                from '../core/auth.js';
-import { filterByContext }           from '../core/context.js';
+import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                     from '../core/toast.js';
 
 // ── Constants ─────────────────────────────────────────────── //
@@ -92,11 +92,34 @@ const ENTITY_REGISTRY = {
   },
 };
 
+// C-01: Map person.color select values → CSS hex colors
+const PERSON_COLOR_MAP = {
+  Red:    '#ef4444',
+  Orange: '#f97316',
+  Yellow: '#eab308',
+  Green:  '#22c55e',
+  Teal:   '#14b8a6',
+  Blue:   '#3b82f6',
+  Purple: '#a855f7',
+  Pink:   '#ec4899',
+};
+
 /** Ordered list of entity types to load — determines dot order */
 const DATA_TYPES = ['event', 'task', 'dateEntity', 'appointment', 'mealPlan'];
 
 /** Quick lookup helpers derived from registry */
 function _getColor(type)  { return ENTITY_REGISTRY[type]?.color || 'var(--color-border)'; }
+
+// C-01: Get color for an item, preferring assignee person color over entity-type color
+function _getItemColor(entityType, entity, personMap) {
+  if (personMap && entity.assignedTo) {
+    const person = personMap.get(entity.assignedTo);
+    if (person?.color && PERSON_COLOR_MAP[person.color]) {
+      return PERSON_COLOR_MAP[person.color];
+    }
+  }
+  return _getColor(entityType);
+}
 function _getIcon(type)   { return ENTITY_REGISTRY[type]?.icon || '📌'; }
 function _getLabel(type)  { return ENTITY_REGISTRY[type]?.label || type; }
 
@@ -261,9 +284,16 @@ function _daysInMonth(year, month) {
  * Uses DATA_TYPES registry so adding a new type only requires updating the registry.
  */
 async function _loadData() {
-  const results = await Promise.all(DATA_TYPES.map(t => getEntitiesByType(t)));
+  // C-01: load persons alongside entity data to enable person color-coding
+  const [personRaw, ...entityResults] = await Promise.all([
+    getEntitiesByType('person'),
+    ...DATA_TYPES.map(t => getEntitiesByType(t)),
+  ]);
   const data = {};
-  DATA_TYPES.forEach((t, i) => { data[t] = filterByContext(results[i]); }); // CS-04
+  DATA_TYPES.forEach((t, i) => { data[t] = filterByContext(entityResults[i]); }); // CS-04
+
+  // C-01: build personMap (id → person entity) for color lookups
+  data._personMap = new Map(personRaw.filter(p => !p.deleted).map(p => [p.id, p]));
   return data;
 }
 
@@ -549,7 +579,7 @@ function _navigateNext() {
 
 // ── DOM builders: Month View ──────────────────────────────── //
 
-function _buildMonthView(container, dateMap) {
+function _buildMonthView(container, dateMap, personMap = new Map()) {
   const grid = document.createElement('div');
   grid.className = 'cal-month';
 
@@ -622,7 +652,11 @@ function _buildMonthView(container, dateMap) {
         } else {
           const dot = document.createElement('span');
           dot.className = 'cal-dot' + (t === 'task' && hasOverdue ? ' overdue' : '');
-          dot.style.background = _getColor(t);
+          // C-01: For tasks with an assignee, use that person's color for the dot
+          const firstItem = items.find(it => it.entityType === t);
+          dot.style.background = firstItem
+            ? _getItemColor(t, firstItem.entity, personMap)
+            : _getColor(t);
           dot.title = _getLabel(t);
           dotRow.appendChild(dot);
           dotCount++;
@@ -712,7 +746,8 @@ function _showWeekSlotQuickCreate(anchorEl, dateTime) {
     saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
     try {
       const acct = getAccount();
-      await saveEntity({ type: 'event', title, date: dateTime, status: 'confirmed' }, acct?.id);
+      const wkCtx = getActiveContext();
+      await saveEntity({ type: 'event', title, date: dateTime, status: 'confirmed', context: wkCtx === 'all' ? 'family' : wkCtx }, acct?.id);
       box.remove();
       document.removeEventListener('click', _outside);
       toast.success('Event added');
@@ -849,7 +884,7 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
       row.append(icon, info);
 
       // Color accent bar
-      row.style.borderLeftColor = _getColor(item.entityType) || 'var(--color-border)';
+      row.style.borderLeftColor = _getItemColor(item.entityType, item.entity, personMap); // C-01
 
       // Make draggable (except recurring dateEntities)
       if (item.entityType !== 'dateEntity') {
@@ -910,11 +945,13 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
     quickSave.textContent = 'Saving…';
     try {
       const acct = getAccount();
+      const evtCtx = getActiveContext();
       await saveEntity({
-        type:  'event',
+        type:    'event',
         title,
-        date:  dateStr + 'T12:00',
-        status: 'confirmed',
+        date:    dateStr + 'T12:00',
+        status:  'confirmed',
+        context: evtCtx === 'all' ? 'family' : evtCtx,
       }, acct?.id);
       toast.success('Event added');
       _closePopover();
@@ -999,7 +1036,7 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
 
 // ── DOM builders: Week View ───────────────────────────────── //
 
-function _buildWeekView(container, dateMap) {
+function _buildWeekView(container, dateMap, personMap = new Map()) {
   const weekStart = _getWeekStart(_anchorDate);
   const todayStr = _toDateStr(_todayLocal());
 
@@ -1351,7 +1388,7 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap) {
       block.className = 'cal-week-event-block';
       block.style.background = item.entityType === 'appointment'
         ? 'var(--color-warning-bg)' : 'var(--color-info-bg)';
-      block.style.borderLeft = `3px solid ${_getColor(item.entityType)}`;
+      block.style.borderLeft = `3px solid ${_getItemColor(item.entityType, item.entity, personMap)}`; // C-01
       block.style.top    = `${(item.startH - HOUR_START) * slotHeight}px`;
       block.style.left   = `${gutterWidth + d * dayWidth + 2 + col * colWidth}px`;
       block.style.width  = `${colWidth - 1}px`;
@@ -1389,7 +1426,7 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap) {
 
 // ── DOM builders: Agenda View ─────────────────────────────── //
 
-function _buildAgendaView(container, dateMap) {
+function _buildAgendaView(container, dateMap, personMap = new Map()) {
   const agenda = document.createElement('div');
   agenda.className = 'cal-agenda';
 
@@ -1433,7 +1470,7 @@ function _buildAgendaView(container, dateMap) {
       row.className = 'cal-agenda-item';
 
       // Left color bar
-      row.style.borderLeftColor = _getColor(item.entityType) || 'var(--color-border)';
+      row.style.borderLeftColor = _getItemColor(item.entityType, item.entity, personMap); // C-01
 
       // Time column
       const timeCol = document.createElement('div');
@@ -2362,6 +2399,7 @@ async function renderCalendar(params = {}) {
 
   try {
     const data = await _loadData();
+    const _personMap = data._personMap || new Map(); // C-01
 
     // Compute date range for the current view
     const year  = _anchorDate.getFullYear();
@@ -2397,11 +2435,11 @@ async function renderCalendar(params = {}) {
     _buildHeader(viewEl);
 
     if (_mode === MODES.MONTH) {
-      _buildMonthView(viewEl, dateMap);
+      _buildMonthView(viewEl, dateMap, _personMap);   // C-01: person color
     } else if (_mode === MODES.WEEK) {
-      _buildWeekView(viewEl, dateMap);
+      _buildWeekView(viewEl, dateMap, _personMap);    // C-01: person color
     } else {
-      _buildAgendaView(viewEl, dateMap);
+      _buildAgendaView(viewEl, dateMap, _personMap);  // C-01: person color
     }
 
   } catch (err) {
