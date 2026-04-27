@@ -28,6 +28,7 @@ import { getEntitiesByType, getEntity, saveEntity } from '../core/db.js';
 import { emit, on, EVENTS }         from '../core/events.js';
 import { openEditForm }              from '../components/entity-form.js';
 import { getAccount }                from '../core/auth.js';
+import { filterByContext }           from '../core/context.js';
 import { toast }                     from '../core/toast.js';
 
 // ── Constants ─────────────────────────────────────────────── //
@@ -262,7 +263,7 @@ function _daysInMonth(year, month) {
 async function _loadData() {
   const results = await Promise.all(DATA_TYPES.map(t => getEntitiesByType(t)));
   const data = {};
-  DATA_TYPES.forEach((t, i) => { data[t] = results[i]; });
+  DATA_TYPES.forEach((t, i) => { data[t] = filterByContext(results[i]); }); // CS-04
   return data;
 }
 
@@ -2426,6 +2427,9 @@ on(EVENTS.VIEW_CHANGED, ({ viewKey }) => {
 });
 
 // ── Registration ──────────────────────────────────────────── //
+
+// CS-04: Re-render calendar when context changes
+on('context:changed', _debouncedRender);
 
 registerView('calendar', renderCalendar);
 

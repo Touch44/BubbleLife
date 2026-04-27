@@ -23,6 +23,7 @@ import { getEntitiesByType, getEntity,
          getSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }          from '../core/events.js';
 import { getAccount }                 from '../core/auth.js';
+import { filterByContext }            from '../core/context.js';
 import { toast }                      from '../core/toast.js';
 
 // ── Constants ──────────────────────────────────────────────
@@ -101,7 +102,7 @@ async function _loadData() {
   for (const a of (auth?.accounts || [])) {
     if (a.memberId && pm.has(a.memberId)) apm.set(a.id, pm.get(a.memberId));
   }
-  return { posts, persons, pm, apm };
+  return { posts: filterByContext(posts), persons, pm, apm }; // CS-04
 }
 
 async function _loadPostEdges(pid) {
@@ -1186,6 +1187,9 @@ on(EVENTS.EDGE_SAVED,     _debounce);
 on(EVENTS.EDGE_DELETED,   _debounce);
 
 // ── Register ──────────────────────────────────────────────────
+
+// CS-04: Re-render wall when context changes
+on('context:changed', _debounce);
 
 registerView('family-wall', renderWall);
 export { renderWall };

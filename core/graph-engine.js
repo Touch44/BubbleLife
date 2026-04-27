@@ -133,6 +133,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:     ['create', 'edit', 'delete', 'duplicate', 'convert', 'relate'],
     fields: [
       field('title',      'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('status',     'select',   { label: 'Status',   options: ['Inbox', 'In Progress', 'Review', 'Done'] }),
       field('priority',   'select',   { label: 'Priority', options: ['Low', 'Medium', 'High', 'Critical'] }),
       field('dueDate',    'date',     { label: 'Due Date' }),
@@ -196,6 +197,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('date',     'datetime', { label: 'Start', required: true }),
       field('endDate',  'datetime', { label: 'End' }),
       field('location', 'text',     { label: 'Location' }),
@@ -219,6 +221,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'convert', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('body',     'richtext', { label: 'Body', isTitle: false }),
       field('category', 'select',   { label: 'Category', options: ['Inbox', 'Daily', 'Project', 'Reference', 'Archive'] }),
       field('tags',     'tags',     { label: 'Tags' }),
@@ -239,6 +242,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'archive', 'convert', 'relate'],
     fields: [
       field('name',     'title',    { isTitle: true, label: 'Name' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('status',   'select',   { label: 'Status', options: ['Active', 'On Hold', 'Complete', 'Archived'] }),
       field('goal',     'text',     { label: 'Goal' }),
       field('deadline', 'date',     { label: 'Deadline' }),
@@ -261,6 +265,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'relate'],
     fields: [
       field('name',       'title',    { isTitle: true, label: 'Name' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('type',       'select',   { label: 'Type', options: ['Passport', 'License', 'Insurance', 'Medical', 'School', 'Other'] }),
       field('issueDate',  'date',     { label: 'Issue Date' }),
       field('expiryDate', 'date',     { label: 'Expiry Date' }),
@@ -302,6 +307,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate'],
     fields: [
       field('description', 'title',    { isTitle: true, label: 'Description' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('type',        'select',   { label: 'Type',     options: ['Income', 'Expense'] }),
       field('amount',      'number',   { label: 'Amount' }),
       field('category',    'select',   { label: 'Category', options: [
@@ -328,6 +334,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',       'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'], default: 'family' }),
       field('cuisine',     'select',   { label: 'Cuisine', options: [
         'Italian', 'Mexican', 'Chinese', 'Japanese', 'Indian',
         'French', 'American', 'Mediterranean', 'Thai', 'Other',
@@ -356,6 +363,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'relate'],
     fields: [
       field('name',         'title',    { isTitle: true, label: 'Name' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('relationship', 'text',     { label: 'Relationship' }),
       field('phone',        'phone',    { label: 'Phone' }),
       field('email',        'email',    { label: 'Email' }),
@@ -377,6 +385,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'relate'],
     fields: [
       field('label',  'title',    { isTitle: true, label: 'Label' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('date',   'date',     { label: 'Date', required: true }),
       field('type',   'select',   { label: 'Type', options: ['Birthday', 'Anniversary', 'Holiday', 'Milestone'] }),
       field('person', 'relation', { label: 'Person', relatesTo: 'person' }),
@@ -397,6 +406,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'convert', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('body',     'richtext', { label: 'Body',   isTitle: false }),
       field('status',   'select',   { label: 'Status', options: ['Raw', 'Developing', 'Shelved', 'Done'] }),
       field('tags',     'tags',     { label: 'Tags' }),
@@ -418,6 +428,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'convert', 'relate'],
     fields: [
       field('title',   'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('summary', 'richtext', { label: 'Summary', isTitle: false }),
       field('source',  'url',      { label: 'Source URL' }),
       field('status',  'select',   { label: 'Status', options: ['Unread', 'Reading', 'Done', 'Archived'] }),
@@ -440,6 +451,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('author',   'text',     { label: 'Author' }),
       field('status',   'select',   { label: 'Status', options: ['Want to Read', 'Reading', 'Done', 'Abandoned'] }),
       field('rating',   'select',   { label: 'Rating', options: ['1', '2', '3', '4', '5'] }),
@@ -463,6 +475,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',       'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('destination', 'text',     { label: 'Destination' }),
       field('startDate',   'date',     { label: 'Start Date' }),
       field('endDate',     'date',     { label: 'End Date' }),
@@ -509,6 +522,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('url',      'url',      { label: 'URL', required: true }),
       field('category', 'select',   { label: 'Category', options: ['Reference', 'Tool', 'Article', 'Video', 'Social', 'Shopping', 'Other'] }),
       field('summary',  'richtext', { label: 'Summary', isTitle: false }),
@@ -530,6 +544,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'], default: 'family' }),
       field('date',     'date',     { label: 'Date',    required: true }),
       field('mealType', 'select',   { label: 'Meal',    options: ['Breakfast', 'Lunch', 'Dinner', 'Snack'] }),
       field('recipe',   'relation', { label: 'Recipe',  relatesTo: 'recipe' }),
@@ -552,6 +567,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Item' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'], default: 'family' }),
       field('quantity', 'text',     { label: 'Quantity' }),
       field('category', 'select',   { label: 'Category', options: ['Produce', 'Dairy', 'Meat', 'Bakery', 'Frozen', 'Canned', 'Household', 'Personal Care', 'Other'] }),
       field('checked',  'checkbox', { label: 'Checked',  isTitle: false }),
@@ -574,6 +590,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'relate'],
     fields: [
       field('name',        'title',    { isTitle: true, label: 'Medication' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'], default: 'personal' }),
       field('dosage',      'text',     { label: 'Dosage' }),
       field('frequency',   'select',   { label: 'Frequency', options: ['Once Daily', 'Twice Daily', 'Three Times Daily', 'As Needed', 'Weekly', 'Monthly'] }),
       field('prescribedTo','relation', { label: 'For',        relatesTo: 'person' }),
@@ -597,6 +614,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Title' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('date',     'datetime', { label: 'Date & Time', required: true }),
       field('type',     'select',   { label: 'Type', options: ['Medical', 'Dental', 'School', 'Legal', 'Financial', 'Other'] }),
       field('location', 'text',     { label: 'Location' }),
@@ -620,6 +638,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'convert', 'relate'],
     fields: [
       field('title',    'title',    { isTitle: true, label: 'Goal' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('why',      'richtext', { label: 'Why',    isTitle: false }),
       field('status',   'select',   { label: 'Status', options: ['Active', 'Paused', 'Achieved', 'Abandoned'] }),
       field('deadline', 'date',     { label: 'Target Date' }),
@@ -644,6 +663,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields: [
       field('title',       'title',    { isTitle: true, label: 'Habit' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
       field('frequency',   'select',   { label: 'Frequency', options: ['Daily', 'Weekdays', 'Weekends', 'Weekly', 'Monthly'] }),
       field('category',    'select',   { label: 'Category',  options: ['Health', 'Learning', 'Fitness', 'Mindfulness', 'Social', 'Other'] }),
       field('description', 'richtext', { label: 'Description', isTitle: false }),
@@ -667,6 +687,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['create', 'edit', 'delete'],
     fields: [
       field('body',     'richtext', { isTitle: false, label: 'Content' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'], default: 'family' }),
       field('postType', 'select',   { label: 'Type',  options: ['Text', 'Photo', 'Link', 'Milestone'] }),
       field('photoUrl', 'text',     { label: 'Photo URL', isTitle: false }),
       field('linkUrl',  'text',     { label: 'Link URL',  isTitle: false }),
@@ -690,6 +711,7 @@ const BUILT_IN_ENTITY_TYPES = [
     actions:      ['delete'],
     fields: [
       field('title',     'title',    { isTitle: true,  label: 'Comment' }),
+      field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'], default: 'family' }),
       field('body',      'richtext', { isTitle: false, label: 'Content' }),
       field('author',    'relation', { label: 'Author',  relatesTo: 'person' }),
       field('parentPost','relation', { label: 'Post',    relatesTo: 'post' }),

@@ -15,6 +15,7 @@ import { getEntityTypeConfig, getAllEntityTypes }        from '../core/graph-eng
 import { emit, EVENTS }                                from '../core/events.js';
 import { toast }                                       from '../core/toast.js';
 import { getAccount }                                  from '../core/auth.js';
+import { getActiveContext, ALWAYS_SHARED_TYPES }        from '../core/context.js';
 
 // ── Module-level state ────────────────────────────────────── //
 
@@ -105,6 +106,13 @@ export function openForm(typeKey, prefill = {}, onSave = null) {
   _editEntity = null;
   _onSave     = onSave;
   _draft      = { ...prefill };
+
+  // CS-05: Auto-fill context from active context if not already set
+  if (!_draft.context && !ALWAYS_SHARED_TYPES.has(typeKey)) {
+    const activeCtx = getActiveContext();
+    _draft.context = activeCtx === 'all' ? 'family' : activeCtx;
+  }
+
   _relationValues.clear();
   _tagValues.clear();
 
@@ -531,10 +539,13 @@ function _buildFieldControl(field, config) {
       empty.textContent = `— Select ${field.label} —`;
       select.appendChild(empty);
 
+      // CS-05: Emoji labels for context field
+      const CTX_EMOJI = { family: '🏠 Family', personal: '👤 Personal', business: '💼 Business', all: '🌐 All' };
+
       for (const opt of (field.options || [])) {
         const o = document.createElement('option');
         o.value       = opt;
-        o.textContent = opt;
+        o.textContent = (field.key === 'context' && CTX_EMOJI[opt]) ? CTX_EMOJI[opt] : opt;
         if (opt === existing) o.selected = true;
         select.appendChild(o);
       }

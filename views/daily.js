@@ -28,6 +28,7 @@ import { getEntitiesByType, getEntity, getSetting,
 import { emit, on, EVENTS }                    from '../core/events.js';
 import { openEditForm }                         from '../components/entity-form.js';
 import { getAccount }                      from '../core/auth.js';
+import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                            from '../core/toast.js';
 
 // ── Constants ─────────────────────────────────────────────── //
@@ -172,6 +173,16 @@ async function _loadData(dateStr) {
   const personMap  = new Map(persons.map(p  => [p.id, p.name  || p.title || p.id]));
   const projectMap = new Map(projects.map(pr => [pr.id, pr.name || pr.title || pr.id]));
 
+  // CS-04: Apply context filtering (persons, auditLog, projects are NOT filtered)
+  const fTasks        = filterByContext(tasks);
+  const fEvents       = filterByContext(events);
+  const fNotes        = filterByContext(notes);
+  const fComments     = filterByContext(comments);
+  const fPosts        = filterByContext(posts);
+  const fAppointments = filterByContext(appointments);
+  const fDateEntities = filterByContext(dateEntities);
+  const fMealPlans    = filterByContext(mealPlans);
+
   const accountMap = new Map();
   const accounts = authData?.accounts || [];
   for (const acct of accounts) {
@@ -181,11 +192,12 @@ async function _loadData(dateStr) {
 
   // Merge new comment entities + legacy note-comments for backward compat
   const allComments = [
-    ...comments,
-    ...notes.filter(n => n.category === 'Comment'),
+    ...fComments,
+    ...fNotes.filter(n => n.category === 'Comment'),
   ];
 
-  return { tasks, events, notes, posts, appointments, dateEntities, mealPlans,
+  return { tasks: fTasks, events: fEvents, notes: fNotes, posts: fPosts,
+           appointments: fAppointments, dateEntities: fDateEntities, mealPlans: fMealPlans,
            auditLog: auditLog || [], personMap, projectMap, accountMap, allComments };
 }
 
@@ -2345,6 +2357,13 @@ on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
       renderDaily({ _internal: true });
     }
   }, 200);
+});
+
+// CS-04: Re-render daily view when context changes
+on('context:changed', () => {
+  if (document.getElementById('view-daily')?.classList.contains('active')) {
+    renderDaily({ _internal: true });
+  }
 });
 
 registerView('daily', renderDaily);

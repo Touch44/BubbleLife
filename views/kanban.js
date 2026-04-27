@@ -21,6 +21,7 @@ import { getEntitiesByType, getEdgesFrom,
 import { emit, on, EVENTS }                      from '../core/events.js';
 import { openEditForm }                           from '../components/entity-form.js';
 import { getAccount }                            from '../core/auth.js';
+import { filterByContext, getActiveContext }      from '../core/context.js';
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -79,9 +80,9 @@ async function _loadData() {
     getEntitiesByType('project'),
   ]);
 
-  _tasks    = tasks.filter(t => !t.deleted);
+  _tasks    = filterByContext(tasks.filter(t => !t.deleted));
   _persons  = persons;
-  _projects = projects.filter(p => !p.deleted);
+  _projects = filterByContext(projects.filter(p => !p.deleted));
 
   _personMap  = new Map(persons.map(p  => [p.id, p]));
   _projectMap = new Map(projects.map(pr => [pr.id, pr]));
@@ -1239,6 +1240,11 @@ on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
 });
 
 // ── Registration ──────────────────────────────────────────── //
+
+// CS-04: Re-render board when context changes
+on('context:changed', () => {
+  if (_boardEl) _loadData().then(() => _rerenderColumns()).catch(() => {});
+});
 
 registerView('kanban', renderKanban);
 

@@ -219,6 +219,24 @@
     <!-- Family name header -->
     <div class="sidebar-family-name" id="sidebar-family-name">FamilyHub</div>
 
+    <!-- CS-02: Context Switcher -->
+    <div id="context-switcher" style="padding:8px 16px 4px;margin-bottom:4px;">
+      <div id="ctx-buttons" style="display:flex;gap:3px;background:rgba(255,255,255,0.08);border-radius:8px;padding:3px;">
+        <button class="ctx-btn" data-ctx="all"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;color:rgba(255,255,255,0.4);background:transparent;transition:all .15s;">ALL</button>
+        <button class="ctx-btn" data-ctx="family"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;transition:all .15s;"
+                title="Family">🏠</button>
+        <button class="ctx-btn" data-ctx="personal"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;transition:all .15s;"
+                title="Personal">👤</button>
+        <button class="ctx-btn" data-ctx="business"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;transition:all .15s;"
+                title="Business">💼</button>
+      </div>
+      <div id="ctx-label" style="text-align:center;font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px;letter-spacing:0.08em;text-transform:uppercase;">All Contexts</div>
+    </div>
+
     <!-- Nav items (Blueprint §4.2 — complete list) -->
     <ul class="sidebar-nav" role="list">
 
@@ -676,6 +694,10 @@
   import './views/kanban.js';                                 // registers 'kanban' view
   import './views/calendar.js';                               // registers 'calendar' view
   import './views/family-wall.js';                            // registers 'family-wall' view
+  import './views/notes.js';                                  // V-01: registers 'notes' view
+  import './views/projects.js';                               // V-02: registers 'projects' view
+  import './views/settings.js';                               // V-03: registers 'settings' view
+  import './views/generic-list.js';                            // V-04: registers 6 generic list views
   import './views/stub-views.js';                             // registers placeholder views
   import { on, emit, EVENTS }        from './core/events.js';
   import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS }
@@ -687,6 +709,7 @@
   import { initFab }                 from './components/fab.js';
   import { initSearch }              from './components/search.js';
   import { initAuth }                from './core/auth.js';
+  import { initContext }             from './core/context.js';   // CS-01
   import { buildEnv }                from './core/env.js';      // P-01
   import { dataServiceDescriptor }    from './core/db.js';        // P-06
   import { effectsServiceDescriptor } from './services/effects.js'; // P-12
@@ -893,6 +916,44 @@
       initCommandPalette(env);            // P-18: command palette
       initSystray(env);                   // P-19: systray awareness bar
       await initAuth();
+      initContext();                       // CS-01: restore active context from localStorage
+
+      // CS-02: Wire context switcher buttons
+      {
+        const { setActiveContext, getActiveContext } = await import('./core/context.js');
+        const { getAccount: _getAcct } = await import('./core/auth.js');
+
+        const CTX_LABELS = { all: 'All Contexts', family: 'Family', personal: 'Personal', business: 'Business' };
+        const CTX_COLORS = { all: '#0a7b6c', family: '#0891b2', personal: '#7c3aed', business: '#b45309' };
+
+        function _updateSwitcherUI(ctx) {
+          const label = document.getElementById('ctx-label');
+          if (label) label.textContent = CTX_LABELS[ctx] || 'All Contexts';
+          document.querySelectorAll('.ctx-btn').forEach(btn => {
+            const isActive = btn.dataset.ctx === ctx;
+            btn.style.background = isActive ? (CTX_COLORS[ctx] || CTX_COLORS.all) : 'transparent';
+            btn.style.color = isActive ? '#fff' : 'rgba(255,255,255,0.4)';
+          });
+        }
+
+        // Bind click handlers
+        document.querySelectorAll('.ctx-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            setActiveContext(btn.dataset.ctx);
+            _updateSwitcherUI(btn.dataset.ctx);
+          });
+        });
+
+        // Hide Personal/Business for child accounts
+        const acct = _getAcct();
+        if (acct && acct.role !== 'admin' && acct.role !== 'parent') {
+          document.querySelector('.ctx-btn[data-ctx="personal"]')?.style.setProperty('display', 'none');
+          document.querySelector('.ctx-btn[data-ctx="business"]')?.style.setProperty('display', 'none');
+        }
+
+        // Set initial state from restored context
+        _updateSwitcherUI(getActiveContext());
+      }
 
       // 11. Auto-start onboarding tour on first login (P-31)
       // Only auto-start if: tour not yet completed AND user has no existing entities
