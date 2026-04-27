@@ -63,8 +63,9 @@ function _getSubtitle(entity) {
   if (entity.category) parts.push(entity.category);
   if (entity.cuisine) parts.push(entity.cuisine);
   if (entity.status) parts.push(entity.status);
-  if (entity.type === 'budgetEntry' && entity.amount != null) {
-    const prefix = entity.budgetType === 'Income' ? '+' : '-';
+  // budgetEntry: entity.type holds 'Income'/'Expense' (the Type select field)
+  if (entity.amount != null && (entity.type === 'Income' || entity.type === 'Expense')) {
+    const prefix = entity.type === 'Income' ? '+' : '-';
     parts.push(`${prefix}$${Number(entity.amount).toFixed(2)}`);
   }
   if (entity.dueDate || entity.date || entity.deadline) {
@@ -180,8 +181,11 @@ function makeListView(viewKey, entityTypeKey) {
 }
 
 // ── Register all generic list views ────────────────────────────
+// Cache render functions so _refreshActiveGenericView reuses them
+const _renderFns = {};
 for (const [viewKey, config] of Object.entries(VIEW_CONFIG)) {
-  registerView(viewKey, makeListView(viewKey, config.entityType));
+  _renderFns[viewKey] = makeListView(viewKey, config.entityType);
+  registerView(viewKey, _renderFns[viewKey]);
 }
 
 // ── Module-level listeners ─────────────────────────────────────
@@ -191,8 +195,7 @@ function _refreshActiveGenericView() {
   for (const viewKey of Object.keys(VIEW_CONFIG)) {
     const el = document.getElementById(`view-${viewKey}`);
     if (el?.classList.contains('active')) {
-      const renderFn = makeListView(viewKey, VIEW_CONFIG[viewKey].entityType);
-      renderFn();
+      _renderFns[viewKey]();
       break;
     }
   }

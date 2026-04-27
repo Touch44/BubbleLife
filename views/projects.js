@@ -16,7 +16,6 @@
 import { registerView } from '../core/router.js';
 import { getEntitiesByType } from '../core/db.js';
 import { emit, on, EVENTS } from '../core/events.js';
-import { getAccount } from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { openForm } from '../components/entity-form.js';
 

@@ -121,7 +121,7 @@ export function filterByContext(entities, overrideContext) {
   const accountId = account?.id;
 
   return entities.filter(e => {
-    const entityType = e.type;
+    const entityType = e.type || '';  // B6: guard against undefined type
 
     // Rule 2: Always-shared types pass through unconditionally
     if (ALWAYS_SHARED_TYPES.has(entityType)) {

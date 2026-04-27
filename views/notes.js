@@ -21,6 +21,7 @@ let _notes = [];
 let _selectedId = null;
 let _searchQ = '';
 let _containerEl = null;
+let _isSaving = false;  // B2: prevent blur-save → ENTITY_SAVED → re-render loop
 
 // ── Data Loading ───────────────────────────────────────────────
 async function _loadNotes() {
@@ -175,15 +176,29 @@ function _renderDetail() {
     const newTitle = titleInput.value.trim();
     if (newTitle !== (note.title || '')) {
       const account = getAccount();
-      await saveEntity({ ...note, title: newTitle }, account?.id);
+      _isSaving = true;
+      try {
+        // Update in-memory note so list card reflects new title immediately
+        note.title = newTitle;
+        _renderList();
+        await saveEntity({ ...note, title: newTitle }, account?.id);
+      } finally {
+        _isSaving = false;
+      }
     }
   });
 
   bodyEditor?.addEventListener('blur', async () => {
     const newBody = bodyEditor.innerHTML;
-    if (newBody !== (note.body || note.description || '')) {
+    if (newBody !== (note.body || '')) {
       const account = getAccount();
-      await saveEntity({ ...note, body: newBody }, account?.id);
+      _isSaving = true;
+      try {
+        note.body = newBody;
+        await saveEntity({ ...note, body: newBody }, account?.id);
+      } finally {
+        _isSaving = false;
+      }
     }
   });
 
@@ -205,16 +220,16 @@ async function renderNotes(params = {}) {
 
   el.innerHTML = '';
 
-  // Build two-panel layout
-  el.style.cssText = 'display:flex;height:100%;overflow:hidden;';
+  // Build two-panel layout — responsive: column on mobile, row on desktop
+  const isMobile = window.innerWidth < 640;
+  el.style.cssText = `display:flex;height:100%;overflow:hidden;flex-direction:${isMobile ? 'column' : 'row'};`;
 
   // ── Left Panel: List ──────────────────────────────────────
   const listPanel = document.createElement('div');
   listPanel.className = 'notes-list-panel';
-  listPanel.style.cssText = `
-    width:280px;min-width:240px;max-width:320px;border-right:1px solid var(--color-border);
-    display:flex;flex-direction:column;background:var(--color-surface);overflow:hidden;
-  `;
+  listPanel.style.cssText = isMobile
+    ? `width:100%;height:220px;border-bottom:1px solid var(--color-border);display:flex;flex-direction:column;background:var(--color-surface);overflow:hidden;`
+    : `width:280px;min-width:240px;max-width:320px;border-right:1px solid var(--color-border);display:flex;flex-direction:column;background:var(--color-surface);overflow:hidden;`;
 
   // Header
   const header = document.createElement('div');
@@ -270,19 +285,30 @@ async function renderNotes(params = {}) {
   // ── Right Panel: Detail ───────────────────────────────────
   const detailPanel = document.createElement('div');
   detailPanel.className = 'notes-detail-panel';
-  detailPanel.style.cssText = 'flex:1;overflow-y:auto;background:var(--color-bg);';
+  detailPanel.style.cssText = `flex:1;overflow-y:auto;background:var(--color-bg);${isMobile ? 'min-height:0;' : ''}`;
 
   el.appendChild(listPanel);
   el.appendChild(detailPanel);
 
   _renderList();
   _renderDetail();
+
+  // B3: Re-render on resize to switch between mobile/desktop layout
+  const _onResize = () => {
+    if (document.getElementById('view-notes')?.classList.contains('active')) {
+      renderNotes({ _internal: true });
+    }
+  };
+  window.removeEventListener('resize', _onResize); // prevent stacking
+  window.addEventListener('resize', _onResize, { passive: true });
 }
 
 // ── Module-level event listeners ───────────────────────────────
 // (outside renderNotes — runs once at import, matching kanban/calendar/wall pattern)
 
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
+  // B2: Skip reload when the save came from our own blur-save handler
+  if (_isSaving) return;
   if (entity?.type === 'note' && document.getElementById('view-notes')?.classList.contains('active')) {
     _loadNotes().then(() => { _renderList(); _renderDetail(); });
   }

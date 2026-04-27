@@ -14,9 +14,8 @@
  */
 
 import { registerView } from '../core/router.js';
-import { getSetting, setSetting, exportAll, importAll, getStorageUsage } from '../core/db.js';
-import { getAccount, getAllAccounts, generateInvite, revokeInvite, updateAccount } from '../core/auth.js';
-import { on, EVENTS } from '../core/events.js';
+import { exportAll, importAll, getStorageUsage } from '../core/db.js';
+import { getAccount, getAllAccounts, generateInvite } from '../core/auth.js';
 import { startTour } from '../core/tour.js';
 
 // ── Helpers ────────────────────────────────────────────────────
