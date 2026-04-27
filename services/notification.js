@@ -85,12 +85,12 @@ function _show(type, message, opts = {}) {
   `;
 
   if (action) {
-    el.querySelector('.notif-action').addEventListener('click', () => {
-      try { action.fn?.(); } catch(e) { console.error('[notification] action.fn threw:', e); }
+    el.querySelector('.notif-action')?.addEventListener('click', () => {
+      try { (action.onClick ?? action.fn)?.(); } catch(e) { console.error('[notification] action handler threw:', e); }
       _dismiss(id);
     });
   }
-  el.querySelector('.notif-close').addEventListener('click', () => _dismiss(id));
+  el.querySelector('.notif-close')?.addEventListener('click', () => _dismiss(id));
 
   container.appendChild(el);
 

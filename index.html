@@ -1040,6 +1040,24 @@
       // 16. Entity panel open/close — handled by components/entity-panel.js
       // (initEntityPanel() wires PANEL_OPENED listener internally)
 
+      // 16b. Close overlays on navigation (BUG-E, BUG-F fixes)
+      on(EVENTS.VIEW_CHANGED, () => {
+        // Notification drawer
+        const notifsDrawer = document.getElementById('notification-drawer');
+        const notifsBtn    = document.getElementById('topbar-notifications-btn');
+        if (notifsDrawer?.classList.contains('open')) {
+          notifsDrawer.classList.remove('open');
+          notifsBtn?.setAttribute('aria-expanded', 'false');
+        }
+        // Shortcuts overlay
+        const so = document.getElementById('shortcuts-overlay');
+        if (so?.classList.contains('open')) {
+          so.classList.remove('open');
+          so.setAttribute('aria-hidden', 'true');
+          so.setAttribute('inert', '');
+        }
+      });
+
       // 17. Theme toggle listener — sync fast-boot key when theme changes
       // themeService.setTheme() handles 'settings:theme'; this keeps 'fh_theme'
       // in sync so the next page load can apply the theme before JS runs.

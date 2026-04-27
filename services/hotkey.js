@@ -70,7 +70,8 @@ function _eventKey(e) {
   if (e.shiftKey) parts.push('shift');
   if (e.altKey)   parts.push('alt');
 
-  const key = e.key.toLowerCase();
+  const key = (e.key ?? '').toLowerCase();
+  if (!key) return '';  // ignore events with no key (media keys, synthetic events)
   // Normalize common aliases
   const aliases = {
     ' ': 'space', 'esc': 'escape',
@@ -94,6 +95,7 @@ function _onKeydown(e) {
 
   // Never fire on repeat unless handler allows it
   const normalized = _eventKey(e);
+  if (!normalized) return;  // no key (media key, synthetic event)
   const entries    = _registry.get(normalized);
   if (!entries?.length) return;
 

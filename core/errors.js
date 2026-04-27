@@ -137,6 +137,31 @@ export class ConflictError extends Error {
  * @param {T} value
  * @returns {[null, T]}
  */
+// ── AuthError ────────────────────────────────────────────── //
+/**
+ * Thrown when an action requires authentication or authorisation
+ * that the current session does not have.
+ */
+export class AuthError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
+// ── NetworkError ──────────────────────────────────────────── //
+/**
+ * Thrown for network-level failures (HTTP errors, timeouts, offline).
+ * @property {number} [statusCode] — HTTP status code if available
+ */
+export class NetworkError extends Error {
+  constructor(message, statusCode) {
+    super(message);
+    this.name = 'NetworkError';
+    this.statusCode = statusCode ?? null;
+  }
+}
+
 export function ok(value) {
   return [null, value];
 }
@@ -174,21 +199,19 @@ export function unwrap(result, fallback) {
 // ══════════════════════════════════════════════════════════════
 
 /** All FamilyHub error type names */
-const APP_ERROR_TYPES = new Set([
-  'UserError',
-  'ValidationError',
-  'StorageError',
-  'NotFoundError',
-  'ConflictError',
-]);
-
 /**
  * Returns true if the value is one of FamilyHub's typed error classes.
  * @param {*} e
  * @returns {boolean}
  */
 export function isAppError(e) {
-  return e instanceof Error && APP_ERROR_TYPES.has(e.type);
+  return e instanceof UserError
+      || e instanceof ValidationError
+      || e instanceof StorageError
+      || e instanceof NotFoundError
+      || e instanceof ConflictError
+      || e instanceof AuthError
+      || e instanceof NetworkError;
 }
 
 // ══════════════════════════════════════════════════════════════

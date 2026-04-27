@@ -797,7 +797,11 @@ async function _persistRegistry() {
  * @returns {EntityTypeConfig|undefined}
  */
 export function getEntityTypeConfig(typeKey) {
-  _assertInit();
+  if (!_initialised) {
+    // BUG-4 fix: fall back to built-ins before initGraphEngine()
+    const found = BUILT_IN_ENTITY_TYPES.find(t => t.key === typeKey);
+    return found ? { ...found } : undefined;
+  }
   return _registry.get(typeKey);
 }
 
@@ -810,6 +814,11 @@ export function getEntityTypeConfig(typeKey) {
  * @returns {EntityTypeConfig[]}
  */
 export function getAllEntityTypes({ includeArchived = false } = {}) {
+  // BUG-4 fix: fall back to built-ins if called before initGraphEngine()
+  if (!_initialised) {
+    const fallback = new Map(BUILT_IN_ENTITY_TYPES.map(t => [t.key, { ...t }]));
+    return [...fallback.values()].filter(t => includeArchived || !t.archived);
+  }
   _assertInit();
   const all = Array.from(_registry.values());
   return includeArchived ? all : all.filter(t => !t.archived);
@@ -1054,9 +1063,9 @@ export async function convertEntity(entityId, newType) {
 
 // ── Internal helpers ──────────────────────────────────────── //
 
-/** Throw if the engine has not been initialised. */
+/** Log a warning if the engine has not been initialised. */
 function _assertInit() {
   if (!_initialised) {
-    throw new Error('[graph-engine] Not initialised. Call initGraphEngine() first.');
+    console.warn('[graph-engine] called before initGraphEngine() — using built-in types');
   }
 }

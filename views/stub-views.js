@@ -66,15 +66,6 @@ function _renderStub(viewKey, params = {}) {
     ? (params.entityTypeLabel || _cap(params.entityType) || 'Collections')
     : (VIEW_NAMES[viewKey] || _cap(viewKey));
 
-  // Mount view switcher for entity-type views (P-25)
-  if (viewKey === 'entity-type' && params.entityType) {
-    const switcher = createViewSwitcher({ entityType: params.entityType, currentMode: 'list' });
-    const switcherWrap = document.createElement('div');
-    switcherWrap.style.cssText = 'display:flex;justify-content:flex-end;padding:var(--space-3) var(--space-4) 0;';
-    switcherWrap.appendChild(switcher);
-    el.insertBefore(switcherWrap, el.firstChild);
-  }
-
   const icon = viewKey === 'entity-type'
     ? '◇'
     : (VIEW_ICONS[viewKey] || '◈');
@@ -132,6 +123,15 @@ function _renderStub(viewKey, params = {}) {
       </div>
     </div>
   `;
+
+  // BUG-5 fix: mount view switcher AFTER innerHTML is set (was wiped before)
+  if (viewKey === 'entity-type' && params.entityType) {
+    const switcher = createViewSwitcher({ entityType: params.entityType, currentMode: 'list' });
+    const switcherWrap = document.createElement('div');
+    switcherWrap.style.cssText = 'display:flex;justify-content:flex-end;padding:var(--space-3) var(--space-4) 0;';
+    switcherWrap.appendChild(switcher);
+    el.insertBefore(switcherWrap, el.firstChild);
+  }
 }
 
 function _esc(str) {

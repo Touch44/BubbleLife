@@ -115,6 +115,11 @@ export function initFab() {
     if (entityType) _handleFabType(entityType, prefill);
   });
 
+  // BUG-C fix: collapse FAB radial menu on any view navigation
+  on(EVENTS.VIEW_CHANGED, () => {
+    if (_fab?.classList.contains('fab-expanded')) collapseFab();
+  });
+
   console.log('[fab] Initialised.');
 }
 

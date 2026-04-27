@@ -94,6 +94,11 @@ export function initSearch() {
     if (entityId) _trackRecent(entityId);
   });
 
+  // BUG-A fix: close search overlay on any view navigation
+  on(EVENTS.VIEW_CHANGED, () => {
+    if (_overlay?.classList.contains('open')) closeSearch();
+  });
+
   console.log('[search] Initialised.');
 }
 

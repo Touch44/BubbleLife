@@ -1216,8 +1216,25 @@ async function renderKanban(params = {}) {
 
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   if (entity?.type === 'task' && _boardEl) {
-    // Refresh data and re-render columns
     _loadData().then(() => _rerenderColumns()).catch(() => {});
+  }
+});
+
+// BUG-1 fix: re-render board when a task is deleted
+on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
+  if ((entityType === 'task' || !entityType) && _boardEl) {
+    _loadData().then(() => _rerenderColumns()).catch(() => {});
+  }
+});
+
+// BUG-D fix: close state dot popover and collapse any open dropdowns on navigation
+on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
+  if (viewKey !== 'kanban') {
+    // Close state dot popover if open
+    if (_activeDotPopover) {
+      _activeDotPopover.remove();
+      _activeDotPopover = null;
+    }
   }
 });
 

@@ -65,9 +65,16 @@ export function loadTranslations(langCode, map) {
  * @param {string} str — English source string
  * @returns {string}
  */
-export function t(str) {
+export function t(str, vars) {
   if (!str) return str;
-  return _translations[str] ?? str;
+  let result = _translations[str] ?? str;
+  // Interpolate {var} placeholders if vars provided
+  if (vars && typeof vars === 'object') {
+    result = result.replace(/\{(\w+)\}/g, (_, key) =>
+      Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : `{${key}}`
+    );
+  }
+  return result;
 }
 
 // ── lt() — lazy translation ───────────────────────────────── //

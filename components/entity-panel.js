@@ -175,7 +175,6 @@ export function initEntityPanel() {
   on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
     if (_graphViewActive && viewKey !== 'graph') {
       // User navigated away while graph was open — fully tear down graph view
-      // [minor] Fix: also clear #view-graph DOM and main.graph-active so new view renders correctly
       destroyGraph();
       _graphViewActive    = false;
       _graphPanelEntityId = null;
@@ -196,13 +195,22 @@ export function initEntityPanel() {
         _panel.classList.remove('graph-mode');
         _panel.classList.remove('graph-panel-empty');
       }
-      // Close the panel so it doesn't hang over the new view
-      if (_panel && _panel.classList.contains('open')) {
-        _panel.classList.remove('open');
-        _panel.setAttribute('aria-hidden', 'true');
-        _entity = null;
-        _config = null;
-      }
+    }
+
+    // BUG-2 fix: close the panel on ANY view change (sidebar clicks, hotkeys, etc.)
+    // This prevents the panel from hanging over a completely different view.
+    // Discard dirty state silently on navigation (Escape shows confirm dialog instead).
+    if (_panel && _panel.classList.contains('open') && !_graphViewActive) {
+      _panel.classList.remove('open');
+      _panel.setAttribute('aria-hidden', 'true');
+      _dirty    = false;
+      _snapshot = null;
+      _entity   = null;
+      _config   = null;
+      _updateDirtyIndicator();
+      if (_activityCleanup) { _activityCleanup(); _activityCleanup = null; }
+      setTimeout(() => { if (_panelBody) _panelBody.innerHTML = ''; }, 420);
+      emit(EVENTS.PANEL_CLOSED);
     }
   });
 
@@ -985,6 +993,10 @@ function _renderActiveTab() {
     case 'activity':   _renderActivityTab(container);    break;
     default:           _renderPropertiesTab(container);  break;
   }
+
+  // BUG-1 fix: always remount activity stream after tab renders
+  // (all callers that clear _panelBody need the stream re-attached)
+  if (_entity) _mountActivityStream();
 }
 
 /**
@@ -3089,8 +3101,8 @@ async function _applyOnChanges(changedField, newValue) {
   // Merge patch into entity
   Object.assign(_entity, patch);
 
-  // Re-render to reflect cascaded values
-  _renderActiveTab();
+  // BUG-2 fix: don't re-render entire tab (causes focus loss and stream wipe).
+  // Only flash the cascaded field elements to show they were auto-computed.
 
   // Highlight auto-computed fields with yellow flash (150ms per spec)
   for (const key of Object.keys(patch)) {

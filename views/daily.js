@@ -2334,6 +2334,19 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   }, 200);
 });
 
+// BUG-3 fix: refresh daily when an entity is deleted
+on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
+  if (entityType && !_DAILY_REFRESH_TYPES.has(entityType)) return;
+  if (_dailyRefreshTimer) clearTimeout(_dailyRefreshTimer);
+  _dailyRefreshTimer = setTimeout(() => {
+    _dailyRefreshTimer = null;
+    const viewEl = document.getElementById('view-daily');
+    if (viewEl && viewEl.classList.contains('active')) {
+      renderDaily({ _internal: true });
+    }
+  }, 200);
+});
+
 registerView('daily', renderDaily);
 
 // ── Export for external use (FAB, auth.js) ────────────────── //

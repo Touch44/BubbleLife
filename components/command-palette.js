@@ -52,6 +52,13 @@ export function initCommandPalette(env) {
   _env = env || null;
   _build();
 
+  // BUG-B fix: close command palette on any view navigation
+  import('../core/events.js').then(({ on, EVENTS }) => {
+    on(EVENTS.VIEW_CHANGED, () => {
+      if (_overlay?.classList.contains('cp-open')) closePalette();
+    });
+  }).catch(() => {});
+
   // Cmd+K is handled by hotkeyService (P-09) which calls openPalette()/closePalette().
   // No duplicate listener here — avoids double-fire.
 }
