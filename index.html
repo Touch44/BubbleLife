@@ -385,6 +385,18 @@
         </button>
       </li>
 
+      <!-- Manage -->
+      <li role="listitem" aria-hidden="true">
+        <div class="sidebar-section-label">Manage</div>
+      </li>
+      <li role="listitem">
+        <button class="nav-item" data-view="object-studio"
+                aria-label="Object Studio — manage entity types">
+          <span class="nav-item-icon" aria-hidden="true">⬡</span>
+          <span class="nav-item-label">Object Studio</span>
+        </button>
+      </li>
+
     </ul><!-- /.sidebar-nav -->
 
     <!-- Sidebar footer: Settings + Logout -->
@@ -493,6 +505,12 @@
     <div id="view-entity-type" class="view" role="region" aria-label="Entity type view"
          aria-hidden="true">
       <!-- Populated by views/entity-type-view.js — receives entityType param -->
+    </div>
+
+    <!-- Object Studio — type management dashboard -->
+    <div id="view-object-studio" class="view" role="region" aria-label="Object Studio"
+         aria-hidden="true">
+      <!-- Populated by views/object-studio.js -->
     </div>
 
     <!-- Settings -->
@@ -700,6 +718,7 @@
   import './views/generic-list.js';                            // V-04: registers 6 generic list views
   import './views/graph-view.js';                            // CS-06: graph view with context chips
   import './views/entity-type.js';                           // 2-A: generic entity type view (Collections)
+  import './views/object-studio.js';                         // 2-B: Capacities-style Object Studio
   import './views/stub-views.js';                             // registers placeholder views
   import { on, emit, EVENTS }        from './core/events.js';
   import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS }

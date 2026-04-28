@@ -14,7 +14,8 @@ import { createViewSwitcher } from '../components/view-switcher.js';
 
 /** Views that are already implemented — skip stubbing these */
 const IMPLEMENTED = new Set(['daily', 'kanban', 'calendar', 'family-wall', 'notes', 'projects', 'settings',
-  'budget', 'recipes', 'documents', 'contacts', 'gallery', 'family-matters', 'graph', 'entity-type']);
+  'budget', 'recipes', 'documents', 'contacts', 'gallery', 'family-matters', 'graph', 'entity-type',
+  'object-studio']);
 
 /**
  * Human-readable names for stub views.
