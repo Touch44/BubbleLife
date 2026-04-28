@@ -14,7 +14,7 @@
  * Registration: registerView('entity-type', renderEntityTypeView)
  */
 
-import { registerView }                    from '../core/router.js';
+import { registerView, navigate }              from '../core/router.js';
 import { on, emit, EVENTS }               from '../core/events.js';
 import { getEntitiesByType }               from '../core/db.js';
 import { getEntityTypeConfig }             from '../core/graph-engine.js';
@@ -480,8 +480,8 @@ function _wireClicks(el, entityType) {
     const modeBtn = e.target.closest('[data-mode]');
     if (modeBtn && modeBtn.closest('.etv-mode-toggle')) {
       const newMode = modeBtn.dataset.mode;
-      // Re-render with new mode
-      renderEntityTypeView({ entityType, mode: newMode, _force: true });
+      // Update URL hash so back/forward and refresh preserve mode
+      navigate('entity-type', { entityType, mode: newMode }, undefined, true);
       return;
     }
 
@@ -515,9 +515,9 @@ async function renderEntityTypeView(params = {}) {
   const entityType = params.entityType || 'idea';
   const mode       = params.mode || 'list';   // 'list' | 'grid'
 
-  // Guard: if type unchanged and already rendered, skip full re-render
-  // (but always re-render when type changes)
-  if (_currentType === entityType && el.dataset.stubKey === entityType && !params._force) {
+  // Guard: if type AND mode unchanged and already rendered, skip full re-render
+  const modeChanged = mode !== _currentMode;
+  if (_currentType === entityType && el.dataset.stubKey === entityType && !modeChanged && !params._force) {
     return;
   }
 

@@ -148,6 +148,15 @@ async function _apiPost(payload) {
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(payload),
   });
+  // 404 = no PHP file deployed (static host like GitHub Pages)
+  // 405 = Method Not Allowed (static host rejecting POST)
+  // Permanently disable sync so we don't keep hammering the host
+  if (res.status === 404 || res.status === 405) {
+    _mysqlAvailable = false;
+    _indicator.idle();
+    console.info('[sync] MySQL sync disabled — api/sync.php not available on this host (HTTP ' + res.status + ')');
+    throw new Error('SYNC_UNAVAILABLE');
+  }
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const json = await res.json();
   if (!json.ok) throw new Error(json.error || 'Server error');
@@ -251,9 +260,11 @@ async function _mergeEntities(serverEntities) {
 
 // ── Core MySQL sync ────────────────────────────────────────────
 let _syncLock = false;
+// Set to false permanently if server returns 404/405 (static host — no PHP)
+let _mysqlAvailable = true;
 
 async function _doMysqlSync() {
-  if (_syncLock) return;
+  if (_syncLock || !_mysqlAvailable) return;
   _syncLock = true;
   syncInProgress.value = true;
   _indicator.syncing();
@@ -311,9 +322,12 @@ async function _doMysqlSync() {
     _indicator.success();
 
   } catch (err) {
-    console.warn('[sync] MySQL sync failed:', err.message);
-    _indicator.error(err.message);
-    // Silent failure — retry on next timer tick
+    // Don't show error indicator for static-host unavailability (already logged as info)
+    if (err.message !== 'SYNC_UNAVAILABLE') {
+      console.warn('[sync] MySQL sync failed:', err.message);
+      _indicator.error(err.message);
+    }
+    // Silent failure — retry on next timer tick (unless permanently disabled)
   } finally {
     _syncLock = false;
     syncInProgress.value = false;

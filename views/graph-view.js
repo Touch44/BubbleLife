@@ -46,13 +46,7 @@ const CONTEXT_CHIPS = [
   const s = document.createElement('style');
   s.id = 'graph-view-styles';
   s.textContent = `
-    #view-graph.active {
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      overflow: hidden;
-    }
+    /* ── Graph view shell — height/flex owned by layout.css ── */
 
     /* ── Graph toolbar ─────────────────────────────── */
     .gv-toolbar {
@@ -117,31 +111,43 @@ const CONTEXT_CHIPS = [
     .gv-type-chip {
       display: inline-flex;
       align-items: center;
-      gap: 3px;
-      padding: 3px 9px;
+      gap: 4px;
+      padding: 3px 10px 3px 7px;
       border-radius: 999px;
       border: 1.5px solid var(--color-border);
       background: var(--color-surface);
       color: var(--color-text-muted);
       font-size: var(--text-xs);
       cursor: pointer;
-      transition: border-color 0.15s, background 0.15s, color 0.15s;
+      transition: border-color 0.15s, background 0.15s, color 0.15s, opacity 0.15s;
       white-space: nowrap;
+      opacity: 0.45;
+      font-weight: var(--weight-medium);
     }
     .gv-type-chip:hover {
+      opacity: 0.75;
       border-color: var(--color-text-muted);
       color: var(--color-text);
     }
     .gv-type-chip.active {
-      border-color: var(--color-border);
-      background: var(--color-surface-2);
-      color: var(--color-text);
+      opacity: 1;
+      border-color: var(--gv-chip-color, var(--color-accent));
+      background: var(--gv-chip-color, var(--color-accent));
+      color: #fff;
+      font-weight: var(--weight-semibold);
     }
     .gv-type-chip .gv-type-dot {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    /* When active: dot becomes white so it's visible on the colored background */
+    .gv-type-chip.active .gv-type-dot {
+      background: rgba(255,255,255,0.55) !important;
+      outline: 1.5px solid rgba(255,255,255,0.35);
+      outline-offset: 0px;
     }
 
     /* ── Focus search ──────────────────────────────── */
@@ -303,6 +309,10 @@ function _buildToolbar(container, activeTypeSet) {
     btn.dataset.typeKey = typeConfig.key;
     btn.setAttribute('aria-pressed', String(isActive));
     btn.title = isActive ? `Hide ${typeConfig.label}` : `Show ${typeConfig.label}`;
+    // Set CSS variable for this chip's entity-type color
+    if (typeConfig.color) {
+      btn.style.setProperty('--gv-chip-color', typeConfig.color);
+    }
     btn.innerHTML = `
       <span class="gv-type-dot" style="background:${typeConfig.color || 'var(--color-border)'}"></span>
       <span>${_esc(typeConfig.icon || '')} ${_esc(typeConfig.label)}</span>
@@ -528,6 +538,30 @@ on(EVENTS.ENTITY_DELETED, () => {
   if (_mounted && _graphEl?.classList.contains('active')) {
     refreshGraph().then(_updateEmptyState).catch(() => {});
   }
+});
+
+// ── Node click → open entity panel (sidebar graph view) ────────
+// entity-panel.js handles these when _graphViewActive (opened from entity panel).
+// When user navigates to graph via sidebar, we handle them here instead.
+// Guard: if entity-panel is in graph-mode, it owns the events — don't double-handle.
+function _isEntityPanelGraphMode() {
+  return document.getElementById('entity-panel')?.classList.contains('graph-mode') ?? false;
+}
+
+on('graph:nodeSelected', ({ id } = {}) => {
+  if (!id) return;
+  if (!_graphEl?.classList.contains('active')) return;
+  if (_isEntityPanelGraphMode()) return; // entity-panel.js handles it
+  emit(EVENTS.PANEL_OPENED, { entityId: id });
+});
+
+on('graph:nodeFocused', ({ id } = {}) => {
+  if (!id) return;
+  // Double-click: graph-canvas already calls setFocusId internally.
+  // We just need to open the panel for the focused node.
+  if (!_graphEl?.classList.contains('active')) return;
+  if (_isEntityPanelGraphMode()) return; // entity-panel.js handles it
+  emit(EVENTS.PANEL_OPENED, { entityId: id });
 });
 
 // ── Registration ───────────────────────────────────────────────

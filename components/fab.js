@@ -151,9 +151,13 @@ export function collapseFab() {
  */
 function _handleFabType(type, prefill = {}) {
   if (type === 'more') {
-    // Determine context-aware default for 'more'
-    const view        = getCurrentView()?.viewKey || '';
-    const defaultType = VIEW_DEFAULT_TYPE[view] || 'note';
+    // If we're in a Collections view (entity-type), default to that entity type
+    const currentView = getCurrentView();
+    const viewKey     = currentView?.viewKey || '';
+    const entityType  = currentView?.params?.entityType;
+    const defaultType = (viewKey === 'entity-type' && entityType)
+      ? entityType
+      : (VIEW_DEFAULT_TYPE[viewKey] || 'note');
     openForm(defaultType);
     return;
   }

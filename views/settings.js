@@ -66,10 +66,10 @@ async function renderSettings() {
 
   // Detect current theme
   const env = window._fhEnv;
-  let currentMode = 'light';
+  let currentMode = 'auto';
   try {
     const prefs = env?.services?.theme?.getPrefs?.();
-    currentMode = prefs?.mode || 'light';
+    currentMode = prefs?.mode || 'auto';
   } catch (e) { /* fallback */ }
 
   el.innerHTML = `
@@ -178,7 +178,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v3.5.0</div>
+          <div><strong>FamilyHub</strong> v3.5.2</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);

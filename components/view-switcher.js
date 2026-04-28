@@ -19,11 +19,10 @@
 import { navigate, getState } from '../core/router.js';
 
 export const VIEW_MODES = [
-  // 'list' navigates to 'entity-type' view (generic entity list)
-  // 'kanban' and 'calendar' are registered views
-  { key: 'list',     view: 'entity-type', icon: '☰', label: 'List view'   },
-  { key: 'kanban',   view: 'kanban',      icon: '⊡', label: 'Kanban view' },
-  { key: 'calendar', view: 'calendar',    icon: '▦', label: 'Calendar view' },
+  // 'list' and 'grid' both render in 'entity-type' view (generic entity list)
+  // Kanban and Calendar removed — they show ALL entities, not filtered by type
+  { key: 'list',  view: 'entity-type', icon: '☰', label: 'List view'   },
+  { key: 'grid',  view: 'entity-type', icon: '⊞', label: 'Grid view', params: { mode: 'grid' } },
 ];
 
 /**
@@ -55,6 +54,8 @@ export function createViewSwitcher({ entityType, currentMode = 'list', onSwitch 
       const state = getState();
       const params = {
         entityType,
+        // Merge any mode-specific params (e.g. { mode: 'grid' } for grid view)
+        ...(mode.params || {}),
         ...(state?.params?.filter        ? { filter:        state.params.filter }        : {}),
         ...(state?.params?._searchFacets ? { _searchFacets: state.params._searchFacets } : {}),
       };
