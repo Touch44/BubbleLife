@@ -530,14 +530,20 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Graph View: 3-column layout (Blueprint §9.2) ─────────── */
+/* ── Graph View: fills #main as a flex column (graph-view.js injects flex layout) ── */
 #view-graph {
   display: none; /* overridden when active */
   padding: 0;
 }
 
 #view-graph.active {
-  display: contents; /* children flow into #main grid */
+  /* graph-view.js injects: display:flex; flex-direction:column; height:100%; overflow:hidden */
+  /* display:contents was removed — it caused canvas height collapse and toolbar overflow */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
 }
 
 /* ── Entity Panel — right side drawer (Blueprint §9.2) ──────── */
@@ -624,10 +630,8 @@ body {
   pointer-events: none;
 }
 
-/* Shrink the graph canvas column to leave room for the panel */
+/* Reserve right-side space for entity panel when graph is open */
 #main.graph-active {
-  display: grid;
-  grid-template-columns: 1fr;
   overflow: hidden;
   padding: 0;
   padding-right: var(--panel-width);  /* reserve space so graph doesn't go under panel */

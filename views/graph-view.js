@@ -17,7 +17,7 @@
  */
 
 import { registerView }         from '../core/router.js';
-import { on, EVENTS }           from '../core/events.js';
+import { on, emit, EVENTS }     from '../core/events.js';
 import { getAllEntityTypes }     from '../core/graph-engine.js';
 import {
   getActiveContext, setActiveContext,
