@@ -24,7 +24,7 @@ import {
 } from '../core/context.js';
 import {
   initGraph, destroyGraph, setActiveTypes,
-  refreshGraph, getAllGraphVisibleTypes, getActiveNodeTypes,
+  refreshGraph, getAllGraphVisibleTypes, getActiveNodeTypes, setFocusId,
 } from '../components/graph-canvas.js';
 
 // ── Module state ───────────────────────────────────────────────
@@ -143,6 +143,67 @@ const CONTEXT_CHIPS = [
       border-radius: 50%;
       flex-shrink: 0;
     }
+
+    /* ── Focus search ──────────────────────────────── */
+    .gv-focus-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+    .gv-focus-input {
+      padding: 4px 10px;
+      font-size: var(--text-xs);
+      border: 1.5px solid var(--color-border);
+      border-radius: var(--radius-md);
+      background: var(--color-surface);
+      color: var(--color-text);
+      width: 180px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .gv-focus-input:focus { border-color: var(--color-accent); }
+    .gv-focus-suggestions {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 220px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      z-index: 100;
+      overflow: hidden;
+    }
+    .gv-focus-option {
+      padding: 6px 12px;
+      font-size: var(--text-xs);
+      color: var(--color-text);
+      cursor: pointer;
+    }
+    .gv-focus-option:hover { background: var(--color-surface-2, rgba(255,255,255,0.05)); }
+
+    /* ── Zoom buttons ──────────────────────────────── */
+    .gv-zoom-btns {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .gv-zoom-btn {
+      width: 28px;
+      height: 28px;
+      border: 1.5px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      background: var(--color-surface);
+      color: var(--color-text);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .gv-zoom-btn:hover { border-color: var(--color-accent); background: var(--color-surface-2, rgba(255,255,255,0.05)); }
+    .gv-zoom-reset { font-size: 0.9rem; }
 
     /* ── Canvas container ──────────────────────────── */
     .gv-canvas-wrap {
@@ -264,6 +325,99 @@ function _buildToolbar(container, activeTypeSet) {
     typeRow.appendChild(btn);
   }
   toolbar.appendChild(typeRow);
+
+  // ── Divider before action buttons
+  const div2 = document.createElement('div');
+  div2.className = 'gv-divider';
+  toolbar.appendChild(div2);
+
+  // ── Focus search input
+  const focusWrap = document.createElement('div');
+  focusWrap.className = 'gv-focus-wrap';
+  focusWrap.innerHTML = `
+    <input
+      type="search"
+      id="gv-focus-input"
+      class="gv-focus-input"
+      placeholder="Focus on entity…"
+      autocomplete="off"
+      aria-label="Focus graph on entity"
+    />
+    <div id="gv-focus-suggestions" class="gv-focus-suggestions" hidden></div>
+  `;
+  toolbar.appendChild(focusWrap);
+
+  // Wire focus input: on Enter or selection → setFocusId
+  const focusInput = focusWrap.querySelector('#gv-focus-input');
+  const focusSugg  = focusWrap.querySelector('#gv-focus-suggestions');
+
+  let _focusDebounce = null;
+  focusInput.addEventListener('input', () => {
+    clearTimeout(_focusDebounce);
+    const q = focusInput.value.trim().toLowerCase();
+    if (!q) { focusSugg.hidden = true; focusSugg.innerHTML = ''; return; }
+    _focusDebounce = setTimeout(async () => {
+      try {
+        const { getEntitiesByType } = await import('../core/db.js');
+        const { getEntityTypeConfig, getAllEntityTypes } = await import('../core/graph-engine.js');
+        const allTypes = getAllEntityTypes().filter(t => t.graphVisible).map(t => t.key);
+        const allEntities = (await Promise.all(allTypes.map(t => getEntitiesByType(t).catch(() => [])))).flat();
+        const matches = allEntities
+          .filter(e => !e.deleted && (e.title || e.name || '').toLowerCase().includes(q))
+          .slice(0, 8);
+        if (!matches.length) { focusSugg.hidden = true; return; }
+        focusSugg.innerHTML = matches.map(e => {
+          const cfg = getEntityTypeConfig(e.type) || {};
+          return `<div class="gv-focus-option" data-entity-id="${_esc(e.id)}">${_esc(cfg.icon || '')} ${_esc(e.title || e.name || '(Untitled)')}</div>`;
+        }).join('');
+        focusSugg.hidden = false;
+      } catch { focusSugg.hidden = true; }
+    }, 200);
+  });
+
+  focusSugg.addEventListener('click', async e => {
+    const opt = e.target.closest('.gv-focus-option');
+    if (!opt) return;
+    focusInput.value = opt.textContent.trim();
+    focusSugg.hidden = true;
+    try {
+      await setFocusId(opt.dataset.entityId);
+    } catch (err) {
+      console.warn('[graph-view] setFocusId failed:', err);
+    }
+  });
+
+  focusInput.addEventListener('blur', () => setTimeout(() => { focusSugg.hidden = true; }, 150));
+
+  // ── Divider
+  const div3 = document.createElement('div');
+  div3.className = 'gv-divider';
+  toolbar.appendChild(div3);
+
+  // ── Zoom + Reset buttons
+  const zoomWrap = document.createElement('div');
+  zoomWrap.className = 'gv-zoom-btns';
+  zoomWrap.innerHTML = `
+    <button class="gv-zoom-btn" id="gv-zoom-in"  title="Zoom in">+</button>
+    <button class="gv-zoom-btn" id="gv-zoom-out" title="Zoom out">−</button>
+    <button class="gv-zoom-btn gv-zoom-reset" id="gv-zoom-reset" title="Reset layout">↺</button>
+  `;
+  toolbar.appendChild(zoomWrap);
+
+  zoomWrap.querySelector('#gv-zoom-in').addEventListener('click', () => {
+    // Simulate wheel zoom in on the canvas
+    const canvas = document.querySelector('#view-graph canvas');
+    if (!canvas) return;
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -150, bubbles: true, cancelable: true }));
+  });
+  zoomWrap.querySelector('#gv-zoom-out').addEventListener('click', () => {
+    const canvas = document.querySelector('#view-graph canvas');
+    if (!canvas) return;
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 150, bubbles: true, cancelable: true }));
+  });
+  zoomWrap.querySelector('#gv-zoom-reset').addEventListener('click', async () => {
+    try { await refreshGraph(); } catch { /* ignore */ }
+  });
 
   container.appendChild(toolbar);
 }
