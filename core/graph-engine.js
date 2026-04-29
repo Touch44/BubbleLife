@@ -804,9 +804,29 @@ export async function initGraphEngine() {
 
 // ── Persistence helpers ───────────────────────────────────── //
 
+/**
+ * Return a plain-object snapshot of a config that is safe to store in IDB.
+ * Strips any top-level function values, and any top-level objects whose own
+ * values are functions (e.g. the `onChanges` map of field callbacks).
+ * Built-in runtime callbacks are always re-attached from BUILT_IN_ENTITY_TYPES
+ * on load, so nothing is lost.
+ * @param {object} cfg
+ * @returns {object}
+ */
+function _serializableConfig(cfg) {
+  const out = {};
+  for (const [k, v] of Object.entries(cfg)) {
+    if (typeof v === 'function') continue; // drop bare function props
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) &&
+        Object.values(v).some(x => typeof x === 'function')) continue; // drop fn-map props (e.g. onChanges)
+    out[k] = v;
+  }
+  return out;
+}
+
 /** Persist the full registry to the settings store. */
 async function _persistRegistry() {
-  const all = Array.from(_registry.values());
+  const all = Array.from(_registry.values()).map(_serializableConfig);
   await setSetting(SETTINGS_KEY, all);
 }
 
