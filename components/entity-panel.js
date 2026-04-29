@@ -87,7 +87,7 @@ export function initEntityPanel() {
     return;
   }
 
-  // M-02: Wire backdrop — tap to close on mobile
+  // Wire backdrop — tap to close on mobile AND in modal mode on desktop
   const _backdrop = document.getElementById('entity-panel-backdrop');
   if (_backdrop) {
     _backdrop.addEventListener('click', () => closePanel());
@@ -242,9 +242,11 @@ export function initEntityPanel() {
         }).catch(() => {});
       }
       _panel.classList.remove('open');
+      _panel.classList.remove('modal-mode');
       _panel.setAttribute('aria-hidden', 'true');
-      // M-02: hide backdrop
-      document.getElementById('entity-panel-backdrop')?.classList.remove('visible');
+      // Hide backdrop — both mobile side-panel and desktop modal-mode
+      const _bd2 = document.getElementById('entity-panel-backdrop');
+      if (_bd2) { _bd2.classList.remove('visible'); _bd2.classList.remove('modal-backdrop'); }
       _dirty    = false;
       _snapshot = null;
       _entity   = null;
@@ -500,9 +502,21 @@ export async function openPanel(entityId, entityTypeHint) {
     _renderActiveTab();
     _mountActivityStream();  // P-28: mount activity stream after content
 
+    // ── Modal mode: center panel for content-heavy entity types ──────────
+    // Professional UX: side-panel for quick-glance types (tasks, events)
+    //                  centered modal for content types (notes, ideas, books, etc.)
+    const _isModalType = CONTENT_FIRST_TYPES.has(entity.type);
+    if (_isModalType) {
+      _panel.classList.add('modal-mode');
+      document.getElementById('entity-panel-backdrop')?.classList.add('modal-backdrop');
+    } else {
+      _panel.classList.remove('modal-mode');
+      document.getElementById('entity-panel-backdrop')?.classList.remove('modal-backdrop');
+    }
+
     _panel.classList.add('open');
     _panel.setAttribute('aria-hidden', 'false');
-    // M-02: show backdrop on mobile
+    // M-02: show backdrop on mobile (always); show on desktop for modal mode
     document.getElementById('entity-panel-backdrop')?.classList.add('visible');
     // Auto-close notification drawer so it doesn't stack on top of the panel
     const notifsDrawer = document.getElementById('notification-drawer');
@@ -531,9 +545,14 @@ export function closePanel() {
   }
 
   _panel.classList.remove('open');
+  _panel.classList.remove('modal-mode');
   _panel.setAttribute('aria-hidden', 'true');
-  // M-02: hide backdrop
-  document.getElementById('entity-panel-backdrop')?.classList.remove('visible');
+  // M-02: hide backdrop (both side-panel mobile and modal-mode desktop)
+  const _bd = document.getElementById('entity-panel-backdrop');
+  if (_bd) {
+    _bd.classList.remove('visible');
+    _bd.classList.remove('modal-backdrop');
+  }
 
   _entity   = null;
   _config   = null;
@@ -670,12 +689,13 @@ function _renderHeader() {
   sep2.className = 'panel-icon-btn-sep';
   toolbar.appendChild(sep2);
 
-  // Close button
+  // Close button — prominently styled with label for discoverability
   const closeBtn = document.createElement('button');
   closeBtn.id = 'entity-panel-close';
-  closeBtn.className = 'panel-icon-btn';
+  closeBtn.className = 'panel-icon-btn panel-close-btn';
   closeBtn.setAttribute('aria-label', 'Close entity panel');
-  closeBtn.innerHTML = '✕';
+  closeBtn.title = 'Close (Esc)';
+  closeBtn.innerHTML = '✕ <span class="panel-close-label">Close</span>';
   closeBtn.addEventListener('click', async () => {
     if (_dirty) {
       const dialogSvc = window._fhEnv?.services?.dialog;

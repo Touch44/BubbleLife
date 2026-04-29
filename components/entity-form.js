@@ -308,8 +308,8 @@ function _buildAndMount(config) {
   headerTop.appendChild(typeSelect);
 
   const closeBtn = document.createElement('button');
-  closeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:var(--color-text-muted);font-size:1rem;padding:4px;border-radius:4px;margin-left:auto;';
-  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'display:flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);cursor:pointer;color:var(--color-text-muted);font-size:var(--text-xs);font-family:var(--font-body);margin-left:auto;transition:all 0.12s;';
+  closeBtn.innerHTML = '✕ <span style="font-size:var(--text-xs);font-weight:500">Close</span>';
   closeBtn.setAttribute('aria-label', 'Close form');
   closeBtn.addEventListener('click', closeForm);
   headerTop.appendChild(closeBtn);

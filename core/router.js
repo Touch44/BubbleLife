@@ -635,25 +635,48 @@ if (typeof window !== 'undefined') {
  * Called by index.html after DOM ready.
  */
 export function wireNavItems() {
-  document.querySelectorAll('.nav-item[data-view]').forEach(el => {
-    el.addEventListener('click', () => {
-      const view = el.dataset.view;
-      const entityType = el.dataset.entityType;
-      const label = el.dataset.label || el.querySelector('.nav-item-label')?.textContent;
+  // Use event delegation on .sidebar-nav so dynamically-added custom type
+  // nav items work automatically without re-calling wireNavItems().
+  const nav = document.querySelector('.sidebar-nav');
+  if (!nav || nav._delegated) return;  // idempotent
+  nav._delegated = true;
 
-      if (view === 'entity-type' && entityType) {
-        navigate(view, { entityType }, label);
-      } else {
-        navigate(view, {}, label);
-      }
+  nav.addEventListener('click', (e) => {
+    const el = e.target.closest('.nav-item[data-view]');
+    if (!el) return;
 
-      // Close mobile sidebar on nav
-      const sidebar = document.getElementById('sidebar');
-      const overlay = document.getElementById('sidebar-overlay');
-      if (sidebar) sidebar.classList.remove('open');
-      if (overlay) overlay.classList.remove('visible');
-    });
+    const view = el.dataset.view;
+    const entityType = el.dataset.entityType;
+    const label = el.dataset.label || el.querySelector('.nav-item-label')?.textContent;
+
+    if (view === 'entity-type' && entityType) {
+      navigate(view, { entityType }, label);
+    } else {
+      navigate(view, {}, label);
+    }
+
+    // Close mobile sidebar on nav
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (sidebar) sidebar.classList.remove('open');
+    if (overlay) overlay.classList.remove('visible');
   });
+
+  // Also wire sidebar-footer nav items (Settings) via delegation on the footer
+  const footer = document.querySelector('.sidebar-footer');
+  if (footer && !footer._delegated) {
+    footer._delegated = true;
+    footer.addEventListener('click', (e) => {
+      const el = e.target.closest('.nav-item[data-view]');
+      if (!el) return;
+      const view = el.dataset.view;
+      navigate(view, {});
+      const sidebar = document.getElementById('sidebar');
+      const overlay2 = document.getElementById('sidebar-overlay');
+      if (sidebar) sidebar.classList.remove('open');
+      if (overlay2) overlay2.classList.remove('visible');
+    });
+  }
 
   // Back button
   const backBtn = document.getElementById('breadcrumb-back-btn');

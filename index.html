@@ -384,6 +384,8 @@
           <span class="nav-item-label">Web Links</span>
         </button>
       </li>
+      <!-- Custom entity types inserted here dynamically by boot sequence -->
+      <li id="sidebar-custom-types-anchor" role="listitem" aria-hidden="true" style="display:none"></li>
 
       <!-- Manage -->
       <li role="listitem" aria-hidden="true">
@@ -778,6 +780,26 @@
       // 3. Entity panel close button — handled by components/entity-panel.js
       const panel = document.getElementById('entity-panel');
 
+      // 3b. Click-outside-to-close panel: clicking main area or sidebar nav closes it.
+      //     Professional UX standard (Linear, Notion, Figma side panels).
+      //     Only fires when panel is open and click is NOT inside panel or any overlay.
+      {
+        const _mainEl    = document.getElementById('main');
+        const _sidebarEl = document.getElementById('sidebar');
+        const _panelEl   = document.getElementById('entity-panel');
+
+        const _maybeClosePanel = (e) => {
+          if (!_panelEl?.classList.contains('open')) return;
+          if (_panelEl.contains(e.target)) return;
+          // Don't close if a modal/overlay is open on top
+          if (e.target.closest('.modal-overlay,.te-overlay,.ef-overlay,.os-wizard-overlay')) return;
+          import('./components/entity-panel.js').then(m => m.closePanel()).catch(() => {});
+        };
+
+        if (_mainEl)    _mainEl.addEventListener('click', _maybeClosePanel, true);
+        if (_sidebarEl) _sidebarEl.addEventListener('click', _maybeClosePanel, true);
+      }
+
       // 4. Search overlay — handled by components/search.js (initSearch())
 
       // 5. Wire notifications drawer
@@ -1162,6 +1184,98 @@
       });
 
       console.log('[FH] Boot sequence complete.');
+
+      // ── Custom type sidebar integration ─────────────────────────────────────
+      // After boot: read all custom types from IDB and insert sidebar nav items.
+      // Also subscribes to TYPE_CREATED so new custom types appear immediately.
+      {
+        const _anchor = document.getElementById('sidebar-custom-types-anchor');
+        const _sidebarNav = document.querySelector('.sidebar-nav');
+
+        // Build a set of built-in type keys already hardcoded in sidebar
+        const _BUILTIN_SIDEBAR_TYPES = new Set([
+          'idea','research','book','trip','place','weblink',
+        ]);
+
+        /**
+         * Create and insert a sidebar nav <li> for a custom entity type.
+         * Skips if already present (idempotent — safe to call multiple times).
+         */
+        function _addCustomTypeNavItem(config) {
+          if (!config?.key || !config?.label) return;
+          // Skip built-in types already in the sidebar
+          if (_BUILTIN_SIDEBAR_TYPES.has(config.key)) return;
+          // Skip if already in sidebar
+          if (_sidebarNav?.querySelector(`[data-entity-type="${config.key}"]`)) return;
+
+          const li = document.createElement('li');
+          li.role = 'listitem';
+          li.dataset.customTypeKey = config.key;
+
+          const btn = document.createElement('button');
+          btn.className = 'nav-item';
+          btn.setAttribute('data-view', 'entity-type');
+          btn.setAttribute('data-entity-type', config.key);
+          btn.setAttribute('data-label', config.labelPlural || config.label + 's');
+          btn.setAttribute('aria-label', config.labelPlural || config.label + 's');
+
+          const iconSpan = document.createElement('span');
+          iconSpan.className = 'nav-item-icon';
+          iconSpan.setAttribute('aria-hidden', 'true');
+          iconSpan.textContent = config.icon || '◇';
+
+          const labelSpan = document.createElement('span');
+          labelSpan.className = 'nav-item-label';
+          labelSpan.textContent = config.labelPlural || config.label + 's';
+
+          btn.appendChild(iconSpan);
+          btn.appendChild(labelSpan);
+          li.appendChild(btn);
+
+          // Insert before the anchor element (which sits before the Manage section)
+          if (_anchor) {
+            _anchor.parentNode.insertBefore(li, _anchor);
+          }
+
+          console.log('[minor] Custom type nav item added:', config.key);
+        }
+
+        // Remove a custom type nav item from the sidebar (on type delete)
+        function _removeCustomTypeNavItem(typeKey) {
+          _sidebarNav?.querySelector(`[data-custom-type-key="${typeKey}"]`)?.remove();
+        }
+
+        // Load and add all existing custom types on boot
+        try {
+          const { getCustomObjectTypes } = await import('./core/object-type-registry.js');
+          const customTypes = await getCustomObjectTypes();
+          for (const cfg of customTypes) {
+            _addCustomTypeNavItem(cfg);
+          }
+        } catch (err) {
+          console.warn('[FH] Failed to load custom types for sidebar:', err);
+        }
+
+        // Subscribe: new type created → add to sidebar immediately
+        on(EVENTS.TYPE_CREATED, ({ config, isNew } = {}) => {
+          if (config && isNew) _addCustomTypeNavItem(config);
+          // If existing type was updated (name/icon change): update existing item
+          else if (config) {
+            const existing = _sidebarNav?.querySelector(`[data-entity-type="${config.key}"]`);
+            if (existing) {
+              existing.querySelector('.nav-item-icon').textContent = config.icon || '◇';
+              existing.querySelector('.nav-item-label').textContent = config.labelPlural || config.label + 's';
+              existing.setAttribute('data-label', config.labelPlural || config.label + 's');
+              existing.setAttribute('aria-label', config.labelPlural || config.label + 's');
+            }
+          }
+        });
+
+        // Subscribe: type deleted → remove from sidebar
+        on(EVENTS.TYPE_FIELD_REMOVED, ({ typeKey, deleted } = {}) => {
+          if (deleted && typeKey) _removeCustomTypeNavItem(typeKey);
+        });
+      }
 
     } catch (err) {
       console.error('[FH] Fatal init error:', err);

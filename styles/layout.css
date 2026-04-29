@@ -630,6 +630,38 @@ body {
   pointer-events: none;
 }
 
+/* ── Modal mode: center panel as a floating dialog ───────────── */
+/* Applied to content-heavy entity types (notes, ideas, books, etc.) */
+#entity-panel.modal-mode {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  width: min(680px, 92vw);
+  max-height: min(90dvh, 820px);
+  height: auto;
+  transform: translate(-50%, -48%) scale(0.97);
+  border-left: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 32px 80px rgba(0,0,0,0.22);
+  z-index: var(--z-modal);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.22s ease;
+}
+#entity-panel.modal-mode.open {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Show backdrop for modal mode on all screen sizes */
+#entity-panel-backdrop.modal-backdrop {
+  display: block !important;
+  cursor: default;
+}
+
 /* Reserve right-side space for entity panel when graph is open */
 #main.graph-active {
   overflow: hidden;
@@ -689,6 +721,28 @@ body {
 #entity-panel-close:hover {
   background: var(--color-surface-2);
   color: var(--color-text);
+}
+
+/* Panel close button — more prominent, with optional text label */
+.panel-close-btn {
+  width: auto !important;
+  padding: var(--space-1) var(--space-2) !important;
+  gap: 4px;
+  font-size: var(--text-xs) !important;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border) !important;
+  background: var(--color-surface) !important;
+}
+.panel-close-btn:hover {
+  color: var(--color-text) !important;
+  border-color: var(--color-accent) !important;
+  background: var(--color-surface-2) !important;
+}
+/* Hide text label on narrow panels / mobile to save space */
+.panel-close-label {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
 }
 
 /* Icon action buttons in the header toolbar */
