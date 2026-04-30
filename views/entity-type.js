@@ -21,6 +21,7 @@
 import { registerView, navigate }      from '../core/router.js';
 import { on, emit, EVENTS }            from '../core/events.js';
 import { getEntitiesByType }           from '../core/db.js';
+import { filterByContext }             from '../core/context.js';
 import { getEntityTypeConfig }         from '../core/graph-engine.js';
 import { getObjectTypeConfig, VIEW_MODES } from '../core/object-type-registry.js';
 import { openForm }                    from '../components/entity-form.js';
@@ -503,7 +504,10 @@ async function renderEntityTypeView(params = {}) {
 
   // Load entities
   let raw=[];
-  try { raw = await getEntitiesByType(entityType); } catch { /* ok */ }
+  try {
+    const allOfType = await getEntitiesByType(entityType);
+    raw = filterByContext(allOfType);
+  } catch { /* ok */ }
   raw = raw.filter(e=>!e.deleted);
 
   // Resolve sort
@@ -623,6 +627,9 @@ async function renderEntityTypeView(params = {}) {
   }));
   _unsubList.push(on(EVENTS.TYPE_CREATED, ({typeKey}={})=>{
     if (typeKey===_currentType) renderEntityTypeView({entityType:_currentType,mode:_currentMode,_force:true});
+  }));
+  _unsubList.push(on('context:changed', ()=>{
+    if (_currentType) renderEntityTypeView({entityType:_currentType,mode:_currentMode,_force:true});
   }));
 }
 

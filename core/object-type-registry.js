@@ -104,6 +104,7 @@ export const BUILT_IN_TYPE_KEYS = new Set([
   'budgetEntry', 'recipe', 'contact', 'dateEntity', 'idea', 'research',
   'book', 'trip', 'place', 'weblink', 'mealPlan', 'shoppingItem',
   'medication', 'appointment', 'goal', 'habit',
+  'activity', // system activity feed entries — not user-editable
 ]);
 
 export function isBuiltInType(key) {

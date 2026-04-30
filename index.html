@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v3.6.1 -->
+  <!-- Build: v3.7.8 -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=3.6.1" />
-  <link rel="stylesheet" href="./styles/layout.css?v=3.6.1" />
-  <link rel="stylesheet" href="./styles/components.css?v=3.6.1" />
-  <link rel="stylesheet" href="./styles/dark.css?v=3.6.1" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=3.7.8" />
+  <link rel="stylesheet" href="./styles/layout.css?v=3.7.8" />
+  <link rel="stylesheet" href="./styles/components.css?v=3.7.8" />
+  <link rel="stylesheet" href="./styles/dark.css?v=3.7.8" />
 </head>
 <body>
 
@@ -263,10 +263,10 @@
         </button>
       </li>
       <li role="listitem">
-        <button class="nav-item" data-view="family-wall"
-                aria-label="Family Wall">
+        <button class="nav-item" data-view="activity-center"
+                aria-label="Activity Center">
           <span class="nav-item-icon" aria-hidden="true">⬡</span>
-          <span class="nav-item-label">Family Wall</span>
+          <span class="nav-item-label">Activity Center</span>
         </button>
       </li>
       <li role="listitem">
@@ -442,10 +442,10 @@
       <!-- Populated by views/calendar.js -->
     </div>
 
-    <!-- Family Wall -->
-    <div id="view-family-wall" class="view" role="region" aria-label="Family Wall"
+    <!-- Activity Center -->
+    <div id="view-activity-center" class="view" role="region" aria-label="Activity Center"
          aria-hidden="true">
-      <!-- Populated by views/family-wall.js -->
+      <!-- Populated by views/family-wall.js (Activity Center) -->
     </div>
 
     <!-- Family Matters -->
@@ -713,7 +713,7 @@
   import './views/daily.js';                                  // registers 'daily' view
   import './views/kanban.js';                                 // registers 'kanban' view
   import './views/calendar.js';                               // registers 'calendar' view
-  import './views/family-wall.js';                            // registers 'family-wall' view
+  import './views/family-wall.js';                            // registers 'activity-center' view
   import './views/notes.js';                                  // V-01: registers 'notes' view
   import './views/projects.js';                               // V-02: registers 'projects' view
   import './views/settings.js';                               // V-03: registers 'settings' view
@@ -746,6 +746,7 @@
   import { hotkeyServiceDescriptor }      from './services/hotkey.js';       // P-09
   import { historyServiceDescriptor }     from './services/history.js';      // P-10
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
+  import { initActivityService }          from './services/activity.js';
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -917,7 +918,6 @@
       //     auth.js determines: first-run | login screen | resume session.
       await initDB();
       await initGraphEngine();
-
       // Register services in dependency order before buildEnv() resolves them
       // P-06: data (no deps) — registered first, all services may depend on it
       serviceRegistry.add('data',         dataServiceDescriptor);
@@ -960,6 +960,7 @@
       initSystray(env);                   // P-19: systray awareness bar
       await initAuth();
       initContext();                       // CS-01: restore active context from localStorage
+      initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
 
       // CS-02: Wire context switcher buttons
       {
@@ -1105,7 +1106,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=3.6.1', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=3.7.8', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -1179,7 +1180,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '3.6.1', emit, on, env: window._fhEnv,
+        version: '3.7.8', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

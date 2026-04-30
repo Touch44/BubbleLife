@@ -307,8 +307,11 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   }
 });
 
-on(EVENTS.ENTITY_DELETED, () => {
-  if (document.getElementById('view-projects')?.classList.contains('active')) {
+on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
+  // Only re-render if a project or task was deleted (tasks affect project progress)
+  const t = entity?.type;
+  if ((t === 'project' || t === 'task' || !t) &&
+      document.getElementById('view-projects')?.classList.contains('active')) {
     renderProjects();
   }
 });

@@ -2495,7 +2495,8 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
 });
 
 // BUG-3 fix: refresh daily when an entity is deleted
-on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
+on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
+  const entityType = entity?.type;
   if (entityType && !_DAILY_REFRESH_TYPES.has(entityType)) return;
   if (_dailyRefreshTimer) clearTimeout(_dailyRefreshTimer);
   _dailyRefreshTimer = setTimeout(() => {

@@ -345,8 +345,8 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   }
 });
 
-on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
-  if (entityType === 'note' && document.getElementById('view-notes')?.classList.contains('active')) {
+on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
+  if (entity?.type === 'note' && document.getElementById('view-notes')?.classList.contains('active')) {
     _selectedId = null;
     _loadNotes().then(() => { _renderList(); _renderDetail(); });
   }

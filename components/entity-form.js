@@ -365,6 +365,36 @@ function _buildAndMount(config) {
         pointer-events: none;
         display: block;
       }
+      .ef-rating-row{display:flex;gap:4px;padding:2px 0;}
+      .ef-star-btn{font-size:1.4rem;background:none;border:none;cursor:pointer;
+        color:var(--color-accent);padding:0;line-height:1;}
+      .ef-star-btn:hover{transform:scale(1.15);}
+      .ef-relation-create-btn{display:none;width:100%;margin-top:4px;padding:6px 10px;
+        border:1px dashed var(--color-accent);border-radius:var(--radius-sm);
+        background:var(--color-accent-muted);color:var(--color-accent);
+        font-size:var(--text-xs);cursor:pointer;text-align:left;}
+      .ef-relation-create-btn:hover{background:var(--color-accent);color:#fff;}
+      .qcm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.38);z-index:500;
+        display:flex;align-items:center;justify-content:center;}
+      .qcm-modal{background:var(--color-bg);border:1px solid var(--color-border);
+        border-radius:var(--radius-xl);width:min(400px,95vw);padding:var(--space-5);
+        box-shadow:0 24px 64px rgba(0,0,0,.2);}
+      .qcm-header{display:flex;align-items:center;gap:var(--space-2);
+        margin-bottom:var(--space-4);font-size:var(--text-lg);font-weight:var(--weight-bold);}
+      .qcm-field{margin-bottom:var(--space-3);}
+      .qcm-label{display:block;font-size:var(--text-sm);font-weight:var(--weight-semibold);
+        margin-bottom:4px;color:var(--color-text);}
+      .qcm-input{width:100%;padding:8px 10px;border:1.5px solid var(--color-border);
+        border-radius:var(--radius-md);background:var(--color-surface);
+        color:var(--color-text);font-size:var(--text-sm);font-family:inherit;box-sizing:border-box;}
+      .qcm-input:focus{outline:none;border-color:var(--color-accent);}
+      .qcm-footer{display:flex;justify-content:flex-end;gap:var(--space-2);
+        padding-top:var(--space-4);border-top:1px solid var(--color-border);margin-top:var(--space-4);}
+      .qcm-cancel{padding:6px 14px;border:1px solid var(--color-border);
+        border-radius:var(--radius-md);background:none;cursor:pointer;color:var(--color-text-muted);}
+      .qcm-save{padding:6px 18px;background:var(--color-accent);color:#fff;border:none;
+        border-radius:var(--radius-md);font-weight:var(--weight-semibold);cursor:pointer;}
+      .qcm-save:disabled{opacity:.5;cursor:default;}
     `;
     document.head.appendChild(s);
   }
@@ -513,9 +543,13 @@ function _buildFieldControl(field, config) {
       input.type        = 'number';
       input.id          = `ef-field-${field.key}`;
       input.className   = 'input';
-      input.placeholder = '0';
+      input.placeholder = field.min != null ? String(field.min) : '0';
       input.value       = existing != null ? String(existing) : '';
       if (field.required) input.required = true;
+      // Apply constraints from type config (set in Object Studio P2)
+      if (field.min  != null) input.min  = String(field.min);
+      if (field.max  != null) input.max  = String(field.max);
+      if (field.step != null) input.step = String(field.step);
       input.addEventListener('input', () => {
         _draft[field.key] = input.value !== '' ? Number(input.value) : null;
       });
@@ -856,6 +890,32 @@ function _buildFieldControl(field, config) {
       return _buildTagControl(field);
     }
 
+    // ── RATING (1–5 stars) ────────────────────────────────── //
+    case 'rating': {
+      const wrap = document.createElement('div');
+      wrap.className = 'ef-rating-row';
+      wrap.dataset.fieldKey = field.key;
+      // 'existing' = _draft[field.key], correct for both create and edit
+      const current = parseInt(existing || 0, 10);
+      wrap.dataset.currentVal = String(current); // init so save reads correctly
+      for (let i = 1; i <= 5; i++) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = i <= current ? '★' : '☆';
+        btn.dataset.val = String(i);
+        btn.className = 'ef-star-btn';
+        btn.addEventListener('click', () => {
+          const v = parseInt(btn.dataset.val, 10);
+          wrap.querySelectorAll('.ef-star-btn').forEach((b, idx) => {
+            b.textContent = idx + 1 <= v ? '★' : '☆';
+          });
+          wrap.dataset.currentVal = String(v);
+        });
+        wrap.appendChild(btn);
+      }
+      return wrap;
+    }
+
     // ── RELATION (search-as-you-type) ─────────────────────── //
     case 'relation': {
       // In edit mode, relations are managed from the panel's Relations tab.
@@ -958,6 +1018,97 @@ function _buildTagControl(field) {
 }
 
 // ════════════════════════════════════════════════════════════
+// QUICK-CREATE MODAL
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Open a lightweight sub-modal to create a new entity of typeKey on the fly.
+ * @param {string} typeKey
+ * @param {object} prefill
+ * @param {function} onCreated  called with the saved entity
+ */
+export function openQuickCreateModal(typeKey, prefill = {}, onCreated) {
+  if (!typeKey) {
+    toast.error('Relation has no target type — edit the type in Object Studio');
+    return;
+  }
+  const config = getEntityTypeConfig(typeKey);
+  if (!config) { console.warn('[qcm] Unknown type:', typeKey); return; }
+  // Collect required/title fields for QCM form inputs.
+  // If none are marked required, fall back to the first field so the form isn't empty.
+  const required = (() => {
+    const r = (config.fields||[]).filter(f => f.isTitle || f.required);
+    return r.length ? r : (config.fields||[]).slice(0, 1);
+  })();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'qcm-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="qcm-modal">
+      <div class="qcm-header">
+        <span class="qcm-icon">${_esc(config.icon||'\u25C7')}</span>
+        <span class="qcm-title">New ${_esc(config.label)}</span>
+      </div>
+      <div class="qcm-body" id="qcm-body-inner"></div>
+      <div class="qcm-footer">
+        <button class="qcm-cancel" id="qcm-cancel">Cancel</button>
+        <button class="qcm-save" id="qcm-save">Create →</button>
+      </div>
+    </div>
+  `;
+
+  const body = overlay.querySelector('#qcm-body-inner');
+  const fieldEls = {};
+  for (const f of required) {
+    const wrap  = document.createElement('div'); wrap.className = 'qcm-field';
+    const lbl   = document.createElement('label'); lbl.className = 'qcm-label';
+    lbl.textContent = f.label || f.key;
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'qcm-input';
+    input.value = prefill[f.key] || '';
+    fieldEls[f.key] = input;
+    wrap.appendChild(lbl); wrap.appendChild(input); body.appendChild(wrap);
+  }
+
+  const _closeQCM = () => {
+    document.removeEventListener('keydown', _kd);
+    overlay.remove();
+  };
+  const _kd = e => { if (e.key === 'Escape') _closeQCM(); };
+  document.addEventListener('keydown', _kd);
+  overlay.querySelector('#qcm-cancel').addEventListener('click', _closeQCM);
+  overlay.addEventListener('click', e => { if (e.target === overlay) _closeQCM(); });
+
+  overlay.querySelector('#qcm-save').addEventListener('click', async () => {
+    const sb = overlay.querySelector('#qcm-save');
+    sb.disabled = true; sb.textContent = 'Creating…';
+    try {
+      const data = { type: typeKey };
+      for (const [key, el] of Object.entries(fieldEls)) data[key] = el.value.trim();
+      const titleField = required.find(f => f.isTitle);
+      if (titleField && !data[titleField.key]) {
+        toast.error(`${config.label} name is required`);
+        sb.disabled = false; sb.textContent = 'Create →'; return;
+      }
+      const acct = getAccount();
+      const saved = await saveEntity(data, acct?.id);
+      _closeQCM();
+      if (onCreated) onCreated(saved);
+    } catch (err) {
+      console.error('[qcm] save failed:', err);
+      toast.error('Create failed — see console');
+      sb.disabled = false; sb.textContent = 'Create →';
+    }
+  });
+
+  document.body.appendChild(overlay);
+  setTimeout(() => overlay.querySelector('.qcm-input')?.focus(), 30);
+}
+
+
+// ════════════════════════════════════════════════════════════
 // RELATION CONTROL
 // ════════════════════════════════════════════════════════════
 
@@ -986,6 +1137,27 @@ function _buildRelationControl(field, config) {
   `;
   wrap.appendChild(results);
 
+  // + Create new entity button (shown when search has text but no results)
+  const createBtn = document.createElement('button');
+  createBtn.type = 'button';
+  createBtn.className = 'ef-relation-create-btn';
+  createBtn.style.display = 'none';
+  wrap.appendChild(createBtn);
+  createBtn.addEventListener('click', () => {
+    openQuickCreateModal(typeToSearch, { title: searchInput.value.trim() }, newEntity => {
+      const arr = _relationValues.get(field.key) || [];
+      if (!arr.find(r => r.id === newEntity.id)) {
+        arr.push({ id: newEntity.id, label: newEntity.title || newEntity.name || newEntity.id,
+                   type: newEntity.type });
+        _relationValues.set(field.key, arr);
+      }
+      _renderChips();
+      searchInput.value = '';
+      createBtn.style.display = 'none';
+      results.innerHTML = ''; results.style.display = 'none';
+    });
+  });
+
   const _renderChips = () => {
     chipRow.innerHTML = '';
     const ids = _relationValues.get(field.key) || [];
@@ -1013,12 +1185,21 @@ function _buildRelationControl(field, config) {
     }
   };
 
-  const _search = async (query) => {
-    if (!field.relatesTo) { results.style.display = 'none'; return; }
+  const typeToSearch = field.relatesTo || null;
 
+  const _search = async (query) => {
     let candidates = [];
     try {
-      candidates = await getEntitiesByType(field.relatesTo);
+      if (typeToSearch) {
+        candidates = await getEntitiesByType(typeToSearch);
+      } else {
+        // No target type configured — search all entity types
+        const allTypes = getAllEntityTypes(); // synchronous, no await
+        const buckets = await Promise.all(
+          allTypes.map(tp => getEntitiesByType(tp.key).catch(() => []))
+        );
+        candidates = buckets.flat();
+      }
     } catch { return; }
 
     const filtered = candidates.filter(e => {
@@ -1029,8 +1210,17 @@ function _buildRelationControl(field, config) {
     results.innerHTML = '';
     if (filtered.length === 0) {
       results.style.display = 'none';
+      const q = searchInput.value.trim();
+      if (q) {
+        const lbl = getEntityTypeConfig(typeToSearch)?.label || typeToSearch || 'entity';
+        createBtn.textContent = `+ Create "${q}" as ${lbl}`;
+        createBtn.style.display = 'block';
+      } else {
+        createBtn.style.display = 'none';
+      }
       return;
     }
+    createBtn.style.display = 'none';
 
     results.style.display = 'block';
     for (const candidate of filtered) {
@@ -1136,6 +1326,14 @@ async function _submitForm() {
         entityData[field.key] = _tagValues.get(field.key) || [];
       } else if (field.type === 'relation') {
         // Relations handled via edges — don't store on entity
+      } else if (field.type === 'rating') {
+        // Rating stored in DOM dataset
+        const ratingWrap = _overlay?.querySelector(`.ef-rating-row[data-field-key="${field.key}"]`);
+        if (ratingWrap && ratingWrap.dataset.currentVal !== undefined) {
+          entityData[field.key] = parseInt(ratingWrap.dataset.currentVal, 10) || 0;
+        } else if (_draft[field.key] !== undefined) {
+          entityData[field.key] = _draft[field.key];
+        }
       } else {
         const val = _draft[field.key];
         if (val !== undefined) {
@@ -1229,7 +1427,7 @@ function _saveDraftFromForm() {
   if (!config) return;
 
   for (const field of config.fields) {
-    if (['relation', 'tags', 'multiselect', 'richtext', 'checkbox', 'checklist'].includes(field.type)) continue;
+    if (['relation', 'tags', 'multiselect', 'richtext', 'checkbox', 'checklist', 'rating'].includes(field.type)) continue;
 
     const el = _overlay.querySelector(`#ef-field-${field.key}`);
     if (!el) continue;

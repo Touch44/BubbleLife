@@ -20,7 +20,7 @@ let _fab, _fabMainBtn;
 const VIEW_DEFAULT_TYPE = {
   'kanban':       'task',
   'daily':        'task',
-  'family-wall':  'post',
+  'activity-center':  'post',
   'notes':        'note',
   'calendar':     'event',
   'projects':     'project',
@@ -178,8 +178,8 @@ function _openQuickForm(type, callerPrefill = {}) {
     if (!prefill.status)   prefill.status   = 'Inbox';
     if (!prefill.priority) prefill.priority = 'Medium';
   }
-  // family-wall posts prefill type
-  if (type === 'post' && view === 'family-wall') {
+  // activity-center posts prefill type
+  if (type === 'post' && view === 'activity-center') {
     if (!prefill.category) prefill.category = 'Family';
   }
 

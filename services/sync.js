@@ -251,7 +251,7 @@ async function _mergeEntities(serverEntities) {
       const evMod = await import('../core/events.js');
       for (const entity of serverEntities) {
         if (entity && entity.type) {
-          evMod.emit(evMod.EVENTS.ENTITY_SAVED, { entity });
+          evMod.emit(evMod.EVENTS.ENTITY_SAVED, { entity, isNew: false });
         }
       }
     } catch (e) { /* non-critical */ }

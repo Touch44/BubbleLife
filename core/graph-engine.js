@@ -884,11 +884,16 @@ export async function saveEntityType(config) {
 
   let finalConfig;
   if (existing?.isBuiltIn) {
-    // Only allow non-structural overrides on built-ins
+    // Allow non-structural appearance overrides for built-ins
     finalConfig = {
       ...existing,
-      archived: config.archived ?? existing.archived,
-      graphVisible: config.graphVisible ?? existing.graphVisible,
+      archived:     config.archived     ?? existing.archived,
+      graphVisible: config.graphVisible  ?? existing.graphVisible,
+      icon:         config.icon         ?? existing.icon,
+      color:        config.color        ?? existing.color,
+      description:  config.description  !== undefined
+                      ? config.description : existing.description,
+      defaultView:  config.defaultView  ?? existing.defaultView,
     };
   } else {
     finalConfig = {

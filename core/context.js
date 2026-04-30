@@ -22,10 +22,11 @@ export const CONTEXTS = Object.freeze({
 });
 
 /** Entity types that are NEVER filtered — always visible regardless of context */
-export const ALWAYS_SHARED_TYPES = new Set(['person', 'dailyReview', 'place', 'tag']);
+export const ALWAYS_SHARED_TYPES = new Set(['person', 'dailyReview', 'place', 'tag', 'activity']);
 
 /** Entity types that ONLY appear in family context */
-export const FAMILY_ONLY_TYPES = new Set(['post', 'comment', 'recipe', 'mealPlan', 'shoppingItem']);
+export const FAMILY_ONLY_TYPES = new Set(['recipe', 'mealPlan', 'shoppingItem']);
+// post/comment removed: entity.context field now controls their visibility.
 
 /** Entity types that ONLY appear in personal context (and only to their creator) */
 export const ALWAYS_PERSONAL_TYPES = new Set(['medication']);

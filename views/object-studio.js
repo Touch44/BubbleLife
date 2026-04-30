@@ -384,8 +384,8 @@ function _renderTypeCard(type, counts) {
     ? `<span class="os-badge-builtin">Built-in</span>`
     : `<span class="os-badge-custom">Custom</span>`;
   const editBtn  = !isBI
-    ? `<button class="os-card-action-btn" data-action="settings" data-type="${_esc(type.key)}" title="Type settings">⚙</button>`
-    : '';
+    ? `<button class='os-card-action-btn' data-action='settings' data-type='${_esc(type.key)}' title='Type settings'>⚙</button>`
+    : `<button class='os-card-action-btn' data-action='edit-builtin' data-type='${_esc(type.key)}' title='Customize appearance'>✏️</button>`;
   const desc = type.description
     ? `<div class="os-card-description">${_esc(type.description)}</div>`
     : `<div class="os-card-description" style="opacity:0" aria-hidden="true">—</div>`;
@@ -548,6 +548,13 @@ async function renderObjectStudio(params = {}) {
   // Handles: settings button, empty-state CTA, type card navigation.
   // mainEl.innerHTML is replaced in-place — no listener accumulation.
   mainEl.addEventListener('click', e => {
+    // ✏️ Edit button on built-in card
+    const editBuiltinBtn = e.target.closest('[data-action="edit-builtin"]');
+    if (editBuiltinBtn) {
+      e.stopPropagation();
+      openTypeEditor(editBuiltinBtn.dataset.type, () => renderObjectStudio(params));
+      return;
+    }
     // ⚙ Settings button on custom card
     const settingsBtn = e.target.closest('[data-action="settings"]');
     if (settingsBtn) {

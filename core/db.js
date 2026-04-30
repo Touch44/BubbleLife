@@ -430,7 +430,7 @@ export async function deleteEntity(id, byAccountId) {
 
     await tx.done;
 
-    await _emit('entity:deleted', { id, entityType: entity.type });
+    await _emit('entity:deleted', { entity, id });
     // P-14: notify other tabs
     window._fhEnv?.services?.sync?.broadcast(entity.type || 'entity', id, 'delete');
 

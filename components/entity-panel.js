@@ -14,7 +14,7 @@ import { getEntity, saveEntity, deleteEntity, getEdgesFrom, getEdgesTo,
 import { getEntityTypeConfig, getAllEntityTypes,
          getNeighbors, convertEntity } from '../core/graph-engine.js';
 import { on, emit, EVENTS } from '../core/events.js';
-import { openEditForm }     from './entity-form.js';
+import { openEditForm, openQuickCreateModal } from './entity-form.js';
 import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
@@ -33,8 +33,8 @@ const TYPE_VIEW_MAP = {
   event:        'calendar',
   note:         'notes',
   project:      'projects',
-  post:         'family-wall',
-  comment:      'family-wall',
+  post:         'activity-center',
+  comment:      'activity-center',
   budgetEntry:  'budget',
   recipe:       'recipes',
   document:     'documents',
@@ -2392,7 +2392,60 @@ async function _renderRelationsTab(container) {
     const results = candidates.slice(0, 40);
 
     if (results.length === 0) {
-      resultsList.innerHTML = `<div style="padding: var(--space-3); font-size: var(--text-xs); color: var(--color-text-muted); text-align: center;">No entities found${q ? ` matching "${q}"` : ''}</div>`;
+      resultsList.innerHTML = '';
+      const emptyDiv = document.createElement('div');
+      emptyDiv.style.cssText = 'padding:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
+      emptyDiv.textContent = `No entities found${q ? ` matching "${q}"` : ''}`;
+      resultsList.appendChild(emptyDiv);
+      if (q) {
+        const createDiv = document.createElement('button');
+        createDiv.style.cssText = 'display:block;width:100%;padding:var(--space-2) var(--space-3);border:none;' +
+          'background:var(--color-accent-muted);color:var(--color-accent);cursor:pointer;' +
+          'font-size:var(--text-xs);font-weight:var(--weight-semibold);text-align:left;border-top:1px solid var(--color-border);';
+        createDiv.textContent = `+ Create "${q}" as new entity`;
+        createDiv.addEventListener('click', () => {
+          resultsList.style.display = 'none';
+          // Build a type-picker row so user can choose what type to create
+          const pickerWrap = document.createElement('div');
+          pickerWrap.style.cssText = 'display:flex;gap:var(--space-2);align-items:center;margin-top:var(--space-2);flex-wrap:wrap;';
+          const pickerLabel = document.createElement('span');
+          pickerLabel.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);white-space:nowrap;';
+          pickerLabel.textContent = 'Create as:';
+          const typeSelect = document.createElement('select');
+          typeSelect.className = 'input';
+          typeSelect.style.cssText = 'font-size:var(--text-xs);padding:3px 6px;flex:1;min-width:100px;';
+          const creatableTypes = getAllEntityTypes().filter(t => !t.archived);
+          for (const tp of creatableTypes) {
+            const opt = document.createElement('option');
+            opt.value = tp.key;
+            opt.textContent = (tp.icon ? tp.icon + ' ' : '') + tp.label;
+            typeSelect.appendChild(opt);
+          }
+          const goBtn = document.createElement('button');
+          goBtn.textContent = 'Create';
+          goBtn.style.cssText = 'font-size:var(--text-xs);padding:3px 10px;background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;white-space:nowrap;';
+          goBtn.addEventListener('click', () => {
+            const chosenType = typeSelect.value;
+            if (!chosenType) return;
+            pickerWrap.remove();
+            openQuickCreateModal(chosenType, { title: q }, async newEnt => {
+              if (!newEnt) return;
+              const acct = getAccount();
+              const rel = relationInput.value.trim() || 'related to';
+              await saveEdge({ fromId: _entity.id, toId: newEnt.id, relation: rel }, acct?.id);
+              await loadAllEntities();
+              _linkedIds = await getLinkedIds();
+              searchInput.value = '';
+              resultsList.style.display = 'none';
+              _renderRelationsTab(container);
+            });
+          });
+          pickerWrap.append(pickerLabel, typeSelect, goBtn);
+          // Insert picker below the results list
+          resultsList.parentNode.insertBefore(pickerWrap, resultsList.nextSibling);
+        });
+        resultsList.appendChild(createDiv);
+      }
       resultsList.style.display = 'block';
       return;
     }

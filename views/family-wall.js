@@ -23,13 +23,13 @@ import { getEntitiesByType, getEntity,
          getSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }          from '../core/events.js';
 import { getAccount }                 from '../core/auth.js';
-import { filterByContext }            from '../core/context.js';
+import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                      from '../core/toast.js';
 
 // ── Constants ──────────────────────────────────────────────
 
 const REACTIONS  = ['👍', '❤️', '😂', '😮', '😢'];
-const POST_TYPES = ['All', 'Text', 'Photo', 'File', 'Link', 'Milestone'];
+const POST_TYPES = ['All', 'Text', 'Photo', 'File', 'Link', 'Milestone', 'Activities'];
 
 const FILE_ICONS = {
   pdf:'📄', doc:'📝', docx:'📝', xls:'📊', xlsx:'📊', ppt:'📊', pptx:'📊',
@@ -92,8 +92,9 @@ const _bytes     = b   => {
 // ── Data ─────────────────────────────────────────────────────
 
 async function _loadData() {
-  const [posts, persons, auth] = await Promise.all([
+  const [posts, activities, persons, auth] = await Promise.all([
     getEntitiesByType('post'),
+    getEntitiesByType('activity'),
     getEntitiesByType('person'),
     getSetting('auth'),
   ]);
@@ -102,7 +103,7 @@ async function _loadData() {
   for (const a of (auth?.accounts || [])) {
     if (a.memberId && pm.has(a.memberId)) apm.set(a.id, pm.get(a.memberId));
   }
-  return { posts: filterByContext(posts), persons, pm, apm }; // CS-04
+  return { posts, activities, persons, pm, apm };
 }
 
 async function _loadPostEdges(pid) {
@@ -126,17 +127,26 @@ async function _loadComments(ids) {
 
 // ── Filter & sort ────────────────────────────────────────────
 
-function _filterPosts(posts) {
-  let f = [...posts];
-  if (_filterMemberId) f = f.filter(p => p._authorPersonId === _filterMemberId || p.createdBy === _filterMemberId);
-  if (_filterPostType !== 'All') f = f.filter(p => (p.postType || 'Text') === _filterPostType);
-  if (_filterPinnedOnly) f = f.filter(p => p.pinned);
-  if (_filterTag) f = f.filter(p => (p.tags || []).includes(_filterTag));
-  return f.sort((a, b) => {
-    if (a.pinned && !b.pinned) return -1;
-    if (!a.pinned && b.pinned) return 1;
-    return (b.createdAt || '').localeCompare(a.createdAt || '');
+function _filterFeed(feed) {
+  let f = [...feed];
+  // Activities-only: return only activity system cards
+  if (_filterPostType === 'Activities') return f.filter(i => i.type === 'activity');
+  // Type-specific post filters (Text/Photo/Link/etc.) exclude activity cards
+  if (_filterPostType !== 'All') {
+    f = f.filter(i => i.type !== 'activity' && (i.postType || 'Text') === _filterPostType);
+  }
+  // Member / tag / pinned filters: activity cards always pass through
+  if (_filterMemberId) f = f.filter(p => {
+    if (p.type === 'activity') {
+      // Activity cards: filter by actorPersonId (person entity ID, matches member avatars)
+      // actorId stores account.id; actorPersonId stores account.memberId (person entity)
+      return p.actorPersonId === _filterMemberId;
+    }
+    return p._authorPersonId === _filterMemberId || p.createdBy === _filterMemberId;
   });
+  if (_filterPinnedOnly) f = f.filter(p => p.type === 'activity' || p.pinned);
+  if (_filterTag) f = f.filter(p => p.type === 'activity' || (p.tags||[]).includes(_filterTag));
+  return f;
 }
 
 // ── Lightbox ─────────────────────────────────────────────────
@@ -371,7 +381,7 @@ function _readFileWithProgress(file, sp, onDone) {
 
 // ── Filter bar ───────────────────────────────────────────────
 
-function _buildFilterBar(el, persons, posts) {
+function _buildFilterBar(el, persons, feed) {
   const bar = document.createElement('div');
   bar.className = 'fw-filter-bar';
 
@@ -431,7 +441,7 @@ function _buildFilterBar(el, persons, posts) {
     tr.appendChild(pb);
     bar.appendChild(tr);
 
-    const tags = new Set(posts.flatMap(p => p.tags||[]));
+    const tags = new Set(feed.filter(i => i.type !== 'activity').flatMap(p => p.tags||[]));
     if (tags.size) {
       const tagRow = document.createElement('div');
       tagRow.className = 'fw-filter-tags';
@@ -615,7 +625,7 @@ function _buildCompose(el, pm, apm) {
       const fv=selType==='File'?[...files]:[];
 
       const saved=await saveEntity({
-        type:'post', body, postType:selType,
+        type:'post', body, postType:selType, context:getActiveContext(),
         photoUrl:pv, linkUrl:lv, _files:fv,
         pinned:false, tags, _authorPersonId:acct.memberId,
       }, acct.id);
@@ -663,6 +673,78 @@ function _buildCompose(el, pm, apm) {
 }
 
 // ── Post card ────────────────────────────────────────────────
+
+// -- Activity card (system-generated events) -------------------
+function _buildActivityCard(activity) {
+  const iconMap = {
+    'task:created':          '\u2705',
+    'task:completed':        '\uD83C\uDF89',
+    'task:overdue':          '\u23F0',
+    'project:created':       '\uD83D\uDCC1',
+    'project:statusChanged': '\uD83D\uDCCA',
+    'event:created':         '\uD83D\uDCC5',
+    'note:created':          '\uD83D\uDCDD',
+    'budgetEntry:created':   '\uD83D\uDCB0',
+    'recipe:created':        '\uD83C\uDF7D',
+    'document:created':      '\uD83D\uDCC4',
+    'entity:deleted':        '\uD83D\uDDD1',
+    'type:created':          '\u2728',
+  };
+
+  const card = document.createElement('div');
+  card.className = 'fw-activity-card';
+
+  const iconDiv = document.createElement('div');
+  iconDiv.className = 'fw-activity-icon';
+  iconDiv.textContent = iconMap[activity.activityType] || '\uD83D\uDD14';
+
+  const bodySpan = document.createElement('span');
+  bodySpan.textContent = activity.body || '';
+
+  const bodyDiv = document.createElement('div');
+  bodyDiv.className = 'fw-activity-body';
+  bodyDiv.appendChild(bodySpan);
+
+  if (activity.entityId && activity.entityType &&
+      activity.activityType !== 'entity:deleted') {
+    const link = document.createElement('a');
+    link.className = 'fw-activity-link';
+    link.href = '#';
+    link.textContent = ' ' + (activity.entityTitle || 'View');
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      emit(EVENTS.PANEL_OPENED, {
+        entityId:   activity.entityId,
+        entityType: activity.entityType,
+      });
+    });
+    bodyDiv.appendChild(link);
+  }
+
+  const actorSpan = document.createElement('span');
+  actorSpan.className = 'fw-activity-actor';
+  actorSpan.textContent = activity.actorName || 'System';
+
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'fw-activity-time';
+  timeSpan.title = activity.createdAt ? new Date(activity.createdAt).toLocaleString() : '';
+  timeSpan.textContent = _timeAgo(activity.createdAt);
+
+  const badgeSpan = document.createElement('span');
+  badgeSpan.className = 'fw-activity-badge';
+  badgeSpan.textContent = 'Activity';
+
+  const metaDiv = document.createElement('div');
+  metaDiv.className = 'fw-activity-meta';
+  metaDiv.append(actorSpan, timeSpan, badgeSpan);
+
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'fw-activity-content';
+  contentDiv.append(bodyDiv, metaDiv);
+
+  card.append(iconDiv, contentDiv);
+  return card;
+}
 
 async function _buildCard(post, pm, apm) {
   const card=document.createElement('article');
@@ -959,11 +1041,25 @@ async function _buildTimeline(el, posts, persons, pm, apm) {
 // ── Styles ───────────────────────────────────────────────────
 
 function _injectStyles() {
-  if (document.getElementById('family-wall-styles')) return;
-  const s=document.createElement('style'); s.id='family-wall-styles';
+  if (document.getElementById('activity-center-styles')) return;
+  const s=document.createElement('style'); s.id='activity-center-styles';
   s.textContent=`
-    #view-family-wall.active { display:flex; flex-direction:column; gap:var(--space-4); padding:var(--space-5) var(--space-6); max-width:720px; margin:0 auto; width:100%; }
-    @media(max-width:600px){#view-family-wall.active{padding:var(--space-3);}}
+    #view-activity-center.active { display:flex; flex-direction:column; gap:var(--space-4); padding:var(--space-5) var(--space-6); max-width:720px; margin:0 auto; width:100%; }
+    .fw-activity-card{display:flex;gap:var(--space-3);padding:var(--space-3) var(--space-4);
+      border:1px solid var(--color-border);border-left:3px solid var(--color-accent);
+      border-radius:var(--radius-md);background:var(--color-surface);}
+    .fw-activity-icon{font-size:1.25rem;flex-shrink:0;line-height:1.4;margin-top:2px;}
+    .fw-activity-content{flex:1;min-width:0;}
+    .fw-activity-body{font-size:var(--text-sm);color:var(--color-text);line-height:1.5;}
+    .fw-activity-link{color:var(--color-accent);text-decoration:none;font-weight:var(--weight-semibold);}
+    .fw-activity-link:hover{text-decoration:underline;}
+    .fw-activity-meta{display:flex;gap:var(--space-3);margin-top:2px;
+      font-size:var(--text-xs);color:var(--color-text-muted);}
+    .fw-activity-actor{font-weight:var(--weight-semibold);}
+    .fw-activity-badge{font-size:9px;font-weight:var(--weight-bold);letter-spacing:.04em;
+      text-transform:uppercase;padding:1px 5px;border-radius:3px;
+      background:var(--color-accent-muted);color:var(--color-accent);margin-left:auto;}
+    @media(max-width:600px){#view-activity-center.active{padding:var(--space-3);}}
 
     .fw-filter-bar { display:flex; flex-direction:column; gap:var(--space-2); padding:var(--space-3); background:var(--color-surface); border:1px solid var(--color-border); border-radius:var(--radius-md); }
     .fw-mode-row { display:flex; gap:var(--space-1); }
@@ -1120,7 +1216,7 @@ function _injectStyles() {
 let _wallRendering = false;
 
 async function renderWall(params={}) {
-  const el=document.getElementById('view-family-wall');
+  const el=document.getElementById('view-activity-center');
   if (!el) return;
   _injectStyles();
 
@@ -1136,28 +1232,49 @@ async function renderWall(params={}) {
     _filterTag=null; _viewMode='feed'; _timelinePerson=null;
   }
 
-  el.innerHTML='<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading Family Wall…</div>';
+  el.innerHTML='<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading Activity Center…</div>';
 
   const highlightId = params?.highlightId || null;
 
   try {
-    const { posts, persons, pm, apm } = await _loadData();
+    const { posts, activities, persons, pm, apm } = await _loadData();
+
+    const feed = [
+      ...filterByContext(posts),
+      ...filterByContext(activities),
+    ].sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return new Date(b.createdAt||0) - new Date(a.createdAt||0);
+    });
+
     el.innerHTML='';
-    _buildFilterBar(el, persons, posts);
-    _buildCompose(el, pm, apm);
+    _buildFilterBar(el, persons, feed);
+    // Don't show compose bar in Activities-only filter — system feed, nothing to post
+    if (_filterPostType !== 'Activities') _buildCompose(el, pm, apm);
 
     if (_viewMode==='timeline') {
-      await _buildTimeline(el, posts, persons, pm, apm);
+      await _buildTimeline(el, filterByContext(posts), persons, pm, apm);
     } else {
-      const filtered=_filterPosts(posts);
+      const filtered = _filterFeed(feed);
       if (!filtered.length) {
         const empty=document.createElement('div'); empty.className='fw-empty';
-        empty.textContent=_filterPinnedOnly||_filterPostType!=='All'||_filterMemberId||_filterTag
-          ?'No posts match your filters.'
-          :'No posts yet. Be the first to share something!';
+        if (_filterPostType === 'Activities') {
+          empty.textContent = 'No activity yet — actions like creating tasks, notes, and projects will appear here.';
+        } else if (_filterPinnedOnly || _filterPostType !== 'All' || _filterMemberId || _filterTag) {
+          empty.textContent = 'No items match your filters.';
+        } else {
+          empty.textContent = 'No posts yet — be the first to share something!';
+        }
         el.appendChild(empty);
       } else {
-        for (const post of filtered) el.appendChild(await _buildCard(post,pm,apm));
+        for (const item of filtered) {
+          if (item.type === 'activity') {
+            el.appendChild(_buildActivityCard(item));
+          } else {
+            el.appendChild(await _buildCard(item, pm, apm));
+          }
+        }
       }
     }
 
@@ -1185,9 +1302,13 @@ async function renderWall(params={}) {
 let _wallTimer=null;
 function _debounce() {
   if (_wallTimer) clearTimeout(_wallTimer);
-  _wallTimer=setTimeout(()=>{ _wallTimer=null; const e=document.getElementById('view-family-wall'); if(e?.classList.contains('active')) renderWall({_internal:true}); },200);
+  _wallTimer=setTimeout(()=>{ _wallTimer=null; const e=document.getElementById('view-activity-center'); if(e?.classList.contains('active')) renderWall({_internal:true}); },200);
 }
-on(EVENTS.ENTITY_SAVED,   _debounce);
+on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
+  // Skip re-render when an activity entity is written — prevents double-render flicker
+  if (entity?.type === 'activity') return;
+  _debounce();
+});
 on(EVENTS.ENTITY_DELETED, _debounce);
 on(EVENTS.EDGE_SAVED,     _debounce);
 on(EVENTS.EDGE_DELETED,   _debounce);
@@ -1197,5 +1318,5 @@ on(EVENTS.EDGE_DELETED,   _debounce);
 // CS-04: Re-render wall when context changes
 on('context:changed', _debounce);
 
-registerView('family-wall', renderWall);
+registerView('activity-center', renderWall);
 export { renderWall };

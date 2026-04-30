@@ -22,7 +22,9 @@
  *   closeTypeEditor()                  — programmatic close
  */
 
+import { saveEntityType }     from '../core/graph-engine.js';
 import { emit, EVENTS }       from '../core/events.js';
+import { toast }              from '../core/toast.js';
 import {
   getObjectTypeConfig,
   saveCustomObjectType,
@@ -297,6 +299,11 @@ const COLORS = [
     }
     .te-btn-save:hover{opacity:0.88;}
     .te-btn-save:disabled{opacity:0.5;cursor:default;}
+    .te-builtin-banner{background:var(--color-accent-muted);border:1px solid var(--color-accent);
+      border-radius:var(--radius-md);padding:10px 14px;font-size:var(--text-sm);
+      color:var(--color-accent);margin-bottom:var(--space-3);}
+    .te-ro-field{font-size:var(--text-sm);color:var(--color-text-muted);padding:4px 0;}
+    .te-ro-field code{font-family:var(--font-mono,monospace);color:var(--color-text);}
     /* Readonly box */
     .te-ro-box{
       padding:var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);
@@ -323,22 +330,65 @@ function _esc(v) {
 
 function _renderGeneral(t) {
   if (t.isBuiltIn) {
-    const fieldRows=(t.fields||[]).map(f=>`
-      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--color-surface);border-radius:var(--radius-sm);margin-top:6px;">
-        <span>${PROPERTY_FIELD_TYPES[f.type]?.icon||'·'}</span>
+    const fieldRows = (t.fields||[]).map(f => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;
+        background:var(--color-surface);border-radius:var(--radius-sm);margin-top:6px;">
+        <span>${PROPERTY_FIELD_TYPES[f.type]?.icon||'\u00B7'}</span>
         <span style="font-size:var(--text-sm);color:var(--color-text)">${_esc(f.label||f.key)}</span>
-        <span style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">${_esc(PROPERTY_FIELD_TYPES[f.type]?.label||f.type)}</span>
+        <span style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-muted)">
+          ${_esc(PROPERTY_FIELD_TYPES[f.type]?.label||f.type)}</span>
       </div>`).join('');
-    return `<div class="te-ro-box">
-      <div class="te-ro-title">🔒 Built-in Object Type</div>
-      <div class="te-ro-body">Built-in types are core to FamilyHub and cannot be modified here.<br><br>
-        <strong>Key:</strong> ${_esc(t.key)} &nbsp; <strong>Fields:</strong> ${(t.fields||[]).length}
+    const swatchesBI = COLORS.map(c =>
+      `<div class="te-swatch${t.color===c?' selected':''}" data-sw="${_esc(c)}"
+        style="background:${_esc(c)}" title="${_esc(c)}"></div>`).join('');
+    const emojiGridBI = EMOJI_CATALOG.map(e =>
+      `<button class="te-emoji-btn${t.icon===e?' selected':''}"
+        data-emoji="${_esc(e)}">${_esc(e)}</button>`).join('');
+    return `
+      <div class="te-builtin-banner">
+        \uD83D\uDD12 Built-in type \u2014 core identity and fields are locked.
+        Icon, color, and description can be customized.
       </div>
-    </div>
-    <div class="te-field"><div class="te-sec-title">Properties</div>${fieldRows}</div>`;
+      <div class="te-sec-title">Locked Identity</div>
+      <div class="te-ro-field"><span>\uD83D\uDD12</span> Key: <code>${_esc(t.key)}</code></div>
+      <div class="te-ro-field"><span>\uD83D\uDD12</span>
+        Name: ${_esc(t.label)} / ${_esc(t.labelPlural)}</div>
+      <div class="te-sec-title">Customize Appearance</div>
+      <div class="te-field"><label class="te-lbl">Icon</label>
+        <div class="te-icon-row">
+          <div class="te-icon-preview" id="te-icon-prev">${_esc(t.icon||'\u25C7')}</div>
+          <button class="te-emoji-toggle" id="te-emoji-tog">Choose emoji\u2026</button>
+        </div>
+        <div class="te-emoji-grid" id="te-emoji-grid" style="display:none">${emojiGridBI}</div>
+      </div>
+      <div class="te-field"><label class="te-lbl">Color accent</label>
+        <div class="te-color-row">${swatchesBI}
+          <input type="color" class="te-color-custom" id="te-custom-clr"
+            value="${_esc(t.color||'#6366f1')}" title="Custom color">
+        </div>
+      </div>
+      <div class="te-field"><label class="te-lbl">Description</label>
+        <textarea id="te-desc" class="te-textarea"
+          maxlength="240">${_esc(t.description||'')}</textarea>
+      </div>
+      <div class="te-field"><label class="te-lbl">Default view</label>
+        <select id="te-defview" class="te-select">
+          ${['list','grid','kanban','calendar','table','wall'].map(v =>
+            `<option value="${v}"${t.defaultView===v?' selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div class="te-field" style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="te-graphvis"
+          ${t.graphVisible!==false?'checked':''}>
+        <label for="te-graphvis" class="te-lbl" style="margin:0">
+          Show in Knowledge Graph</label>
+      </div>
+      <div class="te-sec-title">Locked Fields</div>
+      ${fieldRows}
+    `;
   }
 
-  const swatches=COLORS.map(c=>
+    const swatches=COLORS.map(c=>
     `<div class="te-swatch${t.color===c?' selected':''}" data-sw="${_esc(c)}" style="background:${_esc(c)}" title="${_esc(c)}"></div>`
   ).join('');
   const emojiGrid=EMOJI_CATALOG.map(e=>
@@ -438,6 +488,18 @@ function _renderProperties(t) {
           </div>
         </div>
         ${optHtml}${relHtml}
+        ${f.type==='number'?`
+          <div class="te-field" style="margin-top:6px">
+            <div class="te-sublbl">Constraints (optional)</div>
+            <div style="display:flex;gap:6px;">
+              <input class="te-input" style="width:68px" type="number" placeholder="Min"
+                data-pk="${_esc(f.key)}" data-pf="min" value="${_esc(f.min!=null?f.min:'')}">
+              <input class="te-input" style="width:68px" type="number" placeholder="Max"
+                data-pk="${_esc(f.key)}" data-pf="max" value="${_esc(f.max!=null?f.max:'')}">
+              <input class="te-input" style="width:68px" type="number" placeholder="Step"
+                data-pk="${_esc(f.key)}" data-pf="step" value="${_esc(f.step!=null?f.step:'')}">
+            </div>
+          </div>`:''}
         ${!f.isTitle?`
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:var(--text-sm)">
             <input type="checkbox" data-pk="${_esc(f.key)}" data-pf="required" ${f.required?'checked':''}>
@@ -553,7 +615,7 @@ function _renderDrawer() {
         </div>
         <div class="te-footer-r">
           <button class="te-btn-cancel" id="te-cancel">Cancel</button>
-          ${!t.isBuiltIn?`<button class="te-btn-save" id="te-save">Save Changes</button>`:''}
+          <button class="te-btn-save" id="te-save">Save Changes</button>
         </div>
       </div>
     </div>
@@ -583,39 +645,81 @@ function _wire() {
     _renderDrawer();
   });
 
-  if (!t||t.isBuiltIn) return; // read-only — no further wiring needed
+  // Wire appearance fields for both built-in and custom types
+  const emojiTog  = d.querySelector('#te-emoji-tog');
+  const emojiGrid = d.querySelector('#te-emoji-grid');
+  const iconPrev  = d.querySelector('#te-icon-prev');
+  if (emojiTog && emojiGrid && iconPrev) {
+    emojiTog.addEventListener('click', () => {
+      emojiGrid.style.display = emojiGrid.style.display === 'none' ? 'grid' : 'none';
+    });
+    emojiGrid.addEventListener('click', e => {
+      const btn = e.target.closest('.te-emoji-btn');
+      if (!btn) return;
+      t.icon = btn.dataset.emoji;
+      iconPrev.textContent = t.icon;
+      d.querySelectorAll('.te-emoji-btn').forEach(b =>
+        b.classList.toggle('selected', b === btn));
+      emojiGrid.style.display = 'none';
+    });
+  }
+  const customClr = d.querySelector('#te-custom-clr');
+  if (customClr) {
+    customClr.addEventListener('input', e => {
+      t.color = e.target.value;
+      d.querySelectorAll('.te-swatch').forEach(s => s.classList.remove('selected'));
+    });
+  }
+  d.querySelectorAll('.te-swatch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      t.color = sw.dataset.sw;
+      d.querySelectorAll('.te-swatch').forEach(s =>
+        s.classList.toggle('selected', s === sw));
+      if (customClr) customClr.value = t.color;
+    });
+  });
+  const descEl = d.querySelector('#te-desc');
+  if (descEl) descEl.addEventListener('input', e => { t.description = e.target.value; });
+  const defViewEl = d.querySelector('#te-defview');
+  if (defViewEl) defViewEl.addEventListener('change', e => { t.defaultView = e.target.value; });
+  const graphVisEl = d.querySelector('#te-graphvis');
+  if (graphVisEl) graphVisEl.addEventListener('change', e => { t.graphVisible = e.target.checked; });
+
+  if (t.isBuiltIn) {
+    const sb = d.querySelector('#te-save');
+    if (sb) {
+      sb.addEventListener('click', async () => {
+        sb.disabled = true; sb.textContent = 'Saving…';
+        try {
+          await saveEntityType({
+            key:         t.key,
+            icon:        t.icon,
+            color:       t.color,
+            description: t.description,
+            graphVisible:t.graphVisible,
+            defaultView: t.defaultView,
+            isBuiltIn:   true,
+          });
+          toast.success('Built-in type updated');
+          if (_onSavedCb) _onSavedCb(t);
+          closeTypeEditor();
+        } catch (err) {
+          console.error('[type-editor] save built-in:', err);
+          toast.error('Save failed — see console');
+          sb.disabled = false; sb.textContent = 'Save Changes';
+        }
+      });
+    }
+    return; // Skip custom-type-only wiring below
+  }
 
   // ── General tab ───────────────────────────────────────────────
   if (_activeTab==='general') {
     d.querySelector('#te-lbl')?.addEventListener('input', e=>{ t.label=e.target.value; });
     d.querySelector('#te-plural')?.addEventListener('input', e=>{ t.labelPlural=e.target.value; });
-    d.querySelector('#te-desc')?.addEventListener('input', e=>{ t.description=e.target.value; });
     d.querySelector('#te-key')?.addEventListener('input', e=>{ t.key=e.target.value; });
 
-    // Emoji picker
-    const egrid=d.querySelector('#te-emoji-grid');
-    d.querySelector('#te-emoji-tog')?.addEventListener('click', ()=>{
-      egrid.style.display=egrid.style.display==='none'?'grid':'none';
-    });
-    egrid?.addEventListener('click', e=>{
-      const btn=e.target.closest('[data-emoji]');
-      if (!btn) return;
-      t.icon=btn.dataset.emoji;
-      d.querySelector('#te-icon-prev').textContent=btn.dataset.emoji;
-      egrid.querySelectorAll('.te-emoji-btn').forEach(b=>b.classList.toggle('selected',b===btn));
-    });
-
-    // Color swatches
-    d.querySelectorAll('[data-sw]').forEach(sw=>{
-      sw.addEventListener('click', ()=>{
-        t.color=sw.dataset.sw;
-        d.querySelectorAll('[data-sw]').forEach(s=>s.classList.toggle('selected',s===sw));
-      });
-    });
-    d.querySelector('#te-custom-clr')?.addEventListener('input', e=>{
-      t.color=e.target.value;
-      d.querySelectorAll('[data-sw]').forEach(s=>s.classList.remove('selected'));
-    });
+    // Emoji picker, color swatches handled by shared wiring block above.
   }
 
   // ── Properties tab ────────────────────────────────────────────
@@ -653,8 +757,16 @@ function _wire() {
         const k=inp.dataset.pk, field=inp.dataset.pf;
         const fi=(t.fields||[]).findIndex(f=>f.key===k);
         if (fi<0) return;
-        if (inp.type==='checkbox') { t.fields[fi][field]=inp.checked; }
-        else { t.fields[fi][field]=inp.value; }
+        if (inp.type==='checkbox') {
+          t.fields[fi][field]=inp.checked;
+        } else if (['min','max','step'].includes(field)) {
+          // Coerce numeric constraint fields to Number (or null if empty)
+          t.fields[fi][field] = inp.value !== '' ? Number(inp.value) : null;
+        } else {
+          t.fields[fi][field]=inp.value;
+        }
+        // CRITICAL: entity-form reads relatesTo, not targetType
+        if (field==='targetType') { t.fields[fi].relatesTo=inp.value; }
         // Re-render on type change so options / relation UI appears
         if (field==='type') { _propEditing=k; _renderDrawer(); }
       });
@@ -750,6 +862,11 @@ function _wire() {
     if (!t.label) { _showErr(d,'Singular name is required.'); return; }
     sb.disabled=true; sb.textContent='Saving…';
     try {
+      const badRelations = (t.fields||[]).filter(f => f.type==='relation' && !f.targetType);
+      if (badRelations.length) {
+        toast.error(`Relation '${badRelations[0].label||badRelations[0].key}' needs a target type`);
+        sb.disabled=false; sb.textContent='Save Changes'; return;
+      }
       await saveCustomObjectType(t);
       if (_onSavedCb) _onSavedCb(t);
       closeTypeEditor();

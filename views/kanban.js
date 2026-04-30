@@ -1302,7 +1302,8 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
 });
 
 // BUG-1 fix: re-render board when a task is deleted
-on(EVENTS.ENTITY_DELETED, ({ entityType } = {}) => {
+on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
+  const entityType = entity?.type;
   if ((entityType === 'task' || !entityType) && _boardEl &&
       document.getElementById('view-kanban')?.classList.contains('active')) {
     _loadData().then(() => _rerenderColumns()).catch(() => {});
