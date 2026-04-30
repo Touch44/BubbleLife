@@ -584,6 +584,13 @@ async function renderObjectStudio(params = {}) {
       mainEl.innerHTML = _buildMain();
     }).catch(() => {});
   }));
+  _unsubList.push(on(EVENTS.ENTITY_DELETED, () => {
+    // Refresh counts when an entity is deleted — otherwise cards show stale counts
+    countByType().then(nc => {
+      Object.assign(counts, nc);
+      mainEl.innerHTML = _buildMain();
+    }).catch(() => {});
+  }));
 }
 
 registerView('object-studio', renderObjectStudio);

@@ -26,7 +26,7 @@ import { registerView, navigate, VIEW_KEYS } from '../core/router.js';
 import { getEntitiesByType, getEntity, getSetting,
          saveEntity, saveEdge, getEdgesFrom }  from '../core/db.js';
 import { emit, on, EVENTS }                    from '../core/events.js';
-import { openEditForm }                         from '../components/entity-form.js';
+import { openEditForm, openForm }               from '../components/entity-form.js';
 import { getAccount }                      from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                            from '../core/toast.js';
@@ -180,6 +180,24 @@ async function _loadData(dateStr) {
   const personMap  = new Map(persons.map(p  => [p.id, p.name  || p.title || p.id]));
   const projectMap = new Map(projects.map(pr => [pr.id, pr.name || pr.title || pr.id]));
 
+  // Build edge-resolved relation maps for tasks (entity-form stores relations as edges)
+  const taskProjectEdgeMap  = new Map(); // taskId → projectId
+  const taskAssigneeEdgeMap = new Map(); // taskId → personId
+  for (const task of fTasks) {
+    if (!task.project) {
+      try {
+        const edges = await getEdgesFrom(task.id, 'project');
+        if (edges.length > 0) taskProjectEdgeMap.set(task.id, edges[0].toId);
+      } catch { /* non-fatal */ }
+    }
+    if (!task.assignedTo) {
+      try {
+        const edges = await getEdgesFrom(task.id, 'assignedTo');
+        if (edges.length > 0) taskAssigneeEdgeMap.set(task.id, edges[0].toId);
+      } catch { /* non-fatal */ }
+    }
+  }
+
   // CS-04: Apply context filtering (persons, auditLog, projects are NOT filtered)
   const fTasks        = _filterByDailyContext(tasks);
   const fEvents       = _filterByDailyContext(events);
@@ -205,7 +223,8 @@ async function _loadData(dateStr) {
 
   return { tasks: fTasks, events: fEvents, notes: fNotes, posts: fPosts,
            appointments: fAppointments, dateEntities: fDateEntities, mealPlans: fMealPlans,
-           auditLog: auditLog || [], personMap, projectMap, accountMap, allComments };
+           auditLog: auditLog || [], personMap, projectMap, accountMap, allComments,
+           taskProjectEdgeMap, taskAssigneeEdgeMap };
 }
 
 /**
@@ -1308,7 +1327,7 @@ function _openNoteModal(entity) {
  * Section 1: Tasks — due today or overdue, sorted overdue-first then priority.
  * personMap and projectMap resolve relation IDs to display names.
  */
-async function _renderTasks(container, dateStr, tasks, personMap, projectMap) {
+async function _renderTasks(container, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap = new Map(), taskAssigneeEdgeMap = new Map()) {
   const filtered = _sortTasks(_filterTasks(tasks, dateStr), dateStr);
   const { wrapper, body } = _buildSection('tasks', '✅', 'Tasks', filtered.length);
   container.appendChild(wrapper);
@@ -1349,8 +1368,10 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap) {
     row.dataset.id  = task.id;
 
     const prioClass    = task.priority ? `prio-${task.priority.toLowerCase()}` : 'prio-none';
-    const projectName  = task.project    ? (projectMap.get(task.project)   || null) : null;
-    const assigneeName = task.assignedTo ? (personMap.get(task.assignedTo) || null) : null;
+    const resolvedProjId    = task.project    || taskProjectEdgeMap.get(task.id);
+    const resolvedAssigneeId = task.assignedTo || taskAssigneeEdgeMap.get(task.id);
+    const projectName  = resolvedProjId    ? (projectMap.get(resolvedProjId)    || null) : null;
+    const assigneeName = resolvedAssigneeId ? (personMap.get(resolvedAssigneeId) || null) : null;
 
     // Checklist progress — visual bar matching kanban K-02 style
     const cl = Array.isArray(task.checklist) ? task.checklist : [];
@@ -2373,7 +2394,8 @@ async function renderDaily(params = {}) {
   try {
     // Load all data in parallel
     const { tasks, events, notes, posts, appointments, dateEntities, mealPlans, auditLog,
-            personMap, projectMap, accountMap, allComments } =
+            personMap, projectMap, accountMap, allComments,
+            taskProjectEdgeMap, taskAssigneeEdgeMap } =
       await _loadData(dateStr);
 
     // ── Sync Daily Review entity + bidirectional links (non-blocking) ─
@@ -2381,6 +2403,7 @@ async function renderDaily(params = {}) {
     _syncDailyReviewLinks(dateStr, {
       tasks, events, notes, posts, appointments, dateEntities, mealPlans, allComments,
     }).catch(err => console.warn('[daily] Daily Review sync error (non-fatal):', err));
+    // Edge maps are local to renderDaily — not passed to sync (sync only uses entity IDs)
 
     // Clear and rebuild
     viewEl.innerHTML = '';
@@ -2404,7 +2427,7 @@ async function renderDaily(params = {}) {
     viewEl.appendChild(sections);
 
     // ── Section 1: Tasks (always first) ────────────────────
-    await _renderTasks(sections, dateStr, tasks, personMap, projectMap);
+    await _renderTasks(sections, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap, taskAssigneeEdgeMap);
     sectionRefs.tasksBody = sections.querySelector('#daily-section-body-tasks');
 
     // ── Section 2: Events (always second) ───────────────────
@@ -2479,7 +2502,9 @@ async function renderDaily(params = {}) {
 // Refresh daily view when a relevant entity is saved (task, event, note, appointment, etc.)
 // Guard on types that actually appear in daily sections to avoid spurious re-renders.
 const _DAILY_REFRESH_TYPES = new Set([
-  'task','event','note','appointment','mealPlan','dateEntity','post','comment'
+  'task','event','note','appointment','mealPlan','dateEntity','post','comment',
+  'idea','goal','habit','shoppingItem','expense','workout','journalEntry',
+  'budgetEntry','contact','recipe','document',
 ]);
 let _dailyRefreshTimer = null;
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {

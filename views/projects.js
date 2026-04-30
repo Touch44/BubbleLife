@@ -14,7 +14,7 @@
  */
 
 import { registerView } from '../core/router.js';
-import { getEntitiesByType } from '../core/db.js';
+import { getEntitiesByType, getEdgesTo, getEdgesFrom } from '../core/db.js';
 import { emit, on, EVENTS } from '../core/events.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { openForm } from '../components/entity-form.js';
@@ -25,6 +25,9 @@ let _tasks = [];
 let _persons = [];
 let _personMap = new Map();
 let _activeFilter = 'All';
+// Edge-resolved map: projectId → Set of taskIds linked via 'project' relation edge
+let _projectTaskEdgeMap  = new Map(); // projectId → Set<taskId>
+let _projectMemberEdgeMap = new Map(); // projectId → [personId, ...]
 
 const STATUS_COLORS = {
   Active:   'var(--color-accent)',
@@ -77,10 +80,39 @@ async function _loadData() {
   _tasks    = filterByContext(tasks.filter(t => !t.deleted));
   _persons  = persons;
   _personMap = new Map(persons.map(p => [p.id, p]));
+  // Build edge-resolved project→tasks map for tasks created via entity-form relations
+  await _buildProjectTaskEdgeMap();
+}
+
+/**
+ * For tasks that store their project as a relation edge (created via entity-form),
+ * build a reverse map of projectId → Set<taskId> so _getProjectTasks finds them.
+ */
+async function _buildProjectTaskEdgeMap() {
+  _projectTaskEdgeMap.clear();
+  _projectMemberEdgeMap.clear();
+  for (const proj of _projects) {
+    // Tasks linked to this project via 'project' relation edge
+    try {
+      const edges = await getEdgesTo(proj.id, 'project');
+      const taskIds = new Set(edges.map(e => e.fromId));
+      if (taskIds.size > 0) _projectTaskEdgeMap.set(proj.id, taskIds);
+    } catch { /* non-fatal */ }
+    // Members linked via 'members' relation edge (entity-form stores as edges)
+    if (!proj.members || proj.members.length === 0) {
+      try {
+        const memberEdges = await getEdgesFrom(proj.id, 'members');
+        if (memberEdges.length > 0) {
+          _projectMemberEdgeMap.set(proj.id, memberEdges.map(e => e.toId));
+        }
+      } catch { /* non-fatal */ }
+    }
+  }
 }
 
 function _getProjectTasks(projectId) {
-  return _tasks.filter(t => t.project === projectId);
+  const edgeTaskIds = _projectTaskEdgeMap.get(projectId) || new Set();
+  return _tasks.filter(t => t.project === projectId || edgeTaskIds.has(t.id));
 }
 
 // ── Main Render ────────────────────────────────────────────────
@@ -210,8 +242,11 @@ async function renderProjects(params = {}) {
     const statusColor = STATUS_COLORS[project.status] || '#6b7280';
     const deadlineOverdue = _isOverdue(project.deadline);
 
-    // Member avatars
-    const members = Array.isArray(project.members) ? project.members : [];
+    // Member avatars — resolve from direct field first, then from edge map
+    const directMembers = Array.isArray(project.members) ? project.members : [];
+    const members = directMembers.length > 0
+      ? directMembers
+      : (_projectMemberEdgeMap.get(project.id) || []);
     const avatarHtml = members.slice(0, 4).map(memberId => {
       const person = _personMap.get(memberId);
       const initials = _getInitials(person?.name || person?.title);

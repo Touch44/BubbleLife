@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v3.7.8 -->
+  <!-- Build: v3.8.0 -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=3.7.8" />
-  <link rel="stylesheet" href="./styles/layout.css?v=3.7.8" />
-  <link rel="stylesheet" href="./styles/components.css?v=3.7.8" />
-  <link rel="stylesheet" href="./styles/dark.css?v=3.7.8" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=3.8.0" />
+  <link rel="stylesheet" href="./styles/layout.css?v=3.8.0" />
+  <link rel="stylesheet" href="./styles/components.css?v=3.8.0" />
+  <link rel="stylesheet" href="./styles/dark.css?v=3.8.0" />
 </head>
 <body>
 
@@ -1106,7 +1106,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=3.7.8', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=3.8.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -1180,7 +1180,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '3.7.8', emit, on, env: window._fhEnv,
+        version: '3.8.0', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

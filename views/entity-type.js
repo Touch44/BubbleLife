@@ -364,7 +364,7 @@ function _renderGrid(items,config) {
 function _renderTable(items,config,sortCol,sortDir) {
   if (!items.length) return '';
   const tfld=config?.fields?.find(f=>f.isTitle)||config?.fields?.[0];
-  const dFlds=(config?.fields||[]).filter(f=>!f.isTitle&&!['richtext'].includes(f.type)).slice(0,6);
+  const dFlds=(config?.fields||[]).filter(f=>!f.isTitle&&!['richtext','relation','multirelation','tags','multiselect','checklist'].includes(f.type)).slice(0,6);
   const arrow=k=>k!==sortCol?'':`<span style="margin-left:3px">${sortDir==='desc'?'↓':'↑'}</span>`;
   const thCls=k=>k===sortCol?'th-sorted':'';
   const thead=`<thead><tr>
@@ -624,6 +624,10 @@ async function renderEntityTypeView(params = {}) {
   // ── Event subscriptions ───────────────────────────────────────
   _unsubList.push(on(EVENTS.ENTITY_SAVED, ({entity}={})=>{
     if (entity?.type===_currentType) renderEntityTypeView({entityType:_currentType,mode:_currentMode,_force:true});
+  }));
+  _unsubList.push(on(EVENTS.ENTITY_DELETED, ({entity}={})=>{
+    // Refresh when an entity of the current type is deleted so the list updates immediately
+    if (!entity || entity.type===_currentType) renderEntityTypeView({entityType:_currentType,mode:_currentMode,_force:true});
   }));
   _unsubList.push(on(EVENTS.TYPE_CREATED, ({typeKey}={})=>{
     if (typeKey===_currentType) renderEntityTypeView({entityType:_currentType,mode:_currentMode,_force:true});

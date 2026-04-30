@@ -66,6 +66,9 @@ let _projects   = [];
 let _personMap  = new Map();
 let _projectMap = new Map();
 let _blockMap   = new Map(); // taskId → true if blocked by incomplete task
+// Edge-resolved relation maps (populated in _loadData for tasks created via entity-form)
+let _taskProjectMap  = new Map(); // taskId → projectId (from 'project' relation edge)
+let _taskAssigneeMap = new Map(); // taskId → personId  (from 'assignedTo' relation edge)
 
 // Filter state
 let _filterProject   = null;   // project ID or null
@@ -99,8 +102,40 @@ async function _loadData() {
   _personMap  = new Map(persons.map(p  => [p.id, p]));
   _projectMap = new Map(projects.map(pr => [pr.id, pr]));
 
-  // Build blocker map: for each task, check if it has blockedBy edges to incomplete tasks
+  // Build blocker map and edge-resolved relation maps
   await _buildBlockerMap();
+  await _buildRelationEdgeMaps();
+}
+
+/**
+ * Build edge-resolved project + assignee maps for tasks.
+ * When tasks are created via entity-form, project/assignedTo are stored as
+ * graph edges (not as direct fields). This resolves those edges so the kanban
+ * card display and filters work correctly regardless of how the task was created.
+ */
+async function _buildRelationEdgeMaps() {
+  _taskProjectMap.clear();
+  _taskAssigneeMap.clear();
+  for (const task of _tasks) {
+    // project edge
+    if (!task.project) {
+      try {
+        const projEdges = await getEdgesFrom(task.id, 'project');
+        if (projEdges.length > 0) {
+          _taskProjectMap.set(task.id, projEdges[0].toId);
+        }
+      } catch { /* non-fatal */ }
+    }
+    // assignedTo edge
+    if (!task.assignedTo) {
+      try {
+        const assignEdges = await getEdgesFrom(task.id, 'assignedTo');
+        if (assignEdges.length > 0) {
+          _taskAssigneeMap.set(task.id, assignEdges[0].toId);
+        }
+      } catch { /* non-fatal */ }
+    }
+  }
 }
 
 async function _buildBlockerMap() {
@@ -121,11 +156,14 @@ async function _buildBlockerMap() {
 
 function _applyFilters(tasks) {
   return tasks.filter(t => {
-    if (_filterProject && t.project !== _filterProject) {
-      // Check edges too — project might be linked via edge
-      return false;
+    if (_filterProject) {
+      const resolvedProj = t.project || _taskProjectMap.get(t.id);
+      if (resolvedProj !== _filterProject) return false;
     }
-    if (_filterAssignees.size > 0 && !_filterAssignees.has(t.assignedTo)) return false;
+    if (_filterAssignees.size > 0) {
+      const resolvedAssignee = t.assignedTo || _taskAssigneeMap.get(t.id);
+      if (!_filterAssignees.has(resolvedAssignee)) return false;
+    }
     if (_filterTags.size > 0) {
       const taskTags = new Set(t.tags || []);
       let hasMatch = false;
@@ -182,7 +220,10 @@ function _collectAllTags() {
 function _collectAssignees() {
   const ids = new Set();
   for (const t of _tasks) {
+    // Collect from direct field AND edge-resolved map so filter chips are complete
     if (t.assignedTo) ids.add(t.assignedTo);
+    const edgeAssignee = _taskAssigneeMap.get(t.id);
+    if (edgeAssignee) ids.add(edgeAssignee);
   }
   return [...ids].map(id => _personMap.get(id)).filter(Boolean);
 }
@@ -407,14 +448,16 @@ function _buildCard(task) {
   const due   = task.dueDate ? task.dueDate.slice(0, 10) : null;
   const dueCls = !due ? '' : due < today ? 'due-overdue' : due === today ? 'due-today' : 'due-future';
 
-  // Project chip
-  const proj = task.project ? _projectMap.get(task.project) : null;
+  // Project chip — resolve from direct field first, then from edge map
+  const resolvedProjId = task.project || _taskProjectMap.get(task.id);
+  const proj = resolvedProjId ? _projectMap.get(resolvedProjId) : null;
   const projChip = proj
     ? `<span class="kanban-card-project" style="border-left:3px solid ${proj.color || 'var(--color-accent)'}">${_esc(proj.name || 'Project')}</span>`
     : '';
 
-  // Assignee avatar
-  const assignee = task.assignedTo ? _personMap.get(task.assignedTo) : null;
+  // Assignee avatar — resolve from direct field first, then from edge map
+  const resolvedAssigneeId = task.assignedTo || _taskAssigneeMap.get(task.id);
+  const assignee = resolvedAssigneeId ? _personMap.get(resolvedAssigneeId) : null;
   // K-03: Use person.color field for avatar background
   const avatarBg = assignee?.color && PERSON_COLOR_MAP[assignee.color]
     ? PERSON_COLOR_MAP[assignee.color]

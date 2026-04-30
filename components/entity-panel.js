@@ -14,7 +14,7 @@ import { getEntity, saveEntity, deleteEntity, getEdgesFrom, getEdgesTo,
 import { getEntityTypeConfig, getAllEntityTypes,
          getNeighbors, convertEntity } from '../core/graph-engine.js';
 import { on, emit, EVENTS } from '../core/events.js';
-import { openEditForm, openQuickCreateModal } from './entity-form.js';
+import { openEditForm, openForm, openQuickCreateModal } from './entity-form.js';
 import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
@@ -920,34 +920,81 @@ async function _showProjectPicker() {
     overflow-y: auto;
   `;
 
-  if (projects.length === 0) {
-    dropdown.innerHTML = '<div style="font-size: var(--text-xs); color: var(--color-text-muted); padding: var(--space-2);">No projects yet</div>';
-  } else {
-    for (const proj of projects) {
-      const item = document.createElement('div');
-      item.style.cssText = `
-        display: flex; align-items: center; gap: var(--space-2);
-        padding: var(--space-1-5) var(--space-2); border-radius: var(--radius-sm);
-        cursor: pointer; font-size: var(--text-sm);
-        transition: background var(--transition-fast);
-      `;
-      item.textContent = `📁 ${proj.name || 'Untitled'}`;
-      item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
-      item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
-      item.addEventListener('click', async () => {
+  // Search input
+  const projSearchInput = document.createElement('input');
+  projSearchInput.type = 'text';
+  projSearchInput.className = 'input';
+  projSearchInput.placeholder = 'Search or create project…';
+  projSearchInput.style.cssText = 'padding:var(--space-1-5) var(--space-2);font-size:var(--text-sm);margin-bottom:var(--space-1);width:100%;box-sizing:border-box;';
+  dropdown.appendChild(projSearchInput);
+
+  const projList = document.createElement('div');
+  projList.style.cssText = 'max-height:160px;overflow-y:auto;';
+  dropdown.appendChild(projList);
+
+  const _renderProjList = (query) => {
+    projList.innerHTML = '';
+    const q = (query || '').toLowerCase().trim();
+    const filtered = projects.filter(p => !p.deleted && (!q || (p.name || '').toLowerCase().includes(q)));
+
+    // + Create new project button
+    const createBtn = document.createElement('div');
+    createBtn.style.cssText = 'padding:var(--space-1-5) var(--space-2);cursor:pointer;' +
+      'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-accent);' +
+      'border-bottom:1px solid var(--color-border);';
+    createBtn.textContent = q ? `+ Create project "${query}"` : '+ New project…';
+    createBtn.addEventListener('click', () => {
+      dropdown.remove();
+      openQuickCreateModal('project', { name: query || '' }, async newProj => {
+        if (!newProj) return;
         await saveEdge({
           fromId:   _entity.id,
           fromType: _entity.type,
-          toId:     proj.id,
+          toId:     newProj.id,
           toType:   'project',
           relation: 'project',
         });
-        dropdown.remove();
         _renderActiveTab();
       });
-      dropdown.appendChild(item);
+    });
+    projList.appendChild(createBtn);
+
+    if (filtered.length === 0) {
+      const noRes = document.createElement('div');
+      noRes.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);padding:var(--space-2);';
+      noRes.textContent = q ? 'No matching projects' : 'No projects yet — create one above';
+      projList.appendChild(noRes);
+    } else {
+      for (const proj of filtered) {
+        const item = document.createElement('div');
+        item.style.cssText = `
+          display: flex; align-items: center; gap: var(--space-2);
+          padding: var(--space-1-5) var(--space-2); border-radius: var(--radius-sm);
+          cursor: pointer; font-size: var(--text-sm);
+          transition: background var(--transition-fast);
+        `;
+        item.textContent = `📁 ${proj.name || 'Untitled'}`;
+        item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
+        item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+        item.addEventListener('click', async () => {
+          await saveEdge({
+            fromId:   _entity.id,
+            fromType: _entity.type,
+            toId:     proj.id,
+            toType:   'project',
+            relation: 'project',
+          });
+          dropdown.remove();
+          _renderActiveTab();
+        });
+        projList.appendChild(item);
+      }
     }
-  }
+  };
+
+  _renderProjList('');
+  projSearchInput.addEventListener('input', () => _renderProjList(projSearchInput.value));
+  setTimeout(() => projSearchInput.focus(), 30);
 
   // Position relative to header
   const header = document.getElementById('entity-panel-header');
@@ -1970,6 +2017,33 @@ async function _showRelationPicker(wrap, field) {
   const picker = document.createElement('div');
   picker.style.cssText = 'display: flex; flex-direction: column; gap: var(--space-2);';
 
+  // Re-render existing chips above the search input so they don't disappear
+  const existingEdges = await getEdgesFrom(_entity.id, field.key).catch(() => []);
+  if (existingEdges.length > 0) {
+    const chipStrip = document.createElement('div');
+    chipStrip.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-1);margin-bottom:var(--space-1);';
+    for (const edge of existingEdges) {
+      const linked = await getEntity(edge.toId).catch(() => null);
+      if (!linked || linked.deleted) continue;
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+      const cfg = getEntityTypeConfig(linked.type);
+      chip.innerHTML = `<span>${cfg?.icon || '📎'}</span><span>${_getDisplayTitle(linked)}</span>`;
+      const rm = document.createElement('span');
+      rm.textContent = '×';
+      rm.style.cssText = 'cursor:pointer;font-weight:bold;color:var(--color-text-muted);margin-left:2px;';
+      rm.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await deleteEdge(edge.id);
+        _renderRelationChips(wrap, field);
+      });
+      chip.appendChild(rm);
+      chipStrip.appendChild(chip);
+    }
+    picker.appendChild(chipStrip);
+  }
+
   const input = document.createElement('input');
   input.type        = 'text';
   input.className   = 'input';
@@ -2005,8 +2079,60 @@ async function _showRelationPicker(wrap, field) {
 
     results.innerHTML = '';
 
+    results.innerHTML = '';
+
+    // "Create new" button — shown when there's a search query
+    if (query) {
+      const createBtn = document.createElement('button');
+      const relCfg = field.relatesTo ? getEntityTypeConfig(field.relatesTo) : null;
+      createBtn.style.cssText = 'width:100%;text-align:left;padding:var(--space-1-5) var(--space-2);' +
+        'border:1px dashed var(--color-accent);border-radius:var(--radius-sm);' +
+        'background:var(--color-accent-muted);color:var(--color-accent);' +
+        'font-size:var(--text-xs);font-weight:var(--weight-semibold);cursor:pointer;' +
+        'margin-bottom:var(--space-1);';
+      const typeLabel = relCfg?.label || field.relatesTo || 'entity';
+      createBtn.textContent = `+ Create "${input.value.trim()}" as ${typeLabel}`;
+      createBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const q = input.value.trim();
+        const targetType = field.relatesTo || null;
+        if (targetType) {
+          openQuickCreateModal(targetType, { title: q, name: q }, async newEnt => {
+            if (!newEnt) return;
+            await saveEdge({
+              fromId:   _entity.id,
+              fromType: _entity.type,
+              toId:     newEnt.id,
+              toType:   newEnt.type,
+              relation: field.key,
+            });
+            _renderRelationChips(wrap, field);
+          });
+        } else {
+          // No target type — open full entity form to create any type
+          openForm('note', { title: q }, async newEnt => {
+            if (!newEnt) return;
+            await saveEdge({
+              fromId:   _entity.id,
+              fromType: _entity.type,
+              toId:     newEnt.id,
+              toType:   newEnt.type,
+              relation: field.key,
+            });
+            _renderRelationChips(wrap, field);
+          });
+        }
+      });
+      results.appendChild(createBtn);
+    }
+
     if (filtered.length === 0) {
-      results.innerHTML = '<div style="font-size: var(--text-xs); color: var(--color-text-muted); padding: var(--space-2);">No results</div>';
+      if (!query || !field.relatesTo) {
+        const noRes = document.createElement('div');
+        noRes.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);padding:var(--space-2);';
+        noRes.textContent = query ? 'No matches — use the create button above' : 'No results';
+        results.appendChild(noRes);
+      }
       return;
     }
 

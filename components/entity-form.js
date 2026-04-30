@@ -10,7 +10,7 @@
  *   initEntityForm()                           — wire FAB events (call once on boot)
  */
 
-import { saveEntity, saveEdge, getEntitiesByType, getEntity } from '../core/db.js';
+import { saveEntity, saveEdge, deleteEdge, getEdgesFrom, getEntitiesByType, getEntity } from '../core/db.js';
 import { getEntityTypeConfig, getAllEntityTypes }        from '../core/graph-engine.js';
 import { emit, EVENTS }                                from '../core/events.js';
 import { toast }                                       from '../core/toast.js';
@@ -916,18 +916,16 @@ function _buildFieldControl(field, config) {
       return wrap;
     }
 
-    // ── RELATION (search-as-you-type) ─────────────────────── //
+    // ── RELATION (search-as-you-type, works in create AND edit mode) ──── //
     case 'relation': {
-      // In edit mode, relations are managed from the panel's Relations tab.
-      // Show a read-only info note so users know where to go.
-      if (_editEntity) {
-        const note = document.createElement('span');
-        note.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);display:block;padding:var(--space-1) 0;';
-        note.textContent = 'Manage links from the Relations tab in the panel';
-        return note;
-      }
       if (!_relationValues.has(field.key)) {
         _relationValues.set(field.key, []);
+      }
+      // In edit mode: load existing edges so chips populate immediately.
+      if (_editEntity) {
+        _loadExistingEdges(_editEntity.id, field).catch(err =>
+          console.warn('[entity-form] edge pre-load failed:', err)
+        );
       }
       return _buildRelationControl(field, config);
     }
@@ -1109,6 +1107,72 @@ export function openQuickCreateModal(typeKey, prefill = {}, onCreated) {
 
 
 // ════════════════════════════════════════════════════════════
+// RELATION HELPERS
+// ════════════════════════════════════════════════════════════
+
+/**
+ * For edit mode: fetch existing edges for a relation field and populate _relationValues.
+ * Then refresh the chips UI if the control is already mounted.
+ */
+async function _loadExistingEdges(entityId, field) {
+  try {
+    const edges = await getEdgesFrom(entityId, field.key);
+    if (!edges.length) return;
+    const entities = await Promise.all(
+      edges.map(e => getEntity(e.toId).catch(() => null))
+    );
+    const valid = entities.filter(Boolean).filter(e => !e.deleted);
+    if (!valid.length) return;
+    const mapped = valid.map(e => ({
+      id:    e.id,
+      label: _getDisplayTitle(e),
+      type:  e.type,
+    }));
+    _relationValues.set(field.key, mapped);
+    // Re-render chips if control is already in DOM
+    const control = _overlay?.querySelector(
+      `[data-field="${field.key}"] .ef-relation-control`
+    );
+    if (control) {
+      const chipRow = control.querySelector('.ef-relation-chips');
+      if (chipRow) _refreshRelationChipsDom(chipRow, field.key);
+    }
+  } catch (err) {
+    console.warn('[entity-form] _loadExistingEdges failed:', err);
+  }
+}
+
+/**
+ * Re-render the chips row from current _relationValues.
+ */
+function _refreshRelationChipsDom(chipRow, fieldKey) {
+  chipRow.innerHTML = '';
+  const vals = _relationValues.get(fieldKey) || [];
+  for (let i = 0; i < vals.length; i++) {
+    const entity = vals[i];
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+    chip.dataset.id = entity.id;
+    const label = document.createElement('span');
+    label.textContent = entity.label || entity.id;
+    chip.appendChild(label);
+    const rm = document.createElement('span');
+    rm.textContent = '×';
+    rm.style.cssText = 'cursor:pointer;font-weight:bold;color:var(--color-text-muted);margin-left:2px;';
+    rm.addEventListener('click', (function(idx) {
+      return function() {
+        const arr = _relationValues.get(fieldKey) || [];
+        arr.splice(idx, 1);
+        _refreshRelationChipsDom(chipRow, fieldKey);
+      };
+    })(i));
+    chip.appendChild(rm);
+    chipRow.appendChild(chip);
+  }
+}
+
+// ════════════════════════════════════════════════════════════
 // RELATION CONTROL
 // ════════════════════════════════════════════════════════════
 
@@ -1159,30 +1223,7 @@ function _buildRelationControl(field, config) {
   });
 
   const _renderChips = () => {
-    chipRow.innerHTML = '';
-    const ids = _relationValues.get(field.key) || [];
-    for (let i = 0; i < ids.length; i++) {
-      const chip = document.createElement('span');
-      chip.className = 'tag-chip';
-      chip.style.cssText = 'display: inline-flex; align-items: center; gap: 4px;';
-      // Show ID shortened as placeholder — resolved at save time
-      chip.dataset.id = ids[i].id;
-
-      const label = document.createElement('span');
-      label.textContent = ids[i].label || ids[i].id;
-      chip.appendChild(label);
-
-      const rm = document.createElement('span');
-      rm.textContent = '×';
-      rm.style.cssText = 'cursor: pointer; font-weight: bold; color: var(--color-text-muted); margin-left: 2px;';
-      rm.addEventListener('click', () => {
-        const arr = _relationValues.get(field.key) || [];
-        arr.splice(i, 1);
-        _renderChips();
-      });
-      chip.appendChild(rm);
-      chipRow.appendChild(chip);
-    }
+    _refreshRelationChipsDom(chipRow, field.key);
   };
 
   const typeToSearch = field.relatesTo || null;
@@ -1358,21 +1399,52 @@ async function _submitForm() {
     const account = getAccount();
     const saved = await saveEntity(entityData, account?.id);
 
-    // ── Save relation edges ───────────────────────────────── //
+    // ── Save relation edges (diff-aware: add new, remove deleted) ──── //
     for (const field of config.fields) {
       if (field.type !== 'relation') continue;
       const targets = _relationValues.get(field.key) || [];
-      for (const target of targets) {
+      const targetIds = new Set(targets.map(t => t.id));
+
+      if (_editEntity) {
+        // Edit mode: fetch existing edges, remove ones no longer selected, add new ones
         try {
-          await saveEdge({
-            fromId:   saved.id,
-            fromType: saved.type,
-            toId:     target.id,
-            toType:   target.type || field.relatesTo || '',
-            relation: field.key,
-          });
-        } catch (edgeErr) {
-          console.warn('[entity-form] Edge save failed:', edgeErr);
+          const existing = await getEdgesFrom(saved.id, field.key);
+          const existingToIds = new Set(existing.map(e => e.toId));
+          // Remove deselected
+          for (const edge of existing) {
+            if (!targetIds.has(edge.toId)) {
+              try { await deleteEdge(edge.id); } catch(de) { console.warn('[entity-form] deleteEdge failed:', de); }
+            }
+          }
+          // Add newly selected
+          for (const target of targets) {
+            if (!existingToIds.has(target.id)) {
+              try {
+                await saveEdge({
+                  fromId:   saved.id,
+                  fromType: saved.type,
+                  toId:     target.id,
+                  toType:   target.type || field.relatesTo || '',
+                  relation: field.key,
+                });
+              } catch (edgeErr) { console.warn('[entity-form] Edge save failed:', edgeErr); }
+            }
+          }
+        } catch (edgeErr) { console.warn('[entity-form] Edge diff failed:', edgeErr); }
+      } else {
+        // Create mode: just save all selected
+        for (const target of targets) {
+          try {
+            await saveEdge({
+              fromId:   saved.id,
+              fromType: saved.type,
+              toId:     target.id,
+              toType:   target.type || field.relatesTo || '',
+              relation: field.key,
+            });
+          } catch (edgeErr) {
+            console.warn('[entity-form] Edge save failed:', edgeErr);
+          }
         }
       }
     }

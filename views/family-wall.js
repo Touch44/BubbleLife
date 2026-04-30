@@ -25,6 +25,7 @@ import { emit, on, EVENTS }          from '../core/events.js';
 import { getAccount }                 from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                      from '../core/toast.js';
+import { MILESTONE_TYPES as _ACTIVITY_MILESTONE_TYPES } from '../services/activity.js';
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -675,50 +676,99 @@ function _buildCompose(el, pm, apm) {
 // ── Post card ────────────────────────────────────────────────
 
 // -- Activity card (system-generated events) -------------------
-function _buildActivityCard(activity) {
-  const iconMap = {
-    'task:created':          '\u2705',
-    'task:completed':        '\uD83C\uDF89',
-    'task:overdue':          '\u23F0',
-    'project:created':       '\uD83D\uDCC1',
-    'project:statusChanged': '\uD83D\uDCCA',
-    'event:created':         '\uD83D\uDCC5',
-    'note:created':          '\uD83D\uDCDD',
-    'budgetEntry:created':   '\uD83D\uDCB0',
-    'recipe:created':        '\uD83C\uDF7D',
-    'document:created':      '\uD83D\uDCC4',
-    'entity:deleted':        '\uD83D\uDDD1',
-    'type:created':          '\u2728',
-  };
+const _ACTIVITY_ICONS = {
+  'task:created':              '\u2705',
+  'task:completed':            '\uD83C\uDF89',
+  'task:overdue':              '\u23F0',
+  'task:assigned':             '\uD83D\uDC64',
+  'project:created':           '\uD83D\uDCC1',
+  'project:statusChanged':     '\uD83D\uDCCA',
+  'project:completed':         '\uD83C\uDFC6',
+  'event:created':             '\uD83D\uDCC5',
+  'event:attended':            '\u2728',
+  'note:created':              '\uD83D\uDCDD',
+  'budgetEntry:created':       '\uD83D\uDCB0',
+  'recipe:created':            '\uD83C\uDF7D',
+  'document:created':          '\uD83D\uDCC4',
+  'contact:created':           '\uD83D\uDC64',
+  'idea:created':              '\uD83D\uDCA1',
+  'goal:created':              '\uD83C\uDFAF',
+  'goal:achieved':             '\uD83C\uDFC6',
+  'habit:created':             '\uD83D\uDD04',
+  'habit:streak':              '\uD83D\uDD25',
+  'shoppingItem:created':      '\uD83D\uDED2',
+  'appointment:created':       '\uD83D\uDCC5',
+  'medication:created':        '\uD83D\uDC8A',
+  'activityLog:created':       '\uD83C\uDFC3',
+  'expense:created':           '\uD83D\uDCB3',
+  'workout:created':           '\uD83D\uDCAA',
+  'journalEntry:created':      '\uD83D\uDCD4',
+  'wish:created':              '\u2728',
+  'entity:deleted':            '\uD83D\uDDD1',
+  'type:created':              '\u2728',
+  'milestone:posted':          '\uD83C\uDFC6',
+};
 
+// Use shared milestone types from activity service for consistency
+const _MILESTONE_ACTIVITY_TYPES = _ACTIVITY_MILESTONE_TYPES;
+
+function _buildActivityCard(activity) {
   const card = document.createElement('div');
-  card.className = 'fw-activity-card';
+  card.className = 'fw-activity-card' +
+    (_MILESTONE_ACTIVITY_TYPES.has(activity.activityType) ? ' fw-activity-milestone' : '');
 
   const iconDiv = document.createElement('div');
   iconDiv.className = 'fw-activity-icon';
-  iconDiv.textContent = iconMap[activity.activityType] || '\uD83D\uDD14';
+  iconDiv.textContent = _ACTIVITY_ICONS[activity.activityType] || '\uD83D\uDD14';
 
-  const bodySpan = document.createElement('span');
-  bodySpan.textContent = activity.body || '';
-
+  // Body: render body text with entity title as an inline clickable link
   const bodyDiv = document.createElement('div');
   bodyDiv.className = 'fw-activity-body';
-  bodyDiv.appendChild(bodySpan);
 
-  if (activity.entityId && activity.entityType &&
-      activity.activityType !== 'entity:deleted') {
-    const link = document.createElement('a');
-    link.className = 'fw-activity-link';
-    link.href = '#';
-    link.textContent = ' ' + (activity.entityTitle || 'View');
-    link.addEventListener('click', e => {
-      e.preventDefault();
-      emit(EVENTS.PANEL_OPENED, {
-        entityId:   activity.entityId,
-        entityType: activity.entityType,
+  const entityTitle = activity.entityTitle || '';
+  const bodyText    = activity.body || '';
+  const canLink     = !!(activity.entityId && activity.entityType &&
+                      activity.activityType !== 'entity:deleted');
+
+  if (canLink && entityTitle && bodyText.includes(entityTitle)) {
+    const parts = bodyText.split(entityTitle);
+    if (parts.length >= 2) {
+      bodyDiv.appendChild(document.createTextNode(parts[0]));
+      const link = document.createElement('a');
+      link.className = 'fw-activity-link';
+      link.href = '#';
+      link.textContent = entityTitle;
+      link.title = 'Open ' + entityTitle;
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        emit(EVENTS.PANEL_OPENED, {
+          entityId:   activity.entityId,
+          entityType: activity.entityType,
+        });
       });
-    });
-    bodyDiv.appendChild(link);
+      bodyDiv.appendChild(link);
+      bodyDiv.appendChild(document.createTextNode(parts.slice(1).join(entityTitle)));
+    } else {
+      bodyDiv.textContent = bodyText;
+    }
+  } else if (canLink) {
+    bodyDiv.textContent = bodyText;
+    if (entityTitle) {
+      const link = document.createElement('a');
+      link.className = 'fw-activity-link';
+      link.href = '#';
+      link.textContent = ' \u2192 Open';
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        emit(EVENTS.PANEL_OPENED, {
+          entityId:   activity.entityId,
+          entityType: activity.entityType,
+        });
+      });
+      bodyDiv.appendChild(link);
+    }
+  } else {
+    bodyDiv.textContent = bodyText;
   }
 
   const actorSpan = document.createElement('span');
@@ -730,9 +780,12 @@ function _buildActivityCard(activity) {
   timeSpan.title = activity.createdAt ? new Date(activity.createdAt).toLocaleString() : '';
   timeSpan.textContent = _timeAgo(activity.createdAt);
 
+  const isMilestone = _MILESTONE_ACTIVITY_TYPES.has(activity.activityType);
   const badgeSpan = document.createElement('span');
-  badgeSpan.className = 'fw-activity-badge';
-  badgeSpan.textContent = 'Activity';
+  badgeSpan.className = isMilestone
+    ? 'fw-activity-badge fw-activity-badge-milestone'
+    : 'fw-activity-badge';
+  badgeSpan.textContent = isMilestone ? 'Milestone' : 'Activity';
 
   const metaDiv = document.createElement('div');
   metaDiv.className = 'fw-activity-meta';
@@ -745,6 +798,7 @@ function _buildActivityCard(activity) {
   card.append(iconDiv, contentDiv);
   return card;
 }
+
 
 async function _buildCard(post, pm, apm) {
   const card=document.createElement('article');
@@ -1059,6 +1113,8 @@ function _injectStyles() {
     .fw-activity-badge{font-size:9px;font-weight:var(--weight-bold);letter-spacing:.04em;
       text-transform:uppercase;padding:1px 5px;border-radius:3px;
       background:var(--color-accent-muted);color:var(--color-accent);margin-left:auto;}
+    .fw-activity-badge-milestone{background:#fef3c7;color:#92400e;}
+    .fw-activity-milestone{border-left:3px solid #f59e0b;background:var(--color-surface);}
     @media(max-width:600px){#view-activity-center.active{padding:var(--space-3);}}
 
     .fw-filter-bar { display:flex; flex-direction:column; gap:var(--space-2); padding:var(--space-3); background:var(--color-surface); border:1px solid var(--color-border); border-radius:var(--radius-md); }
@@ -1260,7 +1316,7 @@ async function renderWall(params={}) {
       if (!filtered.length) {
         const empty=document.createElement('div'); empty.className='fw-empty';
         if (_filterPostType === 'Activities') {
-          empty.textContent = 'No activity yet — actions like creating tasks, notes, and projects will appear here.';
+          empty.textContent = 'No activity yet — creating tasks, completing goals, posting milestones, and other key actions appear here.';
         } else if (_filterPinnedOnly || _filterPostType !== 'All' || _filterMemberId || _filterTag) {
           empty.textContent = 'No items match your filters.';
         } else {

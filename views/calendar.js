@@ -24,7 +24,7 @@
  */
 
 import { registerView }              from '../core/router.js';
-import { getEntitiesByType, getEntity, saveEntity } from '../core/db.js';
+import { getEntitiesByType, getEntity, saveEntity, getEdgesFrom } from '../core/db.js';
 import { emit, on, EVENTS }         from '../core/events.js';
 import { openEditForm }              from '../components/entity-form.js';
 import { getAccount }                from '../core/auth.js';
@@ -32,6 +32,8 @@ import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                     from '../core/toast.js';
 
 // ── Constants ─────────────────────────────────────────────── //
+// Module-level edge map for task assignee resolution (set during render from _loadData)
+let _calTaskAssigneeEdgeMap = new Map();
 
 const DONE_STATUSES = new Set(['done', 'Done']);
 
@@ -112,8 +114,10 @@ function _getColor(type)  { return ENTITY_REGISTRY[type]?.color || 'var(--color-
 
 // C-01: Get color for an item, preferring assignee person color over entity-type color
 function _getItemColor(entityType, entity, personMap) {
-  if (personMap && entity.assignedTo) {
-    const person = personMap.get(entity.assignedTo);
+  // Resolve assignedTo from direct field OR edge map (entity-form stores as edge)
+  const resolvedAssigneeId = entity.assignedTo || _calTaskAssigneeEdgeMap.get(entity.id);
+  if (personMap && resolvedAssigneeId) {
+    const person = personMap.get(resolvedAssigneeId);
     if (person?.color && PERSON_COLOR_MAP[person.color]) {
       return PERSON_COLOR_MAP[person.color];
     }
@@ -294,6 +298,18 @@ async function _loadData() {
 
   // C-01: build personMap (id → person entity) for color lookups
   data._personMap = new Map(personRaw.filter(p => !p.deleted).map(p => [p.id, p]));
+
+  // Build edge-resolved assignedTo map for tasks (entity-form stores assignedTo as edge)
+  const taskAssigneeEdgeMap = new Map();
+  for (const task of (data.task || [])) {
+    if (!task.assignedTo) {
+      try {
+        const edges = await getEdgesFrom(task.id, 'assignedTo');
+        if (edges.length > 0) taskAssigneeEdgeMap.set(task.id, edges[0].toId);
+      } catch { /* non-fatal */ }
+    }
+  }
+  data._taskAssigneeEdgeMap = taskAssigneeEdgeMap;
   return data;
 }
 
@@ -2400,6 +2416,7 @@ async function renderCalendar(params = {}) {
   try {
     const data = await _loadData();
     const _personMap = data._personMap || new Map(); // C-01
+    _calTaskAssigneeEdgeMap = data._taskAssigneeEdgeMap || new Map(); // edge-resolved assignedTo
 
     // Compute date range for the current view
     const year  = _anchorDate.getFullYear();
