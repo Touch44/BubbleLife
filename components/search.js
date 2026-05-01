@@ -344,6 +344,13 @@ async function _renderSearchResults(query) {
 
 const COMMANDS = [
   {
+    label:   'Dashboard',
+    detail:  'Go to Dashboard',
+    icon:    '⊹',
+    keys:    ['dashboard', 'home'],
+    action:  () => { closeSearch(); navigate(VIEW_KEYS.DASHBOARD || 'dashboard'); },
+  },
+  {
     label:   'Daily Review',
     detail:  'Go to Daily Review',
     icon:    '📋',
@@ -376,7 +383,7 @@ const COMMANDS = [
     detail:  'Go to Family Wall',
     icon:    '🏡',
     keys:    ['family', 'wall', 'post'],
-    action:  () => { closeSearch(); navigate(VIEW_KEYS.FAMILY_WALL); },
+    action:  () => { closeSearch(); navigate(VIEW_KEYS.ACTIVITY_CENTER); },
   },
   {
     label:   'Settings',

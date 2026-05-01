@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v3.8.0 -->
+  <!-- Build: v3.9.0 -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=3.8.0" />
-  <link rel="stylesheet" href="./styles/layout.css?v=3.8.0" />
-  <link rel="stylesheet" href="./styles/components.css?v=3.8.0" />
-  <link rel="stylesheet" href="./styles/dark.css?v=3.8.0" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=3.9.0" />
+  <link rel="stylesheet" href="./styles/layout.css?v=3.9.0" />
+  <link rel="stylesheet" href="./styles/components.css?v=3.9.0" />
+  <link rel="stylesheet" href="./styles/dark.css?v=3.9.0" />
 </head>
 <body>
 
@@ -242,6 +242,13 @@
 
       <!-- Primary views -->
       <li role="listitem">
+        <button class="nav-item" data-view="dashboard"
+                aria-label="Dashboard">
+          <span class="nav-item-icon" aria-hidden="true">⊹</span>
+          <span class="nav-item-label">Dashboard</span>
+        </button>
+      </li>
+      <li role="listitem">
         <button class="nav-item" data-view="daily"
                 aria-label="Daily Review">
           <span class="nav-item-icon" aria-hidden="true">◈</span>
@@ -423,6 +430,12 @@
 
     <!-- All view shells (empty, hidden by default) -->
     <!-- Each activated by router.js adding class="active" -->
+
+    <!-- Dashboard -->
+    <div id="view-dashboard" class="view" role="region" aria-label="Dashboard"
+         aria-hidden="true">
+      <!-- Populated by views/dashboard.js -->
+    </div>
 
     <!-- Daily Review -->
     <div id="view-daily" class="view" role="region" aria-label="Daily Review"
@@ -710,6 +723,7 @@
    */
 
   // ── Core imports ──────────────────────────────────────────
+  import './views/dashboard.js';                              // registers 'dashboard' view
   import './views/daily.js';                                  // registers 'daily' view
   import './views/kanban.js';                                 // registers 'kanban' view
   import './views/calendar.js';                               // registers 'calendar' view
@@ -876,9 +890,13 @@
       });
 
       // Handle SW_UPDATED message from service worker (P-20)
+      // Only show the toast if there was already a controlling SW when the page loaded
+      // (i.e. this is a genuine update, not a first-time SW installation).
+      // Without this guard, the toast fires on every fresh page load after a new SW activates.
       if ('serviceWorker' in navigator) {
+        const _hadControllerAtLoad = !!navigator.serviceWorker.controller;
         navigator.serviceWorker.addEventListener('message', (e) => {
-          if (e.data?.type === 'SW_UPDATED') {
+          if (e.data?.type === 'SW_UPDATED' && _hadControllerAtLoad) {
             showToast('Update available — reload to get the latest version', 'info', {
               duration: 0,
               action: { label: 'Reload', onClick: () => window.location.reload() },
@@ -1106,7 +1124,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=3.8.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=3.9.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -1180,7 +1198,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '3.8.0', emit, on, env: window._fhEnv,
+        version: '3.9.0', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

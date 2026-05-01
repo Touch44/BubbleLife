@@ -178,7 +178,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v3.8.0</div>
+          <div><strong>FamilyHub</strong> v3.9.0</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -193,24 +193,26 @@ async function renderSettings() {
   // ── Wire event handlers ───────────────────────────────────
 
   // Theme toggle
-  el.querySelector('#settings-theme-light')?.addEventListener('click', () => {
+  const _applyTheme = (mode) => {
     if (env?.services?.theme) {
-      env.services.theme.setTheme({ mode: 'light' });
+      env.services.theme.setTheme({ mode });
       renderSettings(); // re-render to update button states
-    }
-  });
-  el.querySelector('#settings-theme-dark')?.addEventListener('click', () => {
-    if (env?.services?.theme) {
-      env.services.theme.setTheme({ mode: 'dark' });
+    } else {
+      // Fallback: apply theme directly via data-theme attribute
+      const html = document.documentElement;
+      if (mode === 'auto') {
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+      } else {
+        html.setAttribute('data-theme', mode);
+      }
+      try { localStorage.setItem('fh_theme', mode); } catch { /* ignore */ }
       renderSettings();
     }
-  });
-  el.querySelector('#settings-theme-auto')?.addEventListener('click', () => {
-    if (env?.services?.theme) {
-      env.services.theme.setTheme({ mode: 'auto' });
-      renderSettings();
-    }
-  });
+  };
+  el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyTheme('light'));
+  el.querySelector('#settings-theme-dark')?.addEventListener('click',  () => _applyTheme('dark'));
+  el.querySelector('#settings-theme-auto')?.addEventListener('click',  () => _applyTheme('auto'));
 
   // Invite
   el.querySelector('#settings-invite-btn')?.addEventListener('click', async () => {
@@ -253,7 +255,10 @@ async function renderSettings() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `familyhub-export-${new Date().toISOString().slice(0, 10)}.json`;
+      // Use local date, not toISOString() which would shift in UTC-negative timezones
+      const _nd = new Date();
+      const _ds = `${_nd.getFullYear()}-${String(_nd.getMonth()+1).padStart(2,'0')}-${String(_nd.getDate()).padStart(2,'0')}`;
+      a.download = `familyhub-export-${_ds}.json`;
       a.click();
       URL.revokeObjectURL(url);
       if (statusDiv) {

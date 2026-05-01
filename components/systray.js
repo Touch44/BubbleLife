@@ -18,7 +18,7 @@
 
 import { systrayRegistry } from '../core/registry.js';
 import { computed, signal, effect } from '../core/signals.js';
-import { navigate } from '../core/router.js';
+import { navigate, VIEW_KEYS } from '../core/router.js';
 import { on, EVENTS } from '../core/events.js';
 
 let _env    = null;
@@ -114,7 +114,7 @@ function _buildTasksDueItem() {
   });
 
   el.addEventListener('click', () => {
-    navigate('kanban', { filter: 'overdue' });
+    navigate(VIEW_KEYS.KANBAN, { filter: 'overdue' });
   });
 
   return el;
@@ -153,7 +153,7 @@ function _buildEventsItem() {
   el.addEventListener('click', () => {
     const d = new Date();
     const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    navigate('calendar', { date: today });
+    navigate(VIEW_KEYS.CALENDAR, { date: today });
   });
 
   return el;

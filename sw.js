@@ -4,15 +4,15 @@
  */
 'use strict';
 
-const APP_VERSION   = '3.8.0';
+const APP_VERSION   = '3.9.0';
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
   './', './index.html', './manifest.json',
-  './styles/tokens.css?v=3.8.0', './styles/layout.css?v=3.8.0',
-  './styles/components.css?v=3.8.0', './styles/dark.css?v=3.8.0',
+  './styles/tokens.css?v=3.9.0', './styles/layout.css?v=3.9.0',
+  './styles/components.css?v=3.9.0', './styles/dark.css?v=3.9.0',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
@@ -30,6 +30,7 @@ const SHELL_FILES = [
   './views/family-wall.js', './views/stub-views.js',
   './views/notes.js', './views/projects.js', './views/settings.js',
   './views/generic-list.js',
+  './views/dashboard.js',
   './views/entity-type.js', './views/graph-view.js', './views/object-studio.js',
   './icons/icon-192.png', './icons/icon-192-maskable.png',
   './icons/icon-512.png', './icons/icon-512-maskable.png',

@@ -335,11 +335,11 @@ async function renderProjects(params = {}) {
 
 // ── Module-level listeners ─────────────────────────────────────
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
-  if ((entity?.type === 'project' || entity?.type === 'task') &&
-      document.getElementById('view-projects')?.classList.contains('active')) {
-    // Full reload — entity data has changed
-    renderProjects();
-  }
+  // Refresh on project/task saves, and person saves (member avatars use _personMap)
+  const PROJ_REFRESH_TYPES = new Set(['project', 'task', 'person']);
+  if (entity && !PROJ_REFRESH_TYPES.has(entity.type)) return;
+  if (!document.getElementById('view-projects')?.classList.contains('active')) return;
+  renderProjects();
 });
 
 on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {

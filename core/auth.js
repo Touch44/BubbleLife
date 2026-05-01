@@ -1139,7 +1139,8 @@ function _showApp(auth) {
   import('./router.js').then(({ navigate, handleInitialHash, wireNavItems, VIEW_KEYS }) => {
     wireNavItems();
     if (!handleInitialHash()) {
-      navigate(VIEW_KEYS.DAILY);
+      // Navigate to dashboard as the default home view (falls back to daily if dashboard not registered)
+      navigate(VIEW_KEYS.DASHBOARD || 'dashboard');
     }
   });
 }

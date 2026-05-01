@@ -156,6 +156,7 @@ export function createCommandService(env) {
  */
 function _seedBuiltins(env, add) {
   const NAV_COMMANDS = [
+    { id: 'nav.dashboard', label: 'Go to Dashboard',        shortcut: 'H', icon: '⊹', category: 'Navigate', view: 'dashboard' },
     { id: 'nav.daily',    label: 'Go to Daily Review',    shortcut: 'D', icon: '◈', category: 'Navigate', view: 'daily'    },
     { id: 'nav.kanban',   label: 'Go to Tasks / Kanban',  shortcut: 'K', icon: '⊡', category: 'Navigate', view: 'kanban'   },
     { id: 'nav.calendar', label: 'Go to Calendar',        shortcut: 'C', icon: '▦', category: 'Navigate', view: 'calendar' },

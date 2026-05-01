@@ -10,10 +10,12 @@
  */
 
 import { getEntity, saveEntity, deleteEntity, getEdgesFrom, getEdgesTo,
-         saveEdge, deleteEdge, getSetting, setSetting, getEntitiesByType } from '../core/db.js';
+         saveEdge, deleteEdge, getSetting, setSetting, getEntitiesByType,
+         queryEntities } from '../core/db.js';
 import { getEntityTypeConfig, getAllEntityTypes,
          getNeighbors, convertEntity } from '../core/graph-engine.js';
 import { on, emit, EVENTS } from '../core/events.js';
+import { toast, showToast }     from '../core/toast.js';
 import { openEditForm, openForm, openQuickCreateModal } from './entity-form.js';
 import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
@@ -237,9 +239,7 @@ export function initEntityPanel() {
       // Auto-save if dirty before closing — prevents silent data loss on navigation
       if (_dirty && _entity) {
         _save().catch(() => {});  // best-effort; error shown by _save() internally
-        import('../core/toast.js').then(({ toast }) => {
-          toast.info('Changes saved automatically.');
-        }).catch(() => {});
+        toast.info('Changes saved automatically.');
       }
       _panel.classList.remove('open');
       _panel.classList.remove('modal-mode');
@@ -276,7 +276,6 @@ export function initEntityPanel() {
  */
 async function _repairCorruptedTypes() {
   try {
-    const { getEntitiesByType: _gbt } = await import('../core/db.js');
     const allTypes = getAllEntityTypes({ includeArchived: true });
     const knownKeys = new Set(allTypes.map(t => t.key));
 
@@ -294,8 +293,7 @@ async function _repairCorruptedTypes() {
     }
 
     // Scan all entities — find ones with unrecognised type
-    const db = await import('../core/db.js');
-    const allEntities = await db.queryEntities({ includeDeleted: false });
+    const allEntities = await queryEntities({ includeDeleted: false });
     let repairCount = 0;
 
     for (const entity of allEntities) {
@@ -306,7 +304,7 @@ async function _repairCorruptedTypes() {
       if (correctType) {
         entity._subtype = entity.type;
         entity.type = correctType;
-        await db.saveEntity(entity);
+        await saveEntity(entity);
         repairCount++;
       }
     }
@@ -907,7 +905,6 @@ async function _showProjectPicker() {
   const existing = document.querySelector('.panel-project-picker');
   if (existing) { existing.remove(); return; }
 
-  const { getEntitiesByType } = await import('../core/db.js');
   const projects = (await getEntitiesByType('project')).filter(p => !p.deleted);
 
   const dropdown = document.createElement('div');
@@ -1883,8 +1880,15 @@ async function _renderRelationChips(wrap, field) {
   const chipContainer = document.createElement('div');
   chipContainer.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center;';
 
+  // Guard: capture entity ID before any await — panel may close mid-async
+  if (!_entity) return;
+  const _entityIdForChips = _entity.id;
+
   // Get edges from this entity for this relation field
-  const edges = await getEdgesFrom(_entity.id, field.key);
+  const edges = await getEdgesFrom(_entityIdForChips, field.key);
+
+  // Guard: entity panel may have been closed or navigated away during await
+  if (!_entity || _entity.id !== _entityIdForChips) return;
 
   for (const edge of edges) {
     const linked = await getEntity(edge.toId);
@@ -2017,8 +2021,15 @@ async function _showRelationPicker(wrap, field) {
   const picker = document.createElement('div');
   picker.style.cssText = 'display: flex; flex-direction: column; gap: var(--space-2);';
 
+  // Guard: capture entity ref before any await
+  if (!_entity) return;
+  const _entityRefForPicker = _entity;
+
   // Re-render existing chips above the search input so they don't disappear
-  const existingEdges = await getEdgesFrom(_entity.id, field.key).catch(() => []);
+  const existingEdges = await getEdgesFrom(_entityRefForPicker.id, field.key).catch(() => []);
+
+  // Guard: entity panel may have closed during await
+  if (!_entity || _entity.id !== _entityRefForPicker.id) return;
   if (existingEdges.length > 0) {
     const chipStrip = document.createElement('div');
     chipStrip.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-1);margin-bottom:var(--space-1);';
@@ -2058,8 +2069,6 @@ async function _showRelationPicker(wrap, field) {
   wrap.appendChild(picker);
   input.focus();
 
-  const { getEntitiesByType } = await import('../core/db.js');
-
   const doSearch = async () => {
     const query   = input.value.toLowerCase().trim();
     const relType = field.relatesTo || null;
@@ -2076,8 +2085,6 @@ async function _showRelationPicker(wrap, field) {
       const t = _getDisplayTitle(e).toLowerCase();
       return !query || t.includes(query);
     }).slice(0, 10);
-
-    results.innerHTML = '';
 
     results.innerHTML = '';
 
@@ -3379,7 +3386,6 @@ async function _confirmDelete() {
     window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle });
   } catch (err) {
     console.error('[entity-panel] Delete failed:', err);
-    const { showToast } = await import('../core/toast.js');
     showToast('Delete failed — please try again', 'error');
   }
 }

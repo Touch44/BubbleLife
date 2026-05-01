@@ -419,9 +419,18 @@ function _buildColumn(board, col, tasks) {
   list.className = 'kanban-card-list';
   list.dataset.status = col.key;
 
-  for (const task of tasks) {
-    const card = _buildCard(task);
-    list.appendChild(card);
+  if (tasks.length === 0) {
+    // Empty-state placeholder — stays visible as a drop target
+    const empty = document.createElement('div');
+    empty.className = 'kanban-col-empty';
+    empty.setAttribute('aria-label', `No tasks in ${col.label}`);
+    empty.innerHTML = `<span>No tasks</span>`;
+    list.appendChild(empty);
+  } else {
+    for (const task of tasks) {
+      const card = _buildCard(task);
+      list.appendChild(card);
+    }
   }
 
   // Drop zone listeners
@@ -1240,7 +1249,23 @@ function _injectStyles() {
       flex-shrink: 0;
     }
 
-    /* ── Drop indicator ─────────────────────────────── */
+    /* ── Empty column placeholder ────────────────── */
+    .kanban-col-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--space-6) var(--space-3);
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      opacity: 0.5;
+      pointer-events: none;
+      user-select: none;
+      border: 1.5px dashed var(--color-border);
+      border-radius: var(--radius-md);
+      margin: var(--space-2) 0;
+    }
+
+    /* ── Drop indicator ─────────────────────────── */
     .kanban-drop-indicator {
       height: 3px;
       background: var(--color-accent);
@@ -1338,10 +1363,13 @@ async function renderKanban(params = {}) {
 // ── Listen for entity saves to refresh board ──────────────── //
 
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
-  if (entity?.type === 'task' && _boardEl &&
-      document.getElementById('view-kanban')?.classList.contains('active')) {
-    _loadData().then(() => _rerenderColumns()).catch(() => {});
-  }
+  // Refresh on task saves, and also on person/project saves since those affect
+  // the _personMap and _projectMap used by card display and edge resolution.
+  const KANBAN_REFRESH_TYPES = new Set(['task', 'person', 'project']);
+  if (entity && !KANBAN_REFRESH_TYPES.has(entity.type)) return;
+  if (!_boardEl) return;
+  if (!document.getElementById('view-kanban')?.classList.contains('active')) return;
+  _loadData().then(() => _rerenderColumns()).catch(() => {});
 });
 
 // BUG-1 fix: re-render board when a task is deleted

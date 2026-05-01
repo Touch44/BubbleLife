@@ -265,6 +265,7 @@ function _seedBuiltins(add, env, _searchModule, _panelModule) {
 
   // Navigation shortcuts (bare letters — won't fire inside text fields)
   const NAV = [
+    ['h', 'dashboard',   'Go to Dashboard'],
     ['d', 'daily',       'Go to Daily Review'],
     ['k', 'kanban',      'Go to Kanban'],
     ['c', 'calendar',    'Go to Calendar'],
@@ -298,10 +299,21 @@ function _seedBuiltins(add, env, _searchModule, _panelModule) {
   // Alt+1..9 — navigate to nth sidebar nav item
   for (let i = 1; i <= 9; i++) {
     const n = i;
-    add(`alt+${n}`, () => {
+    add(`alt+${n}`, async () => {
       const items = [...document.querySelectorAll('.nav-item[data-view]')];
       const item  = items[n - 1];
-      if (item) item.click();
+      if (!item) return;
+      // Use router directly instead of item.click() to avoid double-firing
+      // the sidebar event delegation guard which causes duplicate navigation.
+      const view       = item.dataset.view;
+      const entityType = item.dataset.entityType;
+      const label      = item.dataset.label || item.querySelector('.nav-item-label')?.textContent;
+      const { navigate } = await import('../core/router.js');
+      if (view === 'entity-type' && entityType) {
+        navigate(view, { entityType }, label);
+      } else {
+        navigate(view, {}, label);
+      }
     }, { description: `Navigate to sidebar item ${n}` });
   }
 }

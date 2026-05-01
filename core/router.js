@@ -15,6 +15,7 @@ import { viewRegistry } from './registry.js';
 
 /** All routable view keys */
 export const VIEW_KEYS = Object.freeze({
+  DASHBOARD:        'dashboard',
   DAILY:            'daily',
   KANBAN:           'kanban',
   CALENDAR:         'calendar',
@@ -35,6 +36,7 @@ export const VIEW_KEYS = Object.freeze({
 
 /** Human-readable labels for breadcrumbs */
 const VIEW_LABELS = {
+  'dashboard':       'Dashboard',
   'daily':           'Daily Review',
   'kanban':          'Tasks',
   'calendar':        'Calendar',

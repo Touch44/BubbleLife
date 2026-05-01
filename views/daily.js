@@ -180,6 +180,17 @@ async function _loadData(dateStr) {
   const personMap  = new Map(persons.map(p  => [p.id, p.name  || p.title || p.id]));
   const projectMap = new Map(projects.map(pr => [pr.id, pr.name || pr.title || pr.id]));
 
+  // CS-04: Apply context filtering (persons, auditLog, projects are NOT filtered)
+  // Must be declared BEFORE the edge-map loop which iterates fTasks.
+  const fTasks        = _filterByDailyContext(tasks);
+  const fEvents       = _filterByDailyContext(events);
+  const fNotes        = _filterByDailyContext(notes);
+  const fComments     = _filterByDailyContext(comments);
+  const fPosts        = _filterByDailyContext(posts);
+  const fAppointments = _filterByDailyContext(appointments);
+  const fDateEntities = _filterByDailyContext(dateEntities);
+  const fMealPlans    = _filterByDailyContext(mealPlans);
+
   // Build edge-resolved relation maps for tasks (entity-form stores relations as edges)
   const taskProjectEdgeMap  = new Map(); // taskId → projectId
   const taskAssigneeEdgeMap = new Map(); // taskId → personId
@@ -197,16 +208,6 @@ async function _loadData(dateStr) {
       } catch { /* non-fatal */ }
     }
   }
-
-  // CS-04: Apply context filtering (persons, auditLog, projects are NOT filtered)
-  const fTasks        = _filterByDailyContext(tasks);
-  const fEvents       = _filterByDailyContext(events);
-  const fNotes        = _filterByDailyContext(notes);
-  const fComments     = _filterByDailyContext(comments);
-  const fPosts        = _filterByDailyContext(posts);
-  const fAppointments = _filterByDailyContext(appointments);
-  const fDateEntities = _filterByDailyContext(dateEntities);
-  const fMealPlans    = _filterByDailyContext(mealPlans);
 
   const accountMap = new Map();
   const accounts = authData?.accounts || [];
@@ -1761,7 +1762,7 @@ function _renderWallPosts(container, dateStr, posts, personMap, accountMap) {
         : ''}
     `;
     row.addEventListener('click', () => {
-      navigate(VIEW_KEYS.FAMILY_WALL, { highlightId: post.id }, 'Wall Post');
+      navigate(VIEW_KEYS.ACTIVITY_CENTER, { highlightId: post.id }, 'Wall Post');
     });
     list.appendChild(row);
   }
@@ -1808,7 +1809,7 @@ function _renderComments(container, dateStr, notes, personMap, accountMap) {
     row.addEventListener('click', () => {
       // Navigate to Family Wall; highlight parent post if stored on comment
       const parentPostId = comment._parentPostId || null;
-      navigate(VIEW_KEYS.FAMILY_WALL, parentPostId ? { highlightId: parentPostId } : {}, 'Comment');
+      navigate(VIEW_KEYS.ACTIVITY_CENTER, parentPostId ? { highlightId: parentPostId } : {}, 'Comment');
     });
     list.appendChild(row);
   }
@@ -2505,6 +2506,9 @@ const _DAILY_REFRESH_TYPES = new Set([
   'task','event','note','appointment','mealPlan','dateEntity','post','comment',
   'idea','goal','habit','shoppingItem','expense','workout','journalEntry',
   'budgetEntry','contact','recipe','document',
+  // person and project: task rows display assignee name and project name;
+  // if either is renamed the daily view must refresh to reflect the new name.
+  'person','project',
 ]);
 let _dailyRefreshTimer = null;
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {

@@ -1016,6 +1016,20 @@ function _buildTagControl(field) {
 }
 
 // ════════════════════════════════════════════════════════════
+// HELPERS (early — used by QCM below)
+// ════════════════════════════════════════════════════════════
+
+/** HTML-escape a string to prevent XSS in innerHTML template literals. */
+function _esc(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ════════════════════════════════════════════════════════════
 // QUICK-CREATE MODAL
 // ════════════════════════════════════════════════════════════
 

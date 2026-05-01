@@ -653,13 +653,13 @@ export async function setSetting(key, value) {
 export async function getSettings(keys) {
   try {
     const db     = await _getDB();
-    const tx     = db.transaction(STORES.SETTINGS, 'readonly');
     const result = {};
-    await Promise.all(keys.map(async key => {
-      const rec     = await tx.objectStore(STORES.SETTINGS).get(key);
-      result[key]   = rec?.value;
-    }));
-    await tx.done;
+    // Sequential reads — avoids "transaction already completed" in the raw IDB
+    // fallback where Promise.all() can schedule microtasks after auto-commit.
+    for (const key of keys) {
+      const rec  = await db.get(STORES.SETTINGS, key);
+      result[key] = rec?.value;
+    }
     return result;
   } catch (err) {
     console.error('[db] getSettings failed:', err);

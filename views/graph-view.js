@@ -18,7 +18,7 @@
 
 import { registerView }         from '../core/router.js';
 import { on, emit, EVENTS }     from '../core/events.js';
-import { getAllEntityTypes }     from '../core/graph-engine.js';
+import { getAllEntityTypes, getEntityTypeConfig } from '../core/graph-engine.js';
 import {
   getActiveContext, setActiveContext,
 } from '../core/context.js';
@@ -369,7 +369,6 @@ function _buildToolbar(container, activeTypeSet) {
     _focusDebounce = setTimeout(async () => {
       try {
         const { getEntitiesByType } = await import('../core/db.js');
-        const { getEntityTypeConfig, getAllEntityTypes } = await import('../core/graph-engine.js');
         const allTypes = getAllEntityTypes().filter(t => t.graphVisible).map(t => t.key);
         const allEntities = (await Promise.all(allTypes.map(t => getEntitiesByType(t).catch(() => [])))).flat();
         const matches = allEntities
@@ -529,13 +528,16 @@ on('context:changed', () => {
 
 // Re-render when entities change
 on(EVENTS.ENTITY_SAVED, () => {
-  if (_mounted && _graphEl?.classList.contains('active')) {
+  // Re-resolve _graphEl live — _graphEl can become stale across unmount/remount cycles
+  const graphEl = _graphEl || document.getElementById('view-graph');
+  if (_mounted && graphEl?.classList.contains('active')) {
     refreshGraph().then(_updateEmptyState).catch(() => {});
   }
 });
 
 on(EVENTS.ENTITY_DELETED, () => {
-  if (_mounted && _graphEl?.classList.contains('active')) {
+  const graphEl = _graphEl || document.getElementById('view-graph');
+  if (_mounted && graphEl?.classList.contains('active')) {
     refreshGraph().then(_updateEmptyState).catch(() => {});
   }
 });
