@@ -704,6 +704,7 @@ const _ACTIVITY_ICONS = {
   'workout:created':           '\uD83D\uDCAA',
   'journalEntry:created':      '\uD83D\uDCD4',
   'wish:created':              '\u2728',
+  'shoppingItem:checked':      '\u2705',
   'entity:deleted':            '\uD83D\uDDD1',
   'type:created':              '\u2728',
   'milestone:posted':          '\uD83C\uDFC6',

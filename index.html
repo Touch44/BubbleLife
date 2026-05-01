@@ -276,13 +276,7 @@
           <span class="nav-item-label">Activity Center</span>
         </button>
       </li>
-      <li role="listitem">
-        <button class="nav-item" data-view="family-matters"
-                aria-label="Family Matters">
-          <span class="nav-item-icon" aria-hidden="true">⌂</span>
-          <span class="nav-item-label">Family Matters</span>
-        </button>
-      </li>
+
       <li role="listitem">
         <button class="nav-item" data-view="notes"
                 aria-label="Notes">
@@ -461,11 +455,6 @@
       <!-- Populated by views/family-wall.js (Activity Center) -->
     </div>
 
-    <!-- Family Matters -->
-    <div id="view-family-matters" class="view" role="region" aria-label="Family Matters"
-         aria-hidden="true">
-      <!-- Populated by views/family-matters.js -->
-    </div>
 
     <!-- Notes -->
     <div id="view-notes" class="view" role="region" aria-label="Notes"
@@ -760,7 +749,7 @@
   import { hotkeyServiceDescriptor }      from './services/hotkey.js';       // P-09
   import { historyServiceDescriptor }     from './services/history.js';      // P-10
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
-  import { initActivityService }          from './services/activity.js';
+  import { initActivityService, seedActivityFeed } from './services/activity.js';
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -979,6 +968,7 @@
       await initAuth();
       initContext();                       // CS-01: restore active context from localStorage
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
+      seedActivityFeed();    // [minor] backfill activity cards from existing entities
 
       // CS-02: Wire context switcher buttons
       {
@@ -1198,7 +1188,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '3.9.0', emit, on, env: window._fhEnv,
+        version: '3.9.1', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

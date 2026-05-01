@@ -5,10 +5,10 @@
  * These are displayed in the Activity Center (views/family-wall.js).
  */
 
-import { on, EVENTS }       from '../core/events.js';
-import { saveEntity }       from '../core/db.js';
-import { getAccount }       from '../core/auth.js';
-import { getActiveContext } from '../core/context.js';
+import { on, EVENTS }                  from '../core/events.js';
+import { saveEntity, getEntitiesByType } from '../core/db.js';
+import { getAccount }                   from '../core/auth.js';
+import { getActiveContext }             from '../core/context.js';
 
 // Types to never generate activity for
 const SKIP_TYPES  = new Set(['post', 'comment', 'activity']);
@@ -94,6 +94,7 @@ function _buildBody(activityType, entity, acct) {
     'workout:created':       `${actor} logged workout "${title}"`,
     'journalEntry:created':  `${actor} added a journal entry`,
     'wish:created':          `${actor} added wish "${title}"`,
+    'shoppingItem:checked':  `${actor} checked off "${title}" from the shopping list`,
     'entity:deleted':        `${title} was deleted`,
     'type:created':          `New object type "${title}" created`,
     'milestone:posted':      `${actor} posted a milestone: "${title}"`,
@@ -146,6 +147,15 @@ export function initActivityService() {
       return;
     }
 
+    // Shopping item checked off
+    if (entity.type === 'shoppingItem' && entity.checked) {
+      const _dedupChecked = entity.id + ':shoppingItem:checked';
+      if (!_lastWritten.get(_dedupChecked)) {
+        await _writeActivity('shoppingItem:checked', entity);
+      }
+      return;
+    }
+
     // Event attended (marked complete/attended)
     if (entity.type === 'event' && entity.attended) {
       await _writeActivity('event:attended', entity);
@@ -186,5 +196,49 @@ export function initActivityService() {
     });
   });
 
+  // ── Task assignment ──────────────────────────────────────
+  // Track when a task gains an assignee during an update (not new, has assignedTo)
+  on(EVENTS.ENTITY_SAVED, async ({ entity, isNew } = {}) => {
+    if (!entity || entity.type !== 'task' || isNew) return;
+    if (entity.assignedTo && !_lastWritten.get(entity.id + ':task:assigned')) {
+      await _writeActivity('task:assigned', entity);
+    }
+  });
+
   console.log('[activity] [MAJOR] Activity service initialized');
+}
+
+/**
+ * Seed the activity feed from existing entities so the Activity Center
+ * is not empty on first visit. Writes at most one :created activity per
+ * entity; dedup map prevents duplication if called again.
+ * Called once after initActivityService() and IDB is ready.
+ */
+export async function seedActivityFeed() {
+  try {
+    // Check if already seeded this session
+    if (window._fhActivitySeeded) return;
+    window._fhActivitySeeded = true;
+
+    const SEED_TYPES = [
+      'task', 'project', 'event', 'note', 'budgetEntry',
+      'recipe', 'document', 'contact', 'idea', 'goal', 'habit',
+    ];
+
+    for (const type of SEED_TYPES) {
+      const entities = await getEntitiesByType(type);
+      // Seed only the 20 most recent per type to avoid flooding
+      const recent = entities
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .slice(0, 20);
+      for (const entity of recent) {
+        const dedupKey = (entity.id || '') + ':' + type + ':created';
+        if (_lastWritten.get(dedupKey)) continue;
+        await _writeActivity(`${type}:created`, entity);
+      }
+    }
+    console.log('[activity] Seed complete');
+  } catch (err) {
+    console.error('[activity] Seed failed:', err);
+  }
 }

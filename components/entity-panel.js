@@ -1944,16 +1944,41 @@ function _renderTagChips(wrap, field) {
   for (let i = 0; i < tags.length; i++) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
+    chip.title = 'Click to open tag · × to remove';
+    chip.style.cursor = 'pointer';
 
     const text = document.createElement('span');
     text.textContent = tags[i];
     chip.appendChild(text);
 
+    // Click chip label → open tag entity panel by name lookup
+    const tagName = tags[i];
+    text.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const allTags = await getEntitiesByType('tag');
+        const tagEntity = allTags.find(t =>
+          (t.name || t.title || '').toLowerCase() === tagName.toLowerCase()
+        );
+        if (tagEntity) {
+          emit(EVENTS.PANEL_OPENED, { entityId: tagEntity.id, entityType: 'tag' });
+        } else {
+          // Tag entity doesn't exist yet — offer to create it
+          import('../components/entity-form.js').then(({ openForm }) => {
+            openForm('tag', { name: tagName });
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('[panel] tag lookup failed:', err);
+      }
+    });
+
     const remove = document.createElement('span');
     remove.textContent = '×';
     remove.style.cssText = 'cursor: pointer; margin-left: var(--space-1); color: var(--color-text-muted); font-weight: bold;';
     const idx = i;
-    remove.addEventListener('click', async () => {
+    remove.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const arr = [...(_entity[field.key] || [])];
       arr.splice(idx, 1);
       _entity[field.key] = arr;

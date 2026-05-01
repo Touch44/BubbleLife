@@ -954,12 +954,35 @@ function _buildTagControl(field) {
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
       chip.style.cssText = 'display: inline-flex; align-items: center; gap: 4px;';
-      chip.innerHTML = `<span>${tags[i]}</span>`;
+      chip.title = 'Click label to open tag · × to remove';
+
+      const tagLabel = document.createElement('span');
+      tagLabel.textContent = tags[i];
+      tagLabel.style.cursor = 'pointer';
+      // Click label → open tag entity panel
+      const _tagName = tags[i];
+      tagLabel.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          const { getEntitiesByType } = await import('../core/db.js');
+          const allTags = await getEntitiesByType('tag');
+          const tagEntity = allTags.find(t =>
+            (t.name || t.title || '').toLowerCase() === _tagName.toLowerCase()
+          );
+          if (tagEntity) {
+            emit(EVENTS.PANEL_OPENED, { entityId: tagEntity.id, entityType: 'tag' });
+          }
+        } catch (err) {
+          console.warn('[entity-form] tag lookup failed:', err);
+        }
+      });
+      chip.appendChild(tagLabel);
 
       const rm = document.createElement('span');
       rm.textContent = '×';
       rm.style.cssText = 'cursor: pointer; font-weight: bold; color: var(--color-text-muted); margin-left: 2px;';
-      rm.addEventListener('click', () => {
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
         const arr = _tagValues.get(field.key) || [];
         arr.splice(i, 1);
         _tagValues.set(field.key, arr);

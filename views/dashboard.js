@@ -159,6 +159,43 @@ function _injectStyles() {
 }
 .dash-cards-scroll::-webkit-scrollbar { display: none; }
 
+/* ── Scroll button wrapper ───────────────────────────────── */
+.dash-cards-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: var(--space-6);
+}
+.dash-cards-wrap .dash-cards-scroll {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+.dash-scroll-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+  z-index: 2;
+  opacity: 0.7;
+  padding: 0;
+}
+.dash-scroll-btn:hover { background: var(--color-surface-2); opacity: 1; }
+.dash-scroll-btn:disabled { opacity: 0.25; cursor: default; }
+.dash-scroll-btn-left  { margin-right: var(--space-2); }
+.dash-scroll-btn-right { margin-left:  var(--space-2); }
+
 .dash-card {
   flex: 0 0 210px;
   background: var(--color-surface);
@@ -581,13 +618,17 @@ async function renderDashboard() {
 
     <!-- Primary cards -->
     <div class="dash-section-label">At a Glance</div>
-    <div class="dash-cards-scroll" id="dash-cards-scroll">
-      ${_cardSkeleton('tasks',    'Tasks',       '✅')}
-      ${_cardSkeleton('calendar', 'This Week',   '📅')}
-      ${_cardSkeleton('budget',   'Budget',      '💰')}
-      ${_cardSkeleton('wall',     'Family Wall', '🏠')}
-      ${_cardSkeleton('recipes',  'Recipes',     '🍳')}
-      ${_cardSkeleton('documents','Documents',   '📄')}
+    <div class="dash-cards-wrap">
+      <button class="dash-scroll-btn dash-scroll-btn-left" id="dash-scroll-left" aria-label="Scroll left">&#8249;</button>
+      <div class="dash-cards-scroll" id="dash-cards-scroll">
+        ${_cardSkeleton('tasks',    'Tasks',       '✅')}
+        ${_cardSkeleton('calendar', 'This Week',   '📅')}
+        ${_cardSkeleton('budget',   'Budget',      '💰')}
+        ${_cardSkeleton('wall',     'Family Wall', '🏠')}
+        ${_cardSkeleton('recipes',  'Recipes',     '🍳')}
+        ${_cardSkeleton('documents','Documents',   '📄')}
+      </div>
+      <button class="dash-scroll-btn dash-scroll-btn-right" id="dash-scroll-right" aria-label="Scroll right">&#8250;</button>
     </div>
 
     <!-- Glance widgets -->
@@ -645,6 +686,24 @@ async function renderDashboard() {
   el.querySelector('#dash-proj-nav')?.addEventListener('click', () => navigate(VIEW_KEYS.PROJECTS));
   el.querySelector('#dash-note-add')?.addEventListener('click', () => openForm('note'));
   el.querySelector('#dash-daily-btn')?.addEventListener('click', () => navigate(VIEW_KEYS.DAILY));
+
+  // Wire scroll buttons for cards strip
+  {
+    const scroll = el.querySelector('#dash-cards-scroll');
+    const btnL   = el.querySelector('#dash-scroll-left');
+    const btnR   = el.querySelector('#dash-scroll-right');
+    if (scroll && btnL && btnR) {
+      const STEP = 240;
+      const _updateBtns = () => {
+        btnL.disabled = scroll.scrollLeft <= 0;
+        btnR.disabled = scroll.scrollLeft + scroll.clientWidth >= scroll.scrollWidth - 2;
+      };
+      btnL.addEventListener('click', () => { scroll.scrollBy({ left: -STEP, behavior: 'smooth' }); setTimeout(_updateBtns, 350); });
+      btnR.addEventListener('click', () => { scroll.scrollBy({ left:  STEP, behavior: 'smooth' }); setTimeout(_updateBtns, 350); });
+      scroll.addEventListener('scroll', _updateBtns, { passive: true });
+      _updateBtns();
+    }
+  }
 
   // Release mutex before async load — allows debounce re-renders to queue
   // while data is fetching without blocking them entirely.
