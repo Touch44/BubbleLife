@@ -14,7 +14,7 @@ import { saveEntity, saveEdge, deleteEdge, deleteEntity, getEdgesFrom, getEdgesT
          getEntitiesByType, getEntity, getSetting }            from '../core/db.js';
 import { getEntityTypeConfig, getAllEntityTypes,
          convertEntity }                                       from '../core/graph-engine.js';
-import { emit, on, EVENTS }                                    from '../core/events.js';
+import { emit, EVENTS }                                        from '../core/events.js';
 import { toast }                                               from '../core/toast.js';
 import { getAccount }                                          from '../core/auth.js';
 import { getActiveContext, ALWAYS_SHARED_TYPES }               from '../core/context.js';
@@ -41,6 +41,9 @@ const _relationValues = new Map();
 
 /** @type {Map<string, string[]>} tags field → array of tag strings */
 const _tagValues = new Map();
+
+/** Active tab key in edit-mode form: 'fields' | 'details' | 'relations' */
+let _activeFormTab = 'fields';
 
 // ════════════════════════════════════════════════════════════
 // INIT
@@ -376,9 +379,9 @@ function _buildAndMount(config) {
     const _switchTab = (key) => {
       _activeFormTab = key;
       _applyTabStyles();
-      if (tab1Body) tab1Body.style.display = key === 'fields'    ? '' : 'none';
-      if (tab2Body) tab2Body.style.display = key === 'details'   ? '' : 'none';
-      if (tab3Body) tab3Body.style.display = key === 'relations' ? '' : 'none';
+      if (tab1Body) tab1Body.style.display = key === 'fields'    ? 'flex' : 'none';
+      if (tab2Body) tab2Body.style.display = key === 'details'   ? 'flex' : 'none';
+      if (tab3Body) tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
       // Hide footer (Save button) on Details and Relations tabs
       const footerEl = modal.querySelector('.modal-footer');
       if (footerEl) footerEl.style.display = (key === 'details' || key === 'relations') ? 'none' : '';
@@ -406,12 +409,17 @@ function _buildAndMount(config) {
 
   // ── Body ─────────────────────────────────────────────── //
   const body = document.createElement('div');
-  body.className = 'modal-body ef-body';
+  // In edit mode, tabs handle their own padding/scrolling.
+  // Remove the .modal-body CSS padding to avoid double-padding the tab contents.
+  body.className = _editEntity ? 'ef-body' : 'modal-body ef-body';
+  if (_editEntity) {
+    body.style.cssText = 'display:flex;flex-direction:column;flex:1;overflow:hidden;padding:0;';
+  }
 
   if (_editEntity) {
     // Tab 1: Fields (existing form body)
     tab1Body = document.createElement('div');
-    tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: 0; gap: 0;';
+    tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; gap: 0;';
 
     // ── Tab 1 action bar: status toggle + open graph ────────
     const _buildTab1ActionBar = () => {
@@ -449,8 +457,11 @@ function _buildAndMount(config) {
             const updated = { ..._editEntity, status: newStatus };
             const saved = await saveEntity(updated, getAccount()?.id);
             _editEntity = saved;
-            // Sync draft so Save doesn't revert
+            // Sync draft AND the live SELECT element so _saveDraftFromForm
+            // doesn't revert the status when the user later hits Save.
             _draft.status = newStatus;
+            const statusSelect = _overlay?.querySelector('#ef-field-status');
+            if (statusSelect) statusSelect.value = newStatus;
             emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
             toast.success(newStatus === 'Done' ? 'Marked complete ✓' : 'Marked in progress');
             _buildTab1ActionBar();
@@ -510,12 +521,12 @@ function _buildAndMount(config) {
 
     // Tab 2: Details & Activity (lazy — built on first click)
     tab2Body = document.createElement('div');
-    tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; overflow-y: auto; padding: 0;';
+    tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
     body.appendChild(tab2Body);
 
     // Tab 3: Relations (lazy — built on first click)
     tab3Body = document.createElement('div');
-    tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; overflow-y: auto; padding: 0;';
+    tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
     body.appendChild(tab3Body);
 
     // Apply initial visibility
@@ -523,9 +534,9 @@ function _buildAndMount(config) {
     tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
     tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
   } else {
-    // Create mode — no tabs, just the form body
+    // Create mode — no tabs, just the form body.
+    // .modal-body CSS class provides padding; no inline override needed.
     _rebuildBodyInto(config, body);
-    body.style.padding = 'var(--space-4) var(--space-5)';
   }
 
   // ── Footer ───────────────────────────────────────────── //
@@ -1772,7 +1783,7 @@ async function _buildRelationsTab(container) {
     if (results.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding:10px 12px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
-      empty.textContent = q ? `No entities matching "${q}"` : 'Start typing to search…';
+      empty.textContent = q ? `No entities matching "${q}"` : 'No entities found';
       resultsList.appendChild(empty);
       if (q) {
         const createBtn = document.createElement('button');
@@ -1880,7 +1891,7 @@ async function _buildRelationsTab(container) {
   container.appendChild(connHeader);
 
   const connContainer = document.createElement('div');
-  connContainer.style.cssText = 'flex: 1; overflow-y: auto; padding: 0 0 8px;';
+  connContainer.style.cssText = 'flex: 1; overflow-y: auto; min-height: 0; padding: 0 0 8px;';
   container.appendChild(connContainer);
 
   const _refreshConnections = () => _renderFormConnectionsList(connContainer, entity);
@@ -2073,18 +2084,7 @@ function _buildDetailsTab(container, config) {
       });
     } catch { return iso; }
   };
-  const _fmtShort = (iso) => {
-    if (!iso) return '—';
-    try {
-      const d = new Date(iso);
-      const now = new Date();
-      const diff = now - d;
-      if (diff < 60000)  return 'just now';
-      if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
-      if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
-      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    } catch { return iso; }
-  };
+  // _fmtShort removed (unused — use _efFmtShort instead)
 
   // Auto-save draft then run action
   const _guardedAction = async (fn) => {
@@ -2099,6 +2099,8 @@ function _buildDetailsTab(container, config) {
     'padding: 14px 16px 12px;',
     'border-bottom: 1px solid var(--color-border);',
     'background: var(--color-surface);',
+    'position: relative;',      // anchor for absolute-positioned dropdowns
+    'overflow: visible;',       // allow dropdowns to escape container bounds
   ].join(' ');
 
   const _mkBtn = (icon, label, danger = false, outline = false) => {
@@ -2358,7 +2360,7 @@ function _buildDetailsTab(container, config) {
 
   // ─── 3. ACTIVITY LOG (collapsible) ──────────────────────── //
   const actSection = document.createElement('div');
-  actSection.style.cssText = 'flex: 1; display: flex; flex-direction: column;';
+  actSection.style.cssText = 'flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
 
   // Toggle header
   const actHeader = document.createElement('button');
@@ -2373,7 +2375,7 @@ function _buildDetailsTab(container, config) {
 
   let actOpen = true;
   const actBody = document.createElement('div');
-  actBody.style.cssText = 'flex: 1; overflow-y: auto; min-height: 120px;';
+  actBody.style.cssText = 'flex: 1; overflow-y: auto; min-height: 0;';
 
   actHeader.addEventListener('click', () => {
     actOpen = !actOpen;
@@ -2485,7 +2487,7 @@ async function _loadEntityActivityLog(container, entity, config) {
       const mainLine = document.createElement('div');
       mainLine.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:8px;color:var(--color-text);';
       mainLine.innerHTML = [
-        `<span style="flex:1;line-height:1.45">${_escHtml(desc)}</span>`,
+        `<span style="flex:1;line-height:1.45">${_efEsc(desc)}</span>`,
         `<span style="flex-shrink:0;color:var(--color-text-muted);white-space:nowrap" title="${entry.at || ''}">${_efFmtShort(entry.at)}</span>`,
       ].join('');
       row.appendChild(mainLine);
@@ -2503,6 +2505,16 @@ async function _loadEntityActivityLog(container, entity, config) {
     console.error('[entity-form] Activity log error:', err);
     container.innerHTML = '<div style="padding:16px;color:var(--color-danger);font-size:var(--text-xs);">Failed to load activity</div>';
   }
+}
+
+/** HTML-escape a string (activity log — prevents XSS in innerHTML) */
+function _efEsc(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Truncate a string for activity log display */
