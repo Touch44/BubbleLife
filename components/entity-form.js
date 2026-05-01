@@ -10,12 +10,14 @@
  *   initEntityForm()                           — wire FAB events (call once on boot)
  */
 
-import { saveEntity, saveEdge, deleteEdge, getEdgesFrom, getEntitiesByType, getEntity } from '../core/db.js';
-import { getEntityTypeConfig, getAllEntityTypes }        from '../core/graph-engine.js';
-import { emit, EVENTS }                                from '../core/events.js';
-import { toast }                                       from '../core/toast.js';
-import { getAccount }                                  from '../core/auth.js';
-import { getActiveContext, ALWAYS_SHARED_TYPES }        from '../core/context.js';
+import { saveEntity, saveEdge, deleteEdge, deleteEntity, getEdgesFrom, getEdgesTo,
+         getEntitiesByType, getEntity, getSetting }            from '../core/db.js';
+import { getEntityTypeConfig, getAllEntityTypes,
+         convertEntity }                                       from '../core/graph-engine.js';
+import { emit, on, EVENTS }                                    from '../core/events.js';
+import { toast }                                               from '../core/toast.js';
+import { getAccount }                                          from '../core/auth.js';
+import { getActiveContext, ALWAYS_SHARED_TYPES }               from '../core/context.js';
 
 // ── Module-level state ────────────────────────────────────── //
 
@@ -96,6 +98,7 @@ export function initEntityForm() {
  * @param {Function} [onSave]     - callback(entity) after successful save
  */
 export function openForm(typeKey, prefill = {}, onSave = null) {
+  _activeFormTab = 'fields'; // reset tab on fresh open
   const config = getEntityTypeConfig(typeKey);
   if (!config) {
     console.warn(`[entity-form] Unknown type "${typeKey}"`);
@@ -187,6 +190,7 @@ function _refreshRelationChips(control, field) {
  * @param {Function} [onSave]
  */
 export function openEditForm(entity, onSave = null) {
+  _activeFormTab = 'fields'; // reset tab on fresh open
   const config = getEntityTypeConfig(entity.type);
   if (!config) {
     console.warn(`[entity-form] Unknown type "${entity.type}"`);
@@ -251,7 +255,8 @@ function _buildAndMount(config) {
   // ── Modal shell ──────────────────────────────────────── //
   const modal = document.createElement('div');
   modal.className = 'modal ef-modal';
-  modal.style.cssText = 'max-width: 560px;';
+  // Widen modal for edit mode (tab strip needs breathing room)
+  modal.style.cssText = _editEntity ? 'max-width: 660px;' : 'max-width: 560px;';
 
   // ── Header ───────────────────────────────────────────── //
   const header = document.createElement('div');
@@ -327,10 +332,201 @@ function _buildAndMount(config) {
   titleRow.appendChild(title);
   header.appendChild(titleRow);
 
+  // ── Tab strip (edit mode only) ───────────────────────── //
+  let tabStrip = null;
+  let tab1Body = null;
+  let tab2Body = null;
+  let tab3Body = null;
+
+  if (_editEntity) {
+    tabStrip = document.createElement('div');
+    tabStrip.style.cssText = [
+      'display: flex; gap: 2px; padding: 0 16px;',
+      'border-bottom: 1px solid var(--color-border);',
+      'background: var(--color-surface); flex-shrink: 0;',
+    ].join(' ');
+
+    const _mkTab = (key, label, icon) => {
+      const btn = document.createElement('button');
+      btn.dataset.tabKey = key;
+      btn.style.cssText = [
+        'padding: 9px 14px 8px; border: none; background: none; cursor: pointer;',
+        'font-size: var(--text-sm); font-family: var(--font-body);',
+        'display: flex; align-items: center; gap: 6px;',
+        'border-bottom: 2px solid transparent; margin-bottom: -1px;',
+        'transition: color 0.12s, border-color 0.12s;',
+      ].join(' ');
+      btn.innerHTML = `<span style="font-size:13px">${icon}</span><span>${label}</span>`;
+      return btn;
+    };
+
+    const tab1Btn = _mkTab('fields',    'Fields',           '⊞');
+    const tab2Btn = _mkTab('details',   'Details',          '◷');
+    const tab3Btn = _mkTab('relations', 'Relations',        '⌥');
+
+    const _applyTabStyles = () => {
+      [tab1Btn, tab2Btn, tab3Btn].forEach(b => {
+        const active = b.dataset.tabKey === _activeFormTab;
+        b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
+        b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
+        b.style.fontWeight = active ? '600' : '400';
+      });
+    };
+
+    const _switchTab = (key) => {
+      _activeFormTab = key;
+      _applyTabStyles();
+      if (tab1Body) tab1Body.style.display = key === 'fields'    ? '' : 'none';
+      if (tab2Body) tab2Body.style.display = key === 'details'   ? '' : 'none';
+      if (tab3Body) tab3Body.style.display = key === 'relations' ? '' : 'none';
+      // Hide footer (Save button) on Details and Relations tabs
+      const footerEl = modal.querySelector('.modal-footer');
+      if (footerEl) footerEl.style.display = (key === 'details' || key === 'relations') ? 'none' : '';
+      // Lazy-load Tab 2 on first open
+      if (key === 'details' && tab2Body && !tab2Body.dataset.loaded) {
+        tab2Body.dataset.loaded = '1';
+        _buildDetailsTab(tab2Body, config);
+      }
+      // Lazy-load Tab 3 on first open
+      if (key === 'relations' && tab3Body && !tab3Body.dataset.loaded) {
+        tab3Body.dataset.loaded = '1';
+        _buildRelationsTab(tab3Body);
+      }
+    };
+
+    tab1Btn.addEventListener('click', () => _switchTab('fields'));
+    tab2Btn.addEventListener('click', () => _switchTab('details'));
+    tab3Btn.addEventListener('click', () => _switchTab('relations'));
+
+    tabStrip.appendChild(tab1Btn);
+    tabStrip.appendChild(tab2Btn);
+    tabStrip.appendChild(tab3Btn);
+    _applyTabStyles();
+  }
+
   // ── Body ─────────────────────────────────────────────── //
   const body = document.createElement('div');
   body.className = 'modal-body ef-body';
-  _rebuildBody(config, body);
+
+  if (_editEntity) {
+    // Tab 1: Fields (existing form body)
+    tab1Body = document.createElement('div');
+    tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding: 0; gap: 0;';
+
+    // ── Tab 1 action bar: status toggle + open graph ────────
+    const _buildTab1ActionBar = () => {
+      const existing = tab1Body.querySelector('.ef-tab1-actionbar');
+      if (existing) existing.remove();
+
+      const actionBar = document.createElement('div');
+      actionBar.className = 'ef-tab1-actionbar';
+      actionBar.style.cssText = [
+        'display: flex; align-items: center; gap: 8px; flex-wrap: wrap;',
+        'padding: 10px 20px 8px;',
+        'border-bottom: 1px solid var(--color-border);',
+        'background: var(--color-surface); flex-shrink: 0;',
+      ].join(' ');
+
+      // ── Status toggle: In Progress <> Complete (tasks only) ──
+      if (_editEntity.type === 'task') {
+        const isDone = _editEntity.status === 'Done';
+        const statusBtn = document.createElement('button');
+        statusBtn.style.cssText = [
+          'display: inline-flex; align-items: center; gap: 6px;',
+          'padding: 5px 12px; border-radius: var(--radius-md); cursor: pointer;',
+          'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
+          isDone
+            ? 'background: var(--color-success-bg,#f0fdf4); color: var(--color-success-text,#15803d); border: 1px solid var(--color-success-text,#15803d);'
+            : 'background: var(--color-surface-2); color: var(--color-text); border: 1px solid var(--color-border);',
+        ].join(' ');
+        statusBtn.innerHTML = isDone
+          ? '<span>✓</span><span>Mark in progress</span>'
+          : '<span style="opacity:0.5">○</span><span>Mark complete</span>';
+        statusBtn.title = isDone ? 'Switch back to In Progress' : 'Mark as Done';
+        statusBtn.addEventListener('click', async () => {
+          try {
+            const newStatus = isDone ? 'In Progress' : 'Done';
+            const updated = { ..._editEntity, status: newStatus };
+            const saved = await saveEntity(updated, getAccount()?.id);
+            _editEntity = saved;
+            // Sync draft so Save doesn't revert
+            _draft.status = newStatus;
+            emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
+            toast.success(newStatus === 'Done' ? 'Marked complete ✓' : 'Marked in progress');
+            _buildTab1ActionBar();
+          } catch (err) {
+            console.error('[entity-form] status toggle failed:', err);
+            toast.error('Could not update status');
+          }
+        });
+        actionBar.appendChild(statusBtn);
+      }
+
+      // ── Open Graph button ────────────────────────────────────
+      if (_editEntity?.id) {
+        const graphBtn = document.createElement('button');
+        graphBtn.style.cssText = [
+          'display: inline-flex; align-items: center; gap: 6px; margin-left: auto;',
+          'padding: 5px 12px; border-radius: var(--radius-md); cursor: pointer;',
+          'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
+          'background: none; color: var(--color-accent); border: 1px solid var(--color-accent);',
+        ].join(' ');
+        graphBtn.innerHTML = '<span>◎</span><span>Graph</span>';
+        graphBtn.title = 'Open in Knowledge Graph';
+        graphBtn.addEventListener('click', async () => {
+          const eid = _editEntity?.id;
+          if (!eid) return;
+          closeForm();
+          // Open panel then trigger graph view
+          try {
+            const { openPanel } = await import('./entity-panel.js');
+            await openPanel(eid);
+            // Give panel time to render then click its graph button
+            setTimeout(() => {
+              const panelGraphBtn = document.querySelector('[aria-label="Open Graph"]');
+              panelGraphBtn?.click();
+            }, 200);
+          } catch (err) {
+            console.warn('[entity-form] graph open failed:', err);
+          }
+        });
+        actionBar.appendChild(graphBtn);
+      }
+
+      // Only insert if at least one button was added
+      if (actionBar.children.length > 0) {
+        tab1Body.insertBefore(actionBar, tab1Body.firstChild);
+      }
+    };
+
+    // Fields scroll container (padded, scrollable)
+    const fieldsScroll = document.createElement('div');
+    fieldsScroll.style.cssText = 'flex: 1; overflow-y: auto; padding: var(--space-4) var(--space-5);';
+    _rebuildBodyInto(config, fieldsScroll);
+    tab1Body.appendChild(fieldsScroll);
+
+    _buildTab1ActionBar();
+    body.appendChild(tab1Body);
+
+    // Tab 2: Details & Activity (lazy — built on first click)
+    tab2Body = document.createElement('div');
+    tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; overflow-y: auto; padding: 0;';
+    body.appendChild(tab2Body);
+
+    // Tab 3: Relations (lazy — built on first click)
+    tab3Body = document.createElement('div');
+    tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; overflow-y: auto; padding: 0;';
+    body.appendChild(tab3Body);
+
+    // Apply initial visibility
+    tab1Body.style.display = _activeFormTab === 'fields'    ? 'flex' : 'none';
+    tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
+    tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
+  } else {
+    // Create mode — no tabs, just the form body
+    _rebuildBodyInto(config, body);
+    body.style.padding = 'var(--space-4) var(--space-5)';
+  }
 
   // ── Footer ───────────────────────────────────────────── //
   // Single Save button — Cancel is redundant (✕ header, Esc, backdrop click all close).
@@ -349,6 +545,7 @@ function _buildAndMount(config) {
   footer.appendChild(saveBtn);
 
   modal.appendChild(header);
+  if (tabStrip) modal.appendChild(tabStrip);
   modal.appendChild(body);
   modal.appendChild(footer);
   _overlay.appendChild(modal);
@@ -415,11 +612,16 @@ function _updateHeader(header, config, typeSelect) {
 /** Rebuild the form body for a given config */
 function _rebuildBody(config, body) {
   body.innerHTML = '';
+  _rebuildBodyInto(config, body);
+}
 
+/** Fill a container element with field groups for config. */
+function _rebuildBodyInto(config, container) {
+  container.innerHTML = '';
   const fields = config.fields;
   for (const field of fields) {
     const group = _buildFieldGroup(field, config);
-    if (group) body.appendChild(group);
+    if (group) container.appendChild(group);
   }
 }
 
@@ -939,102 +1141,202 @@ function _buildFieldControl(field, config) {
 // TAG CONTROL
 // ════════════════════════════════════════════════════════════
 
+/**
+ * Tag control — mirrors _buildRelationControl but stores tag names (strings).
+ * Searches existing tag entities by name; clicking a chip opens the tag panel.
+ * "+ Create" appears when no match found — creates the tag entity and adds it.
+ */
 function _buildTagControl(field) {
   const wrap = document.createElement('div');
   wrap.className   = 'ef-tag-control';
   wrap.dataset.key = field.key;
 
-  const _render = () => {
-    wrap.innerHTML = '';
-    const chipRow = document.createElement('div');
-    chipRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-sm); min-height: 42px; background: var(--color-bg); cursor: text;';
+  // ── Chip row (selected tags) ──────────────────────────── //
+  const chipRow = document.createElement('div');
+  chipRow.className = 'ef-relation-chips';
+  chipRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-1);';
+  wrap.appendChild(chipRow);
 
+  // ── Search input ─────────────────────────────────────── //
+  const searchInput = document.createElement('input');
+  searchInput.type        = 'text';
+  searchInput.className   = 'input';
+  searchInput.placeholder = 'Search or add tags…';
+  searchInput.autocomplete = 'off';
+  wrap.appendChild(searchInput);
+
+  // ── Dropdown results ─────────────────────────────────── //
+  const results = document.createElement('div');
+  results.style.cssText = [
+    'max-height: 140px; overflow-y: auto;',
+    'border: 1px solid var(--color-border); border-top: none;',
+    'border-radius: 0 0 var(--radius-sm) var(--radius-sm);',
+    'display: none; background: var(--color-bg);',
+  ].join(' ');
+  wrap.appendChild(results);
+
+  // ── "+ Create" button ─────────────────────────────────── //
+  const createBtn = document.createElement('button');
+  createBtn.type = 'button';
+  createBtn.className = 'ef-relation-create-btn';
+  createBtn.style.display = 'none';
+  wrap.appendChild(createBtn);
+
+  createBtn.addEventListener('click', () => {
+    const rawName = searchInput.value.trim();
+    if (!rawName) return;
+    // Quick-create the tag entity, then add its name to the field
+    openQuickCreateModal('tag', { name: rawName }, newTagEntity => {
+      const tagName = newTagEntity.name || newTagEntity.title || rawName;
+      const arr = _tagValues.get(field.key) || [];
+      if (!arr.includes(tagName)) arr.push(tagName);
+      _tagValues.set(field.key, arr);
+      _renderChips();
+      searchInput.value = '';
+      createBtn.style.display = 'none';
+      results.innerHTML = ''; results.style.display = 'none';
+    });
+  });
+
+  // ── Also support Enter / comma to add raw tag name ────── //
+  searchInput.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ',') && searchInput.value.trim()) {
+      e.preventDefault();
+      const val = searchInput.value.trim().replace(/,$/, '');
+      if (val) {
+        const arr = _tagValues.get(field.key) || [];
+        if (!arr.includes(val)) arr.push(val);
+        _tagValues.set(field.key, arr);
+      }
+      _renderChips();
+      searchInput.value = '';
+      results.innerHTML = ''; results.style.display = 'none';
+      createBtn.style.display = 'none';
+    }
+    if (e.key === 'Backspace' && !searchInput.value) {
+      const arr = _tagValues.get(field.key) || [];
+      if (arr.length) { arr.pop(); _tagValues.set(field.key, arr); _renderChips(); }
+    }
+    if (e.key === 'Escape') {
+      results.style.display = 'none';
+      createBtn.style.display = 'none';
+    }
+  });
+
+  // ── Render chips ─────────────────────────────────────── //
+  const _renderChips = () => {
+    chipRow.innerHTML = '';
     const tags = _tagValues.get(field.key) || [];
     for (let i = 0; i < tags.length; i++) {
+      const tagName = tags[i];
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
       chip.style.cssText = 'display: inline-flex; align-items: center; gap: 4px;';
       chip.title = 'Click label to open tag · × to remove';
 
-      const tagLabel = document.createElement('span');
-      tagLabel.textContent = tags[i];
-      tagLabel.style.cursor = 'pointer';
-      // Click label → open tag entity panel
-      const _tagName = tags[i];
-      tagLabel.addEventListener('click', async (e) => {
+      // Clickable label — looks up tag entity by name and opens panel
+      const labelEl = document.createElement('span');
+      labelEl.textContent = tagName;
+      labelEl.style.cursor = 'pointer';
+      labelEl.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const { getEntitiesByType } = await import('../core/db.js');
           const allTags = await getEntitiesByType('tag');
           const tagEntity = allTags.find(t =>
-            (t.name || t.title || '').toLowerCase() === _tagName.toLowerCase()
+            (t.name || t.title || '').toLowerCase() === tagName.toLowerCase()
           );
           if (tagEntity) {
             emit(EVENTS.PANEL_OPENED, { entityId: tagEntity.id, entityType: 'tag' });
           }
         } catch (err) {
-          console.warn('[entity-form] tag lookup failed:', err);
+          console.warn('[entity-form] tag panel open failed:', err);
         }
       });
-      chip.appendChild(tagLabel);
+      chip.appendChild(labelEl);
 
+      // Remove button
       const rm = document.createElement('span');
       rm.textContent = '×';
       rm.style.cssText = 'cursor: pointer; font-weight: bold; color: var(--color-text-muted); margin-left: 2px;';
-      rm.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const arr = _tagValues.get(field.key) || [];
-        arr.splice(i, 1);
-        _tagValues.set(field.key, arr);
-        _render();
-      });
+      rm.addEventListener('click', (function(idx) {
+        return function(e) {
+          e.stopPropagation();
+          const arr = _tagValues.get(field.key) || [];
+          arr.splice(idx, 1);
+          _tagValues.set(field.key, arr);
+          _renderChips();
+        };
+      })(i));
       chip.appendChild(rm);
       chipRow.appendChild(chip);
     }
-
-    // Input
-    const input = document.createElement('input');
-    input.type        = 'text';
-    input.placeholder = tags.length ? '' : `Add ${field.label.toLowerCase()}…`;
-    input.style.cssText = 'border: none; outline: none; font-size: var(--text-sm); background: transparent; min-width: 80px; flex: 1; font-family: var(--font-body);';
-
-    input.addEventListener('keydown', (e) => {
-      if ((e.key === 'Enter' || e.key === ',') && input.value.trim()) {
-        e.preventDefault();
-        const val = input.value.trim().replace(/,$/, '');
-        if (val) {
-          const arr = _tagValues.get(field.key) || [];
-          if (!arr.includes(val)) arr.push(val);
-          _tagValues.set(field.key, arr);
-        }
-        _render();
-      }
-      if (e.key === 'Backspace' && !input.value) {
-        const arr = _tagValues.get(field.key) || [];
-        if (arr.length) { arr.pop(); _tagValues.set(field.key, arr); _render(); }
-      }
-    });
-    input.addEventListener('blur', () => {
-      const val = input.value.trim();
-      if (val) {
-        const arr = _tagValues.get(field.key) || [];
-        if (!arr.includes(val)) arr.push(val);
-        _tagValues.set(field.key, arr);
-        _render();
-      }
-    });
-
-    chipRow.appendChild(input);
-    chipRow.addEventListener('click', () => input.focus());
-    wrap.appendChild(chipRow);
-
-    const hint = document.createElement('span');
-    hint.className    = 'form-hint';
-    hint.textContent  = 'Press Enter or comma to add';
-    wrap.appendChild(hint);
   };
 
-  _render();
+  // ── Search existing tag entities ──────────────────────── //
+  const _search = async (query) => {
+    let allTags = [];
+    try { allTags = await getEntitiesByType('tag'); } catch { return; }
+
+    const currentTags = _tagValues.get(field.key) || [];
+    const filtered = allTags.filter(t => {
+      if (t.deleted) return false;
+      const name = (t.name || t.title || '').toLowerCase();
+      // Skip already-added tags
+      if (currentTags.some(ct => ct.toLowerCase() === name)) return false;
+      return !query || name.includes(query.toLowerCase());
+    }).slice(0, 8);
+
+    results.innerHTML = '';
+
+    if (filtered.length === 0) {
+      results.style.display = 'none';
+      const q = searchInput.value.trim();
+      if (q) {
+        createBtn.textContent = `+ Create tag "${q}"`;
+        createBtn.style.display = 'block';
+      } else {
+        createBtn.style.display = 'none';
+      }
+      return;
+    }
+
+    createBtn.style.display = 'none';
+    results.style.display = 'block';
+
+    for (const tagEntity of filtered) {
+      const tagName = tagEntity.name || tagEntity.title || '';
+      const colorDot = tagEntity.color ? ` <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-${tagEntity.color.toLowerCase()},#6b7280);margin-left:2px;"></span>` : '';
+
+      const item = document.createElement('div');
+      item.style.cssText = [
+        'display: flex; align-items: center; gap: var(--space-2);',
+        'padding: var(--space-2) var(--space-3); cursor: pointer;',
+        'font-size: var(--text-sm); transition: background var(--transition-fast);',
+      ].join(' ');
+      item.innerHTML = `<span>🏷️</span><span>${_esc(tagName)}</span>${colorDot}`;
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const arr = _tagValues.get(field.key) || [];
+        if (!arr.includes(tagName)) arr.push(tagName);
+        _tagValues.set(field.key, arr);
+        _renderChips();
+        searchInput.value = '';
+        results.style.display = 'none';
+        createBtn.style.display = 'none';
+      });
+      results.appendChild(item);
+    }
+  };
+
+  searchInput.addEventListener('input',  () => _search(searchInput.value));
+  searchInput.addEventListener('focus',  () => _search(searchInput.value));
+  searchInput.addEventListener('blur',   () => {
+    setTimeout(() => { results.style.display = 'none'; }, 150);
+  });
+
+  _renderChips();
   return wrap;
 }
 
@@ -1337,6 +1639,889 @@ function _buildRelationControl(field, config) {
 
   _renderChips();
   return wrap;
+}
+
+// ════════════════════════════════════════════════════════════
+// RELATIONS TAB (Tab 3 — edit mode only)
+// Self-contained port of panel _renderRelationsTab.
+// Operates on _editEntity (the saved entity being edited).
+// ════════════════════════════════════════════════════════════
+
+async function _buildRelationsTab(container) {
+  if (!_editEntity) return;
+
+  const entity = _editEntity;
+  container.innerHTML = '<div style="padding:16px;font-size:var(--text-xs);color:var(--color-text-muted);">Loading…</div>';
+
+  // ── Helpers ───────────────────────────────────────────── //
+  const _escR = (s) => !s ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const _relTime = (iso) => {
+    if (!iso) return '';
+    try {
+      const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (s < 60)     return 'just now';
+      if (s < 3600)   return `${Math.floor(s/60)}m ago`;
+      if (s < 86400)  return `${Math.floor(s/3600)}h ago`;
+      if (s < 604800) return `${Math.floor(s/86400)}d ago`;
+      return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch { return ''; }
+  };
+  const _dispTitle = (e) => {
+    if (!e) return 'Untitled';
+    const cfg = getEntityTypeConfig(e.type);
+    const tf = cfg?.fields?.find(f => f.isTitle);
+    if (tf) return e[tf.key] || 'Untitled';
+    return e.title || e.name || 'Untitled';
+  };
+
+  container.innerHTML = '';
+
+  // ── Section 1: Add Connection ────────────────────────── //
+  const addSection = document.createElement('div');
+  addSection.style.cssText = 'padding: 14px 16px 12px; border-bottom: 1px solid var(--color-border); flex-shrink: 0;';
+  container.appendChild(addSection);
+
+  const addHeader = document.createElement('div');
+  addHeader.style.cssText = 'font-size: 10px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px;';
+  addHeader.textContent = '＋ Add Connection';
+  addSection.appendChild(addHeader);
+
+  // Relation label input
+  const relationInput = document.createElement('input');
+  relationInput.type = 'text';
+  relationInput.className = 'input';
+  relationInput.placeholder = 'Relation label (e.g. "related to")';
+  relationInput.value = 'related to';
+  relationInput.style.cssText = 'width: 160px; font-size: var(--text-xs); padding: 5px 8px; margin-bottom: 6px;';
+  addSection.appendChild(relationInput);
+
+  // Preset chips
+  const presets = ['related to', 'part of', 'blocked by', 'assigned to', 'daily review', 'belongs to', 'see also'];
+  const presetRow = document.createElement('div');
+  presetRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;';
+  for (const p of presets) {
+    const chip = document.createElement('button');
+    chip.textContent = p;
+    chip.style.cssText = 'font-size: 10px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); cursor: pointer;';
+    chip.addEventListener('click', () => {
+      relationInput.value = p;
+      presetRow.querySelectorAll('button').forEach(b => {
+        b.style.background = b === chip ? 'var(--color-accent)' : '';
+        b.style.color      = b === chip ? '#fff' : '';
+        b.style.borderColor= b === chip ? 'var(--color-accent)' : '';
+      });
+    });
+    presetRow.appendChild(chip);
+  }
+  addSection.appendChild(presetRow);
+
+  // Search input + results dropdown
+  const searchWrap = document.createElement('div');
+  searchWrap.style.position = 'relative';
+  addSection.appendChild(searchWrap);
+
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.className = 'input';
+  searchInput.placeholder = '🔍 Search all entities — type to filter…';
+  searchInput.style.cssText = 'width: 100%; font-size: var(--text-sm); padding: 8px 12px; box-sizing: border-box;';
+  searchWrap.appendChild(searchInput);
+
+  const resultsList = document.createElement('div');
+  resultsList.style.cssText = [
+    'display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 200;',
+    'background: var(--color-bg); border: 1px solid var(--color-border);',
+    'border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,.12);',
+    'max-height: 260px; overflow-y: auto; margin-top: 2px;',
+  ].join(' ');
+  searchWrap.appendChild(resultsList);
+
+  // Load all entities
+  let _allEntities = [];
+  try {
+    const allTypes = getAllEntityTypes();
+    const buckets = await Promise.all(allTypes.map(t => getEntitiesByType(t.key).catch(() => [])));
+    _allEntities = buckets.flat()
+      .filter(e => !e.deleted && e.id !== entity.id)
+      .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  } catch (err) {
+    console.warn('[entity-form] relations: load all failed', err);
+  }
+
+  // Track linked IDs
+  const _getLinkedIds = async () => {
+    const [out, inc] = await Promise.all([
+      getEdgesFrom(entity.id).catch(() => []),
+      getEdgesTo(entity.id).catch(() => []),
+    ]);
+    return new Set([...out.map(e => e.toId), ...inc.map(e => e.fromId)]);
+  };
+  let _linkedIds = await _getLinkedIds();
+
+  const _renderSearchResults = (query) => {
+    resultsList.innerHTML = '';
+    const q = (query || '').trim().toLowerCase();
+    let candidates = q
+      ? _allEntities.filter(e => {
+          const t = _dispTitle(e).toLowerCase();
+          return t.includes(q) || (e.type || '').toLowerCase().includes(q);
+        })
+      : _allEntities;
+    const results = candidates.slice(0, 30);
+
+    if (results.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:10px 12px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
+      empty.textContent = q ? `No entities matching "${q}"` : 'Start typing to search…';
+      resultsList.appendChild(empty);
+      if (q) {
+        const createBtn = document.createElement('button');
+        createBtn.style.cssText = 'display:block;width:100%;padding:8px 12px;border:none;background:var(--color-accent-muted);color:var(--color-accent);cursor:pointer;font-size:var(--text-xs);font-weight:600;text-align:left;border-top:1px solid var(--color-border);';
+        createBtn.textContent = `+ Create "${q}" as new entity`;
+        createBtn.addEventListener('click', () => {
+          resultsList.style.display = 'none';
+          // Type picker
+          const pickerWrap = document.createElement('div');
+          pickerWrap.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;';
+          const lbl = document.createElement('span');
+          lbl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);';
+          lbl.textContent = 'Create as:';
+          const typeSelect = document.createElement('select');
+          typeSelect.className = 'input';
+          typeSelect.style.cssText = 'font-size:var(--text-xs);padding:3px 6px;flex:1;min-width:100px;';
+          for (const tp of getAllEntityTypes().filter(t => !t.archived)) {
+            const opt = document.createElement('option');
+            opt.value = tp.key;
+            opt.textContent = (tp.icon ? tp.icon + ' ' : '') + tp.label;
+            typeSelect.appendChild(opt);
+          }
+          const goBtn = document.createElement('button');
+          goBtn.textContent = 'Create';
+          goBtn.style.cssText = 'font-size:var(--text-xs);padding:3px 10px;background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;';
+          goBtn.addEventListener('click', async () => {
+            const chosenType = typeSelect.value;
+            if (!chosenType) return;
+            pickerWrap.remove();
+            openQuickCreateModal(chosenType, { title: q }, async newEnt => {
+              if (!newEnt) return;
+              const rel = relationInput.value.trim() || 'related to';
+              await saveEdge({ fromId: entity.id, fromType: entity.type, toId: newEnt.id, toType: newEnt.type, relation: rel });
+              _linkedIds = await _getLinkedIds();
+              searchInput.value = '';
+              resultsList.style.display = 'none';
+              _refreshConnections();
+            });
+          });
+          pickerWrap.append(lbl, typeSelect, goBtn);
+          searchWrap.parentNode.insertBefore(pickerWrap, searchWrap.nextSibling);
+        });
+        resultsList.appendChild(createBtn);
+      }
+      resultsList.style.display = 'block';
+      return;
+    }
+
+    for (const ent of results) {
+      const cfg = getEntityTypeConfig(ent.type);
+      const title = _dispTitle(ent);
+      const isLinked = _linkedIds.has(ent.id);
+      const timeAgo = _relTime(ent.updatedAt || ent.createdAt);
+
+      const item = document.createElement('div');
+      item.style.cssText = `display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);${isLinked ? 'opacity:0.45;' : ''}`;
+      item.innerHTML = [
+        `<span style="font-size:1rem;flex-shrink:0">${cfg?.icon || '📎'}</span>`,
+        `<div style="flex:1;min-width:0">`,
+        `  <div style="font-size:var(--text-sm);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escR(title)}</div>`,
+        `  <div style="font-size:10px;color:var(--color-text-muted)">${_escR(cfg?.label || ent.type)} · ${_escR(timeAgo)}</div>`,
+        `</div>`,
+        `<span style="font-size:10px;padding:2px 6px;border-radius:99px;background:${cfg?.color||'#94a3b8'}22;color:${cfg?.color||'#94a3b8'};font-weight:600;flex-shrink:0">${isLinked ? '✓ linked' : '+ link'}</span>`,
+      ].join('');
+      item.addEventListener('mouseenter', () => { if (!isLinked) item.style.background = 'var(--color-surface)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = ''; });
+      item.addEventListener('click', async () => {
+        if (isLinked) return;
+        const rel = relationInput.value.trim() || 'related to';
+        try {
+          await saveEdge({ fromId: entity.id, fromType: entity.type, toId: ent.id, toType: ent.type, relation: rel });
+          _linkedIds.add(ent.id);
+          item.style.opacity = '0.45';
+          const pill = item.querySelector('span:last-child');
+          if (pill) pill.textContent = '✓ linked';
+          _refreshConnections();
+        } catch (err) {
+          console.error('[entity-form] saveEdge failed:', err);
+        }
+      });
+      resultsList.appendChild(item);
+    }
+    resultsList.style.display = 'block';
+  };
+
+  let _searchDebounce = null;
+  searchInput.addEventListener('focus', () => _renderSearchResults(searchInput.value));
+  searchInput.addEventListener('input', () => {
+    clearTimeout(_searchDebounce);
+    _searchDebounce = setTimeout(() => _renderSearchResults(searchInput.value), 120);
+  });
+
+  // Close dropdown on outside click — clean up with MutationObserver
+  const _outsideClose = (e) => { if (!searchWrap.contains(e.target)) resultsList.style.display = 'none'; };
+  document.addEventListener('click', _outsideClose);
+  const _relObs = new MutationObserver(() => {
+    if (!document.contains(searchWrap)) { document.removeEventListener('click', _outsideClose); _relObs.disconnect(); }
+  });
+  _relObs.observe(document.body, { childList: true, subtree: true });
+
+  // ── Section 2: Connections list ──────────────────────── //
+  const connHeader = document.createElement('div');
+  connHeader.style.cssText = 'padding: 10px 16px 4px; font-size: 10px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.07em; flex-shrink: 0;';
+  connHeader.textContent = 'Connections';
+  container.appendChild(connHeader);
+
+  const connContainer = document.createElement('div');
+  connContainer.style.cssText = 'flex: 1; overflow-y: auto; padding: 0 0 8px;';
+  container.appendChild(connContainer);
+
+  const _refreshConnections = () => _renderFormConnectionsList(connContainer, entity);
+  await _refreshConnections();
+}
+
+/**
+ * Render grouped connection list for _buildRelationsTab.
+ * Same logic as panel _renderConnectionsList but uses
+ * form-local helpers and opens panel on row click.
+ */
+async function _renderFormConnectionsList(container, entity) {
+  container.innerHTML = '<div style="padding:12px 16px;font-size:var(--text-xs);color:var(--color-text-muted);">Loading…</div>';
+
+  const _escR = (s) => !s ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const _relTime = (iso) => {
+    if (!iso) return '';
+    try {
+      const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (s < 60) return 'just now';
+      if (s < 3600)  return `${Math.floor(s/60)}m ago`;
+      if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+      if (s < 604800) return `${Math.floor(s/86400)}d ago`;
+      return new Date(iso).toLocaleDateString(undefined, { month:'short', day:'numeric' });
+    } catch { return ''; }
+  };
+  const _dispTitle = (e) => {
+    if (!e) return 'Untitled';
+    const cfg = getEntityTypeConfig(e.type);
+    const tf = cfg?.fields?.find(f => f.isTitle);
+    if (tf) return e[tf.key] || 'Untitled';
+    return e.title || e.name || 'Untitled';
+  };
+
+  try {
+    const [outgoing, incoming] = await Promise.all([
+      getEdgesFrom(entity.id).catch(() => []),
+      getEdgesTo(entity.id).catch(() => []),
+    ]);
+
+    const items = [];
+    for (const edge of outgoing) {
+      const linked = await getEntity(edge.toId).catch(() => null);
+      if (!linked || linked.deleted) continue;
+      items.push({ edge, linked, direction: 'out', sortKey: linked.updatedAt || linked.createdAt || '' });
+    }
+    for (const edge of incoming) {
+      const linked = await getEntity(edge.fromId).catch(() => null);
+      if (!linked || linked.deleted) continue;
+      items.push({ edge, linked, direction: 'in', sortKey: linked.updatedAt || linked.createdAt || '' });
+    }
+    items.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+
+    container.innerHTML = '';
+
+    if (items.length === 0) {
+      container.innerHTML = [
+        '<div style="padding:28px 16px;text-align:center;color:var(--color-text-muted);">',
+        '  <div style="font-size:2rem;margin-bottom:8px">🔗</div>',
+        '  <div style="font-size:var(--text-sm)">No connections yet</div>',
+        '  <div style="font-size:var(--text-xs);margin-top:4px">Search above to add connections</div>',
+        '</div>',
+      ].join('');
+      return;
+    }
+
+    // Group by relation + direction
+    const groups = new Map();
+    for (const item of items) {
+      const rel = item.edge.relation || 'related to';
+      const dir = item.direction === 'out' ? '→' : '←';
+      const key = `${dir} ${rel}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+
+    for (const [groupLabel, groupItems] of groups) {
+      const section = document.createElement('div');
+      section.style.cssText = 'margin-bottom: 8px; padding: 0 16px;';
+
+      const hdr = document.createElement('div');
+      hdr.style.cssText = [
+        'font-size: 10px; font-weight: 600; color: var(--color-text-muted);',
+        'text-transform: uppercase; letter-spacing: 0.05em;',
+        'padding: 6px 0 4px; border-bottom: 1px solid var(--color-border);',
+        'display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;',
+      ].join(' ');
+      hdr.innerHTML = `<span>${_escR(groupLabel)}</span><span style="font-weight:400;text-transform:none;letter-spacing:0">${groupItems.length} item${groupItems.length !== 1 ? 's' : ''}</span>`;
+      section.appendChild(hdr);
+
+      for (const { edge, linked, direction } of groupItems) {
+        const cfg     = getEntityTypeConfig(linked.type);
+        const title   = _dispTitle(linked);
+        const timeAgo = _relTime(linked.updatedAt || linked.createdAt);
+
+        const row = document.createElement('div');
+        row.dataset.edgeId = edge.id;
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:var(--radius-sm);cursor:pointer;transition:background 0.1s;';
+
+        const dirArrow = direction === 'out'
+          ? `<span style="color:var(--color-accent);font-size:10px;flex-shrink:0">→</span>`
+          : `<span style="color:var(--color-text-muted);font-size:10px;flex-shrink:0">←</span>`;
+
+        row.innerHTML = [
+          dirArrow,
+          `<span style="font-size:1rem;flex-shrink:0">${cfg?.icon || '📎'}</span>`,
+          `<div style="flex:1;min-width:0">`,
+          `  <div style="font-size:var(--text-sm);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escR(title)}</div>`,
+          `  <div style="font-size:10px;color:var(--color-text-muted)">${_escR(cfg?.label || linked.type)} · ${_escR(timeAgo)}</div>`,
+          `</div>`,
+          `<span class="type-badge" style="background:${cfg?.color||'#94a3b8'};font-size:9px;padding:1px 6px;flex-shrink:0">${_escR(cfg?.label || linked.type)}</span>`,
+          `<button class="rel-rm-btn" title="Remove" style="background:none;border:none;cursor:pointer;padding:2px 4px;color:var(--color-text-muted);font-size:0.85rem;border-radius:4px;flex-shrink:0;opacity:0.5;transition:opacity 0.1s">✕</button>`,
+        ].join('');
+
+        row.addEventListener('mouseenter', () => {
+          row.style.background = 'var(--color-surface-2)';
+          row.querySelector('.rel-rm-btn').style.opacity = '1';
+        });
+        row.addEventListener('mouseleave', () => {
+          row.style.background = '';
+          row.querySelector('.rel-rm-btn').style.opacity = '0.5';
+        });
+
+        // Click row → open that entity's panel
+        row.addEventListener('click', async (e) => {
+          if (e.target.classList.contains('rel-rm-btn')) return;
+          try {
+            const { openPanel } = await import('./entity-panel.js');
+            openPanel(linked.id);
+          } catch (err) { console.warn('[entity-form] openPanel failed:', err); }
+        });
+
+        // Remove button
+        row.querySelector('.rel-rm-btn').addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await deleteEdge(edge.id);
+            row.style.opacity = '0';
+            row.style.transition = 'opacity 0.2s';
+            setTimeout(() => {
+              row.remove();
+              const remaining = section.querySelectorAll('[data-edge-id]').length;
+              if (remaining === 0) section.remove();
+              else hdr.querySelector('span:last-child').textContent = `${remaining} item${remaining !== 1 ? 's' : ''}`;
+            }, 220);
+          } catch (err) { console.error('[entity-form] deleteEdge failed:', err); }
+        });
+
+        section.appendChild(row);
+      }
+      container.appendChild(section);
+    }
+
+    // Total count
+    const total = document.createElement('div');
+    total.style.cssText = 'font-size:10px;color:var(--color-text-muted);text-align:center;padding:8px 16px;';
+    total.textContent = `${items.length} total connection${items.length !== 1 ? 's' : ''}`;
+    container.appendChild(total);
+
+  } catch (err) {
+    console.error('[entity-form] _renderFormConnectionsList failed:', err);
+    container.innerHTML = '<div style="padding:16px;color:var(--color-danger);font-size:var(--text-xs);">Failed to load connections.</div>';
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// DETAILS & ACTIVITY TAB (Tab 2 — edit mode only)
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Build the "Details & Activity" tab body.
+ * Sections:
+ *   1. Action toolbar  — mirrors panel header actions
+ *   2. Metadata card   — created / updated timestamps + ID
+ *   3. Activity log    — collapsible, reads auditLog from settings
+ */
+function _buildDetailsTab(container, config) {
+  if (!_editEntity) return;
+  container.innerHTML = '';
+
+  const entity   = _editEntity;
+  const actions  = config.actions || [];
+
+  // ── helpers ─────────────────────────────────────────────── //
+  const _fmtTs = (iso) => {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleString(undefined, {
+        dateStyle: 'medium', timeStyle: 'short',
+      });
+    } catch { return iso; }
+  };
+  const _fmtShort = (iso) => {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      const now = new Date();
+      const diff = now - d;
+      if (diff < 60000)  return 'just now';
+      if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
+      if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch { return iso; }
+  };
+
+  // Auto-save draft then run action
+  const _guardedAction = async (fn) => {
+    _saveDraftFromForm();
+    await fn();
+  };
+
+  // ─── 1. ACTION TOOLBAR ──────────────────────────────────── //
+  const toolbar = document.createElement('div');
+  toolbar.style.cssText = [
+    'display: flex; align-items: center; gap: 8px; flex-wrap: wrap;',
+    'padding: 14px 16px 12px;',
+    'border-bottom: 1px solid var(--color-border);',
+    'background: var(--color-surface);',
+  ].join(' ');
+
+  const _mkBtn = (icon, label, danger = false, outline = false) => {
+    const btn = document.createElement('button');
+    btn.style.cssText = [
+      'display: inline-flex; align-items: center; gap: 6px;',
+      'padding: 6px 12px; border-radius: var(--radius-md);',
+      'font-size: var(--text-sm); font-family: var(--font-body);',
+      'cursor: pointer; transition: all 0.12s; white-space: nowrap;',
+      danger  ? 'background: var(--color-danger-bg, #fee2e2); color: var(--color-danger, #dc2626); border: 1px solid var(--color-danger, #dc2626);'
+              : outline
+                ? 'background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border);'
+                : 'background: var(--color-surface-2); color: var(--color-text); border: 1px solid var(--color-border);',
+    ].join(' ');
+    btn.innerHTML = `<span style="font-size:14px">${icon}</span><span>${label}</span>`;
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.addEventListener('mouseenter', () => {
+      btn.style.filter = 'brightness(0.92)';
+    });
+    btn.addEventListener('mouseleave', () => {
+      btn.style.filter = '';
+    });
+    return btn;
+  };
+
+  // ── Archive / Unarchive ──────────────────────────────────
+  if (actions.includes('archive') || actions.includes('edit')) {
+    const isArchived = entity.status === 'Archived' || entity.archived;
+    const btn = _mkBtn(isArchived ? '↑' : '⊟', isArchived ? 'Unarchive' : 'Archive');
+    btn.addEventListener('click', () => _guardedAction(async () => {
+      let updated;
+      if (_editEntity.status !== undefined) {
+        updated = { ..._editEntity, status: isArchived ? 'Active' : 'Archived' };
+      } else {
+        updated = { ..._editEntity, archived: !isArchived };
+      }
+      const saved = await saveEntity(updated, getAccount()?.id);
+      _editEntity = saved;
+      emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
+      toast.success(isArchived ? 'Unarchived' : 'Archived');
+      _buildDetailsTab(container, config);
+    }));
+    toolbar.appendChild(btn);
+  }
+
+  // ── Duplicate ────────────────────────────────────────────
+  if (actions.includes('duplicate')) {
+    const btn = _mkBtn('⧉', 'Duplicate');
+    btn.addEventListener('click', () => _guardedAction(async () => {
+      const dup = { ..._editEntity };
+      delete dup.id; delete dup.createdAt; delete dup.updatedAt; delete dup.createdBy;
+      const cfg2 = config;
+      const titleK = cfg2.fields.find(f => f.isTitle)?.key;
+      if (titleK && dup[titleK]) dup[titleK] += ' (copy)';
+      const saved = await saveEntity(dup, getAccount()?.id);
+      emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: true });
+      toast.success('Duplicated — opening copy');
+      closeForm();
+      // Open panel for the duplicate
+      import('./entity-panel.js').then(({ openPanel }) => openPanel(saved.id)).catch(() => {});
+    }));
+    toolbar.appendChild(btn);
+  }
+
+  // ── Add to Project ───────────────────────────────────────
+  if (entity.type !== 'project') {
+    const btn = _mkBtn('📁', 'Add to Project');
+    btn.style.position = 'relative';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Toggle dropdown
+      const existing = toolbar.querySelector('.ef-proj-picker');
+      if (existing) { existing.remove(); return; }
+
+      const dd = document.createElement('div');
+      dd.className = 'ef-proj-picker';
+      dd.style.cssText = [
+        'position: absolute; top: calc(100% + 4px); left: 0; z-index: 999;',
+        'background: var(--color-bg); border: 1px solid var(--color-border);',
+        'border-radius: var(--radius-md); box-shadow: var(--shadow-lg);',
+        'padding: 8px; min-width: 200px; max-height: 220px; overflow-y: auto;',
+      ].join(' ');
+
+      const sinput = document.createElement('input');
+      sinput.type = 'text'; sinput.className = 'input';
+      sinput.placeholder = 'Search projects…';
+      sinput.style.cssText = 'padding:6px 8px;font-size:var(--text-sm);margin-bottom:6px;width:100%;box-sizing:border-box;';
+      dd.appendChild(sinput);
+
+      const projList = document.createElement('div');
+      dd.appendChild(projList);
+
+      const _renderProjs = async (q) => {
+        projList.innerHTML = '';
+        let projects = [];
+        try { projects = (await getEntitiesByType('project')).filter(p => !p.deleted); } catch {}
+        const filtered = projects.filter(p => !q || (p.name||'').toLowerCase().includes(q.toLowerCase()));
+
+        const createRow = document.createElement('div');
+        createRow.style.cssText = 'padding:6px 8px;cursor:pointer;font-size:var(--text-xs);font-weight:600;color:var(--color-accent);border-bottom:1px solid var(--color-border);';
+        createRow.textContent = q ? `+ Create "${q}"` : '+ New project…';
+        createRow.addEventListener('click', () => {
+          dd.remove();
+          openQuickCreateModal('project', { name: q || '' }, async np => {
+            if (!np) return;
+            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'project' });
+            toast.success(`Added to ${np.name || 'project'}`);
+          });
+        });
+        projList.appendChild(createRow);
+
+        for (const proj of filtered.slice(0, 8)) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;font-size:var(--text-sm);border-radius:4px;';
+          row.textContent = '📁 ' + (proj.name || 'Untitled');
+          row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-2)');
+          row.addEventListener('mouseleave', () => row.style.background = '');
+          row.addEventListener('click', async () => {
+            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'project' });
+            dd.remove();
+            toast.success(`Added to ${proj.name || 'project'}`);
+          });
+          projList.appendChild(row);
+        }
+        if (filtered.length === 0 && !q) {
+          const empty = document.createElement('div');
+          empty.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);padding:6px 8px;';
+          empty.textContent = 'No projects yet';
+          projList.appendChild(empty);
+        }
+      };
+
+      sinput.addEventListener('input', () => _renderProjs(sinput.value));
+      _renderProjs('');
+      btn.appendChild(dd);
+      setTimeout(() => sinput.focus(), 20);
+
+      const closeDD = (ev) => {
+        if (!dd.contains(ev.target) && ev.target !== btn) {
+          dd.remove();
+          document.removeEventListener('click', closeDD, true);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeDD, true), 10);
+    });
+    toolbar.appendChild(btn);
+  }
+
+  // ── Convert to… ─────────────────────────────────────────
+  if (actions.includes('convert')) {
+    const btn = _mkBtn('⇄', 'Convert to…');
+    btn.style.position = 'relative';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const existing = toolbar.querySelector('.ef-convert-picker');
+      if (existing) { existing.remove(); return; }
+
+      const dd = document.createElement('div');
+      dd.className = 'ef-convert-picker';
+      dd.style.cssText = [
+        'position: absolute; top: calc(100% + 4px); left: 0; z-index: 999;',
+        'background: var(--color-bg); border: 1px solid var(--color-border);',
+        'border-radius: var(--radius-md); box-shadow: var(--shadow-lg);',
+        'padding: 8px; min-width: 180px; max-height: 260px;',
+        'overflow-y: auto; display: flex; flex-wrap: wrap; gap: 6px;',
+      ].join(' ');
+
+      const types = getAllEntityTypes();
+      for (const t of types) {
+        if (t.key === entity.type) continue;
+        const row = document.createElement('button');
+        row.style.cssText = 'padding:5px 10px;border:1px solid var(--color-border);border-radius:4px;background:none;cursor:pointer;font-size:var(--text-xs);color:var(--color-text);';
+        row.textContent = `${t.icon} ${t.label}`;
+        row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-2)');
+        row.addEventListener('mouseleave', () => row.style.background = '');
+        row.addEventListener('click', async () => {
+          try {
+            _saveDraftFromForm();
+            const converted = await convertEntity(_editEntity.id, t.key);
+            dd.remove();
+            emit(EVENTS.ENTITY_SAVED, { entity: converted, isNew: false });
+            toast.success(`Converted to ${t.label}`);
+            closeForm();
+            import('./entity-panel.js').then(({ openPanel }) => openPanel(converted.id)).catch(() => {});
+          } catch (err) {
+            console.error('[entity-form] Convert failed:', err);
+            toast.error('Conversion failed');
+          }
+        });
+        dd.appendChild(row);
+      }
+
+      btn.appendChild(dd);
+      const closeDD = (ev) => {
+        if (!dd.contains(ev.target) && ev.target !== btn) {
+          dd.remove();
+          document.removeEventListener('click', closeDD, true);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeDD, true), 10);
+    });
+    toolbar.appendChild(btn);
+  }
+
+  // ── Delete ───────────────────────────────────────────────
+  if (actions.includes('delete')) {
+    const btn = _mkBtn('⊗', 'Delete', true);
+    btn.addEventListener('click', () => _guardedAction(async () => {
+      const entityTitle = _editEntity.title || _editEntity.name || config.label;
+      const confirmed = window.confirm(
+        `Delete "${entityTitle}"? This cannot be undone.`
+      );
+      if (!confirmed) return;
+      try {
+        await deleteEntity(_editEntity.id);
+        emit(EVENTS.ENTITY_SAVED, { entity: { ..._editEntity, deleted: true }, isNew: false });
+        toast.success(`${config.label} deleted`);
+        closeForm();
+      } catch (err) {
+        console.error('[entity-form] Delete failed:', err);
+        toast.error('Delete failed');
+      }
+    }));
+    toolbar.appendChild(btn);
+  }
+
+  container.appendChild(toolbar);
+
+  // ─── 2. METADATA CARD ───────────────────────────────────── //
+  const meta = document.createElement('div');
+  meta.style.cssText = [
+    'padding: 14px 16px;',
+    'border-bottom: 1px solid var(--color-border);',
+    'display: flex; flex-direction: column; gap: 6px;',
+  ].join(' ');
+
+  const _metaRow = (label, value) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; gap: 10px; align-items: baseline; font-size: var(--text-sm);';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'width: 78px; flex-shrink: 0; color: var(--color-text-muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; padding-top: 1px;';
+    lbl.textContent = label;
+    const val = document.createElement('span');
+    val.style.cssText = 'color: var(--color-text); font-size: var(--text-sm);';
+    val.textContent = value;
+    row.appendChild(lbl); row.appendChild(val);
+    return row;
+  };
+
+  meta.appendChild(_metaRow('Created',  _fmtTs(entity.createdAt)));
+  meta.appendChild(_metaRow('Updated',  _fmtTs(entity.updatedAt)));
+  meta.appendChild(_metaRow('ID',       entity.id || '—'));
+  if (entity.createdBy) meta.appendChild(_metaRow('By',  entity.createdBy));
+
+  container.appendChild(meta);
+
+  // ─── 3. ACTIVITY LOG (collapsible) ──────────────────────── //
+  const actSection = document.createElement('div');
+  actSection.style.cssText = 'flex: 1; display: flex; flex-direction: column;';
+
+  // Toggle header
+  const actHeader = document.createElement('button');
+  actHeader.style.cssText = [
+    'display: flex; align-items: center; justify-content: space-between;',
+    'width: 100%; padding: 11px 16px; border: none; background: var(--color-surface);',
+    'border-bottom: 1px solid var(--color-border); cursor: pointer;',
+    'font-size: var(--text-sm); font-weight: 600; color: var(--color-text);',
+    'font-family: var(--font-body);',
+  ].join(' ');
+  actHeader.innerHTML = '<span>◷ Activity Log</span><span class="ef-act-chevron" style="font-size:10px;color:var(--color-text-muted)">▼</span>';
+
+  let actOpen = true;
+  const actBody = document.createElement('div');
+  actBody.style.cssText = 'flex: 1; overflow-y: auto; min-height: 120px;';
+
+  actHeader.addEventListener('click', () => {
+    actOpen = !actOpen;
+    actBody.style.display = actOpen ? '' : 'none';
+    actHeader.querySelector('.ef-act-chevron').textContent = actOpen ? '▼' : '▶';
+  });
+
+  actSection.appendChild(actHeader);
+  actSection.appendChild(actBody);
+  container.appendChild(actSection);
+
+  // Load activity log async
+  _loadEntityActivityLog(actBody, entity, config);
+}
+
+/**
+ * Load and render the audit log entries for a specific entity.
+ */
+async function _loadEntityActivityLog(container, entity, config) {
+  container.innerHTML = '<div style="padding:16px;font-size:var(--text-xs);color:var(--color-text-muted);">Loading…</div>';
+
+  try {
+    const [log, authData] = await Promise.all([
+      getSetting('auditLog').catch(() => []),
+      getSetting('auth').catch(() => null),
+    ]);
+    const entries = Array.isArray(log)
+      ? log.filter(e => e.entityId === entity.id).reverse().slice(0, 100)
+      : [];
+
+    // Build account ID → display name map
+    const accountMap = new Map();
+    for (const acct of (authData?.accounts || [])) {
+      const name = acct.memberId
+        ? await getEntity(acct.memberId).then(p => p?.name || p?.title || acct.username || acct.id).catch(() => acct.username || acct.id)
+        : (acct.username || acct.id);
+      accountMap.set(acct.id, name);
+    }
+
+    container.innerHTML = '';
+
+    if (entries.length === 0) {
+      container.innerHTML = [
+        '<div style="display:flex;flex-direction:column;align-items:center;padding:28px 16px;gap:6px;">',
+        '  <div style="font-size:1.5rem;opacity:0.4">◷</div>',
+        '  <div style="font-size:var(--text-sm);color:var(--color-text-muted);">No activity recorded yet</div>',
+        '  <div style="font-size:var(--text-xs);color:var(--color-text-muted);">Changes will appear here automatically</div>',
+        '</div>',
+      ].join('');
+      return;
+    }
+
+    const _looksLikeId = (v) => v && v.length > 8 && !v.includes(' ')
+      && !/^\d{4}-\d{2}-\d{2}/.test(v) && isNaN(Number(v));
+
+    for (const entry of entries) {
+      const row = document.createElement('div');
+      row.style.cssText = [
+        'display: flex; flex-direction: column; gap: 3px;',
+        'padding: 10px 16px;',
+        'border-bottom: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);',
+        'font-size: var(--text-xs);',
+      ].join(' ');
+
+      const icon = entry.action === 'create' ? '✨'
+                 : entry.action === 'delete' ? '🗑️'
+                 : entry.action === 'link'   ? '🔗'
+                 : entry.action === 'unlink' ? '🔓'
+                 : '✏️';
+
+      // Resolve entity IDs in old/new values to readable names
+      let oldVal = entry.oldValue != null ? String(entry.oldValue) : null;
+      let newVal = entry.newValue != null ? String(entry.newValue) : null;
+      if (_looksLikeId(oldVal)) {
+        oldVal = await getEntity(oldVal).then(e => e?.name || e?.title || oldVal).catch(() => oldVal);
+      }
+      if (_looksLikeId(newVal)) {
+        newVal = await getEntity(newVal).then(e => e?.name || e?.title || newVal).catch(() => newVal);
+      }
+
+      // Build description
+      let desc = `${icon} `;
+      if (entry.action === 'create') {
+        desc += `${config.label} created`;
+      } else if (entry.action === 'delete') {
+        desc += `${config.label} deleted`;
+      } else if (entry.action === 'link') {
+        desc += `linked${entry.field ? ` via ${entry.field}` : ''}`;
+        if (newVal) desc += ` → "${_efTruncate(newVal, 30)}"`;
+      } else if (entry.action === 'unlink') {
+        desc += `unlinked${entry.field ? ` via ${entry.field}` : ''}`;
+        if (oldVal) desc += ` "${_efTruncate(oldVal, 30)}"`;
+      } else if (entry.field) {
+        const fieldLabel = config.fields.find(f => f.key === entry.field)?.label || entry.field;
+        desc += `${fieldLabel} changed`;
+        if (oldVal != null && newVal != null) {
+          desc += `: "${_efTruncate(oldVal, 22)}" → "${_efTruncate(newVal, 22)}"`;
+        } else if (newVal != null) {
+          desc += ` to "${_efTruncate(newVal, 30)}"`;
+        } else if (oldVal != null) {
+          desc += ` from "${_efTruncate(oldVal, 30)}" (cleared)`;
+        }
+      } else {
+        desc += 'updated';
+      }
+
+      const byName = entry.byAccountId ? (accountMap.get(entry.byAccountId) || null) : null;
+
+      const mainLine = document.createElement('div');
+      mainLine.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:8px;color:var(--color-text);';
+      mainLine.innerHTML = [
+        `<span style="flex:1;line-height:1.45">${_escHtml(desc)}</span>`,
+        `<span style="flex-shrink:0;color:var(--color-text-muted);white-space:nowrap" title="${entry.at || ''}">${_efFmtShort(entry.at)}</span>`,
+      ].join('');
+      row.appendChild(mainLine);
+
+      if (byName) {
+        const byLine = document.createElement('div');
+        byLine.style.cssText = 'color:var(--color-text-muted);padding-left:18px;';
+        byLine.textContent = `by ${byName}`;
+        row.appendChild(byLine);
+      }
+
+      container.appendChild(row);
+    }
+  } catch (err) {
+    console.error('[entity-form] Activity log error:', err);
+    container.innerHTML = '<div style="padding:16px;color:var(--color-danger);font-size:var(--text-xs);">Failed to load activity</div>';
+  }
+}
+
+/** Truncate a string for activity log display */
+function _efTruncate(str, max) {
+  if (!str) return '';
+  return str.length > max ? str.slice(0, max) + '…' : str;
+}
+
+/** Format ISO timestamp to relative short label */
+function _efFmtShort(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso), now = new Date(), diff = now - d;
+    if (diff < 60000)  return 'just now';
+    if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
+    if (diff < 604800000) return `${Math.floor(diff/86400000)}d ago`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch { return iso; }
 }
 
 // ════════════════════════════════════════════════════════════
