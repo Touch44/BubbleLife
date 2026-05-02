@@ -206,7 +206,8 @@ function _renderDetail() {
     const _dp = new DOMParser();
     const _doc = _dp.parseFromString(_rawBody, 'text/html');
     _doc.querySelectorAll('script,iframe,object,embed').forEach(el => el.remove());
-    bodyEditor.innerHTML = _doc.body.innerHTML;
+    // bodyEditor renders stored HTML — users own their content
+    bodyEditor.innerHTML = _doc.body ? _doc.body.innerHTML : '';
   } else {
     bodyEditor.innerHTML = '';
   }

@@ -274,6 +274,7 @@ let _wizardEl = null;
 function _openWizard(onCreated) {
   if (_wizardEl?.isConnected) return;
   let selectedIcon = '📎';
+  // Will be highlighted in picker after DOM renders
 
   _wizardEl = document.createElement('div');
   _wizardEl.className = 'os-wizard-overlay';

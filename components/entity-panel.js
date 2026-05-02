@@ -1,3 +1,10 @@
+
+/** Convert camelCase field key to human relation label (e.g. 'assignedTo' → 'assigned to') */
+function _fieldKeyToRelLabel(key, fieldConfig) {
+  if (fieldConfig?.label) return fieldConfig.label.toLowerCase();
+  return key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+}
+
 /**
  * FamilyHub v4.2 — components/entity-panel.js
  * Universal entity detail panel — slide-in from right (desktop) / drawer from bottom (mobile)
@@ -1055,7 +1062,7 @@ async function _showProjectPicker() {
             fromType: _entity.type,
             toId:     proj.id,
             toType:   'project',
-            relation: 'project',
+            relation: 'part of',
           }, getAccount()?.id);
           dropdown.remove();
           _renderActiveTab();
@@ -1153,7 +1160,7 @@ const CONTENT_FIRST_TYPES = new Set([
 // ── View definitions (icon toolbar) ──────────────────────── //
 // 'graph' is NOT in this list — it gets its own direct-action button below
 const VIEW_DEFS = [
-  { key: 'content',    icon: '≡',  title: 'Content' },
+  { key: 'content',    icon: '📄',  title: 'Content' },
   { key: 'properties', icon: '📝',  title: 'Properties' },
   { key: 'relations',  icon: '🔗',  title: 'Relations' },
   { key: 'activity',   icon: '📋',  title: 'Activity' },
@@ -2434,7 +2441,7 @@ async function _updateDailyReviewEdgesForDateChange(entity, dateFieldKey, oldDat
             fromType: entity.type,
             toId:     newDR.id,
             toType:   'dailyReview',
-            relation: 'in daily review',
+            relation: 'daily review',
           }, getAccount()?.id);
         }
         console.log('[entity-panel] linked', entity.id, '→ DR', newDateStr);
@@ -2529,7 +2536,7 @@ async function _ensureDailyLinks(entity) {
         fromType: entity.type,
         toId:     dr.id,
         toType:   'dailyReview',
-        relation: 'in daily review',
+        relation: 'daily review',
       }, getAccount()?.id);
       _dailyLinksEnsured.add(cacheKey);
     } catch (err) {
@@ -2867,8 +2874,14 @@ async function _renderConnectionsList(container) {
     ]);
 
     const items = [];
+    const _seenEdgeKeys = new Set();
     for (const r of [...outResolved, ...inResolved]) {
       if (!r || !r.linked || r.linked.deleted) continue;
+      // Deduplicate: same direction + same linked entity + same relation
+      const linkedId = r.direction === 'out' ? r.edge.toId : r.edge.fromId;
+      const edgeKey = `${r.direction}:${linkedId}:${r.edge.relation || ''}`;
+      if (_seenEdgeKeys.has(edgeKey)) continue;
+      _seenEdgeKeys.add(edgeKey);
       items.push({ ...r, sortKey: r.linked.updatedAt || r.linked.createdAt || '' });
     }
 
@@ -2888,11 +2901,20 @@ async function _renderConnectionsList(container) {
       return;
     }
 
-    // Group by relation label
+    // Group by relation label — humanize raw camelCase keys
+    const _humanRel = (rel) => {
+      if (!rel) return 'related to';
+      // Already human (has spaces or is lowercase with spaces)
+      if (rel.includes(' ')) return rel.toLowerCase();
+      // camelCase → "camel case"
+      return rel.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+    };
     const groups = new Map();
     for (const item of items) {
-      const relation = item.edge.relation || 'related to';
+      const relation = _humanRel(item.edge.relation);
       const dir      = item.direction === 'out' ? '→' : '←';
+      // Normalize direction+relation so same relation from both directions
+      // doesn't create two separate groups unnecessarily
       const key      = `${dir} ${relation}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
@@ -2952,11 +2974,11 @@ async function _renderConnectionsList(container) {
 
         row.addEventListener('mouseenter', () => {
           row.style.background = 'var(--color-surface-2)';
-          row.querySelector('.rel-remove-btn').style.opacity = '1';
+          row.querySelector('.rel-remove-btn')?.style && (row.querySelector('.rel-remove-btn').style.opacity = '1');
         });
         row.addEventListener('mouseleave', () => {
           row.style.background = '';
-          row.querySelector('.rel-remove-btn').style.opacity = '0.5';
+          row.querySelector('.rel-remove-btn')?.style && (row.querySelector('.rel-remove-btn').style.opacity = '0.5');
         });
 
         // Click row → smart navigation based on linked entity type

@@ -200,7 +200,13 @@
     </button>
   </header>
 
-  <!-- ── Breadcrumb Row (Blueprint §9.2 — separate row below topbar) ── -->
+  <!-- ── Tab Bar [MAJOR] — multi-view tab strip (core/tabs.js) ── -->
+  <!-- Full-width, grid-row 2. Populated by initTabs() after auth. -->
+  <nav id="tab-bar" aria-label="Open views">
+    <!-- Populated by core/tabs.js initTabs() -->
+  </nav>
+
+  <!-- ── Breadcrumb Row (Blueprint §9.2 — separate row below tab bar) ── -->
   <nav id="breadcrumb-row" aria-label="Breadcrumb">
     <button id="breadcrumb-back-btn" disabled aria-label="Go back">
       ← Back
@@ -721,7 +727,7 @@
   import './views/object-studio.js';                         // 2-B: Capacities-style Object Studio
   import './views/stub-views.js';                             // registers placeholder views
   import { on, emit, EVENTS }        from './core/events.js';
-  import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS }
+  import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS, openInNewTab }
                                      from './core/router.js';
   import { initDB }                  from './core/db.js';
   import { initGraphEngine }         from './core/graph-engine.js';
@@ -732,6 +738,7 @@
   import { initAuth }                from './core/auth.js';
   import { initContext }             from './core/context.js';   // CS-01
   import { buildEnv }                from './core/env.js';      // P-01
+  import { initTabs }                from './core/tabs.js';     // [MAJOR] tab system
   import { dataServiceDescriptor }    from './core/db.js';        // P-06
   import { effectsServiceDescriptor } from './services/effects.js'; // P-12
   import { themeServiceDescriptor }   from './services/theme.js';   // P-13
@@ -961,6 +968,11 @@
       initCommandPalette(env);            // P-18: command palette
       initSystray(env);                   // P-19: systray awareness bar
       await initAuth();
+      // [MAJOR] Init tab system — restores persisted tabs and renders tab bar.
+      // Must run AFTER initAuth() so the app shell is visible and router is wired.
+      import('./core/router.js').then(({ getCurrentView }) => {
+        initTabs({ navigate, getCurrentView });
+      });
       initContext();                       // CS-01: restore active context from localStorage
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities

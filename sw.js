@@ -4,19 +4,19 @@
  */
 'use strict';
 
-const APP_VERSION   = '4.2.2';
+const APP_VERSION   = '4.3.0';
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
   './', './index.html', './manifest.json',
-  './styles/tokens.css?v=4.2.2', './styles/layout.css?v=4.2.2',
-  './styles/components.css?v=4.2.2', './styles/dark.css?v=4.2.2',
+  './styles/tokens.css?v=4.3.0', './styles/layout.css?v=4.3.0',
+  './styles/components.css?v=4.3.0', './styles/dark.css?v=4.3.0',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
-  './core/context.js', './core/object-type-registry.js',
+  './core/context.js', './core/object-type-registry.js', './core/tabs.js',
   './services/notification.js', './services/dialog.js', './services/hotkey.js',
   './services/history.js', './services/command.js', './services/effects.js',
   './services/theme.js', './services/sync.js', './services/activity.js',
@@ -84,6 +84,7 @@ self.addEventListener('activate', event => {
 });
 
 // FETCH: Cache-First for shell, Network-First(3s) for dynamic
+// NOTE: shell CSS is cache-first — bust cache by bumping APP_VERSION on every deploy
 self.addEventListener('fetch', event => {
   const req = event.request;
   if (req.method !== 'GET') return;

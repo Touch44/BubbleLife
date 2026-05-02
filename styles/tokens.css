@@ -167,6 +167,7 @@
   --sidebar-collapsed:  0px;
   --topbar-height:      48px;
   --breadcrumb-height:  34px;
+  --tab-bar-height:     36px;
   --panel-width:        420px;
   --fab-size:           48px;
   --graph-filter-width: 220px;
@@ -182,7 +183,7 @@
   --z-raised:   10;
   --z-dropdown: 100;
   --z-sticky:   200;
-  --z-topbar:   300;
+  --z-topbar:   500;
   --z-sidebar:  400;
   --z-overlay:  500;
   --z-panel:    600;

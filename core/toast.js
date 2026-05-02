@@ -70,6 +70,12 @@ export function showToast(message, type = 'info', options = {}) {
 
   container.appendChild(toast);
 
+  // Limit max visible toasts to prevent screen overflow
+  const MAX_TOASTS = 4;
+  while (container.children.length > MAX_TOASTS) {
+    container.firstChild?.remove();
+  }
+
   // Animate in
   requestAnimationFrame(() => {
     toast.classList.add('toast-visible');

@@ -56,6 +56,8 @@ const SECTION_DEFAULTS = {
 
 /** Currently viewed date as a Date object (local midnight) */
 let _currentDate = _todayLocal();
+/** Incremented each renderDaily call; stale renders check this and bail early */
+let _renderGeneration = 0;
 
 /**
  * D-04: Local context override for daily view.
@@ -843,7 +845,8 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
 
     try {
       const account = getAccount();
-      const now     = new Date().toISOString();
+      // [minor] Use local ISO to avoid UTC midnight shift
+      const now     = new Date().toLocaleString('sv-SE').replace(' ', 'T');
 
       // D-04: use daily-local context override for entity creation
       const captureCtx = _getDailyContext();
@@ -1373,7 +1376,7 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
 
     // Checklist progress — visual bar matching kanban K-02 style
     const cl = Array.isArray(task.checklist) ? task.checklist : [];
-    const clDone = cl.filter(i => i.done).length;
+    const clDone = Array.isArray(cl) ? cl.filter(i => i.done) : [].length;
     const clPct  = cl.length ? Math.round((clDone / cl.length) * 100) : 0;
     const clComplete = cl.length > 0 && clDone === cl.length;
     const clHtml = cl.length
@@ -2552,3 +2555,15 @@ registerView('daily', renderDaily);
 // ── Export for external use (FAB, auth.js) ────────────────── //
 
 export { renderDaily };
+
+// ── Midnight refresh: update "today" highlight when day changes ──
+(function _scheduleMidnightRefresh() {
+  const now = new Date();
+  const msToMidnight = (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1) - now) + 1000;
+  setTimeout(() => {
+    // Re-render week strip and today indicator without changing current date
+    renderDaily({ _internal: true });
+    _scheduleMidnightRefresh();
+  }, msToMidnight);
+})();
+

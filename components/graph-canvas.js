@@ -647,7 +647,8 @@ function _render() {
     ctx.globalAlpha = dimmed ? 0.15 : 0.55;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(edge.relation, mx, my - 6);
+    const _rel = edge.relation || '';
+      ctx.fillText(_rel.includes(' ') ? _rel : _rel.replace(/([A-Z])/g, ' $1').toLowerCase().trim(), mx, my - 6);
 
     ctx.globalAlpha = 1;
   }

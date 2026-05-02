@@ -728,7 +728,7 @@ export async function exportAll() {
 
     return {
       exportedAt: new Date().toISOString(),
-      appVersion: '4.2.2',
+      appVersion: '4.3.0',
       entities,
       edges,
       settings,

@@ -218,7 +218,13 @@ async function renderSettings() {
       } else {
         html.setAttribute('data-theme', mode);
       }
-      try { localStorage.setItem('fh_theme', mode); } catch { /* ignore */ }
+      try {
+              localStorage.setItem('fh_theme', mode);
+              // Apply CSS immediately via data-theme attribute (same as theme service)
+              document.documentElement.setAttribute('data-theme', mode === 'auto'
+                ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                : mode);
+            } catch { /* ignore */ }
       renderSettings();
     }
   };

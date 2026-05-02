@@ -267,8 +267,28 @@ export function closeForm() {
 // ════════════════════════════════════════════════════════════
 
 function _buildAndMount(config) {
-  // Remove any existing form
-  document.querySelector('.ef-overlay')?.remove();
+  // If there's already an open form and we're not in a stack operation,
+  // push current state to stack so it can be restored
+  const existingOverlay = document.querySelector('.ef-overlay');
+  if (existingOverlay && existingOverlay === _overlay && _overlay && _parentFormStack.length === 0) {
+    // Save current form to stack automatically
+    _parentFormStack.push({
+      overlay: _overlay,
+      typeKey: _typeKey,
+      editEntity: _editEntity,
+      draft: _draft ? { ..._draft } : null,
+      onSave: _onSave,
+      relVals: new Map(_relationValues),
+      tagVals: new Map(_tagValues),
+      activeTab: _activeFormTab,
+      onCancel: null,
+    });
+    _overlay.style.display = 'none';
+    _overlay.remove();
+  } else {
+    // Remove any existing form
+    document.querySelector('.ef-overlay')?.remove();
+  }
 
   // ── Overlay ──────────────────────────────────────────── //
   _overlay = document.createElement('div');
@@ -311,7 +331,12 @@ function _buildAndMount(config) {
   }
 
   const allTypes = getAllEntityTypes();
-  for (const t of allTypes) {
+  // In create mode, filter out internal/system types users shouldn't create directly
+  const HIDDEN_TYPES = new Set(['dailyReview', 'tag', 'comment']);
+  const visibleTypes = _editEntity
+    ? allTypes
+    : allTypes.filter(t => !HIDDEN_TYPES.has(t.key));
+  for (const t of visibleTypes) {
     const opt = document.createElement('option');
     opt.value       = t.key;
     opt.textContent = `${t.icon} ${t.label}`;
@@ -1791,7 +1816,7 @@ async function _buildRelationsTab(container) {
   addSection.appendChild(relationInput);
 
   // Preset chips
-  const presets = ['related to', 'part of', 'blocked by', 'assigned to', 'daily review', 'belongs to', 'see also'];
+  const presets = ['related to', 'part of', 'blocked by', 'blocking', 'assigned to', 'daily review', 'belongs to', 'see also'];
   const presetRow = document.createElement('div');
   presetRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;';
   for (const p of presets) {
@@ -2310,7 +2335,7 @@ function _buildDetailsTab(container, config) {
           dd.remove();
           openQuickCreateModal('project', { name: q || '' }, async np => {
             if (!np) return;
-            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'project' }, getAccount()?.id);
+            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'part of' }, getAccount()?.id);
             toast.success(`Added to ${np.name || 'project'}`);
           });
         });
@@ -2323,7 +2348,7 @@ function _buildDetailsTab(container, config) {
           row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-2)');
           row.addEventListener('mouseleave', () => row.style.background = '');
           row.addEventListener('click', async () => {
-            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'project' }, getAccount()?.id);
+            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'part of' }, getAccount()?.id);
             dd.remove();
             toast.success(`Added to ${proj.name || 'project'}`);
           });
@@ -2655,6 +2680,20 @@ function _efFmtShort(iso) {
 // SUBMIT / SAVE
 // ════════════════════════════════════════════════════════════
 
+
+/**
+ * Convert a camelCase field key to a human-readable relation label.
+ * Used to normalize edge.relation strings so entity-panel groups correctly.
+ * @param {string} key - field key e.g. 'blockedBy', 'assignedTo'
+ * @param {object} [fieldConfig] - optional field config with .label
+ * @returns {string} human label e.g. 'blocked by', 'assigned to'
+ */
+function _fieldKeyToRelLabel(key, fieldConfig) {
+  if (fieldConfig?.label) return fieldConfig.label.toLowerCase();
+  // CamelCase → "camel case" → lowercase
+  return key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+}
+
 async function _submitForm() {
   if (!_typeKey) return;
 
@@ -2774,7 +2813,7 @@ async function _submitForm() {
                   fromType: saved.type,
                   toId:     target.id,
                   toType:   target.type || field.relatesTo || '',
-                  relation: field.key,
+                  relation: _fieldKeyToRelLabel(field.key, field),
                 }, getAccount()?.id);
               } catch (edgeErr) { console.warn('[entity-form] Edge save failed:', edgeErr); }
             }
@@ -2789,7 +2828,7 @@ async function _submitForm() {
               fromType: saved.type,
               toId:     target.id,
               toType:   target.type || field.relatesTo || '',
-              relation: field.key,
+              relation: _fieldKeyToRelLabel(field.key, field),
             });
             // [minor] BIDIR: create reverse edge in create mode too
             const biRev = { blockedBy: 'blocking', blocking: 'blockedBy' }[field.key];
@@ -2798,7 +2837,8 @@ async function _submitForm() {
               if (!revExists.some(e => e.toId === saved.id)) {
                 await saveEdge({
                   fromId: target.id, fromType: target.type || 'task',
-                  toId: saved.id, toType: saved.type, relation: biRev,
+                  toId: saved.id, toType: saved.type,
+                  relation: _fieldKeyToRelLabel(biRev),
                 }, getAccount()?.id).catch(() => {});
               }
             }
@@ -2821,15 +2861,9 @@ async function _submitForm() {
       const targetIds = new Set(targets.map(t => t.id));
 
       try {
-        // Get existing forward edges for this field
-        const existingForward = await getEdgesFrom(saved.id, field.key);
-        const existingForwardIds = new Set(existingForward.map(e => e.toId));
-
-        // Newly added targets → create reverse edge on target
+        // For all currently-selected targets, ensure reverse edge exists
         for (const target of targets) {
-          if (!existingForwardIds.has(target.id)) continue; // just saved above, so should exist
-          // Check if reverse edge already exists
-          const reverseEdges = await getEdgesFrom(target.id, reverseKey).catch(() => []);
+          const reverseEdges = await getEdgesFrom(target.id, _fieldKeyToRelLabel(reverseKey)).catch(() => []);
           const alreadyLinked = reverseEdges.some(e => e.toId === saved.id);
           if (!alreadyLinked) {
             try {
@@ -2838,7 +2872,7 @@ async function _submitForm() {
                 fromType: target.type || 'task',
                 toId:     saved.id,
                 toType:   saved.type,
-                relation: reverseKey,
+                relation: _fieldKeyToRelLabel(reverseKey),
               }, getAccount()?.id);
             } catch (re) { console.warn('[entity-form] reverse edge save failed:', re); }
           }

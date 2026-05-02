@@ -10,6 +10,8 @@
 
 import { emit, EVENTS } from './events.js';
 import { viewRegistry } from './registry.js';
+// [MAJOR] Tab integration — updateActiveTab keeps the tab bar in sync with every navigate()
+import { updateActiveTab, openTab as _openTabFn } from './tabs.js';
 
 // ── Constants ────────────────────────────────────────────── //
 
@@ -192,6 +194,8 @@ export function navigate(viewKeyOrAction, params = {}, label, replace = false) {
       // Truncate forward history, then push
       _history = _history.slice(0, _cursor + 1);
       _history.push(entry);
+    // Cap history to prevent memory leak on long sessions
+    if (_history.length > 100) _history.shift();
       _cursor = _history.length - 1;
     }
   }
@@ -199,6 +203,9 @@ export function navigate(viewKeyOrAction, params = {}, label, replace = false) {
   if (!_skipApplyView) _applyView(entry);
   _updateHash(viewKey, params);
   _renderBreadcrumbs();
+
+  // [MAJOR] Keep active tab label/icon in sync with every navigation
+  updateActiveTab(viewKey, params, resolvedLabel);
 
   emit(EVENTS.VIEW_CHANGED, { viewKey, params, label: resolvedLabel });
 }
@@ -322,6 +329,18 @@ export function canGoForward() { return _cursor < _history.length - 1; }
  */
 export function showView(viewKey, params = {}, label) {
   navigate(viewKey, params, label);
+}
+
+/**
+ * Open a view in a new tab (or focus existing tab with matching view+params).
+ * Called by wireNavItems on Ctrl/Cmd+click or middle-click.
+ *
+ * @param {string} viewKey
+ * @param {Object} [params={}]
+ * @param {string} [label]
+ */
+export function openInNewTab(viewKey, params = {}, label) {
+  _openTabFn(viewKey, params, label || _resolveLabel(viewKey, params));
 }
 
 // ── Internal Helpers ─────────────────────────────────────── //
@@ -643,18 +662,33 @@ export function wireNavItems() {
   if (!nav || nav._delegated) return;  // idempotent
   nav._delegated = true;
 
+  // ── Helper: extract view/params/label from a nav item element ──
+  function _navItemData(el) {
+    const view       = el.dataset.view;
+    const entityType = el.dataset.entityType;
+    const label      = el.dataset.label || el.querySelector('.nav-item-label')?.textContent?.trim();
+    const params     = (view === 'entity-type' && entityType) ? { entityType } : {};
+    return { view, params, label };
+  }
+
+  // ── Left-click: navigate (or Ctrl/Cmd+click: new tab) ──
   nav.addEventListener('click', (e) => {
     const el = e.target.closest('.nav-item[data-view]');
     if (!el) return;
 
-    const view = el.dataset.view;
-    const entityType = el.dataset.entityType;
-    const label = el.dataset.label || el.querySelector('.nav-item-label')?.textContent;
+    const { view, params, label } = _navItemData(el);
 
-    if (view === 'entity-type' && entityType) {
-      navigate(view, { entityType }, label);
+    // [MAJOR] Ctrl/Cmd + click → open in new tab
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      _openTabFn(view, params, label || _resolveLabel(view, params));
     } else {
-      navigate(view, {}, label);
+      if (view === 'entity-type' && params.entityType) {
+        navigate(view, params, label);
+      } else {
+        navigate(view, {}, label);
+      }
     }
 
     // Close mobile sidebar on nav
@@ -664,19 +698,46 @@ export function wireNavItems() {
     if (overlay) overlay.classList.remove('visible');
   });
 
+  // ── Middle-click: open in new tab ──
+  nav.addEventListener('mousedown', (e) => {
+    if (e.button !== 1) return;
+    const el = e.target.closest('.nav-item[data-view]');
+    if (!el) return;
+    e.preventDefault(); // prevent scroll-panning
+    const { view, params, label } = _navItemData(el);
+    _openTabFn(view, params, label || _resolveLabel(view, params));
+  });
+
   // Also wire sidebar-footer nav items (Settings) via delegation on the footer
   const footer = document.querySelector('.sidebar-footer');
   if (footer && !footer._delegated) {
     footer._delegated = true;
+
     footer.addEventListener('click', (e) => {
       const el = e.target.closest('.nav-item[data-view]');
       if (!el) return;
-      const view = el.dataset.view;
-      navigate(view, {});
+      const { view, params, label } = _navItemData(el);
+
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        _openTabFn(view, params, label || _resolveLabel(view, params));
+      } else {
+        navigate(view, params);
+      }
+
       const sidebar = document.getElementById('sidebar');
       const overlay2 = document.getElementById('sidebar-overlay');
       if (sidebar) sidebar.classList.remove('open');
       if (overlay2) overlay2.classList.remove('visible');
+    });
+
+    footer.addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return;
+      const el = e.target.closest('.nav-item[data-view]');
+      if (!el) return;
+      e.preventDefault();
+      const { view, params, label } = _navItemData(el);
+      _openTabFn(view, params, label || _resolveLabel(view, params));
     });
   }
 
