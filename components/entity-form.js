@@ -362,47 +362,54 @@ function _buildAndMount(config) {
   titleRow.appendChild(title);
   header.appendChild(titleRow);
 
-  // ── Tab strip (edit mode only) ───────────────────────── //
+  // ── Tab strip ─────────────────────────────────────────── //
   let tabStrip = null;
   let tab1Body = null;
   let tab2Body = null;
   let tab3Body = null;
 
-  if (_editEntity) {
-    tabStrip = document.createElement('div');
-    tabStrip.style.cssText = [
-      'display: flex; gap: 2px; padding: 0 16px;',
-      'border-bottom: 1px solid var(--color-border);',
-      'background: var(--color-surface); flex-shrink: 0;',
+  // Show tab strip in both create and edit modes for visual consistency
+  tabStrip = document.createElement('div');
+  tabStrip.style.cssText = [
+    'display: flex; gap: 2px; padding: 0 16px;',
+    'border-bottom: 1px solid var(--color-border);',
+    'background: var(--color-surface); flex-shrink: 0;',
+  ].join(' ');
+
+  const _mkTab = (key, label, icon, disabled = false) => {
+    const btn = document.createElement('button');
+    btn.dataset.tabKey = key;
+    btn.style.cssText = [
+      'padding: 9px 14px 8px; border: none; background: none; cursor: pointer;',
+      'font-size: var(--text-sm); font-family: var(--font-body);',
+      'display: flex; align-items: center; gap: 6px;',
+      'border-bottom: 2px solid transparent; margin-bottom: -1px;',
+      'transition: color 0.12s, border-color 0.12s;',
     ].join(' ');
+    btn.innerHTML = `<span style="font-size:13px">${icon}</span><span>${label}</span>`;
+    if (disabled) {
+      btn.disabled = true;
+      btn.style.opacity = '0.35';
+      btn.style.cursor = 'default';
+      btn.title = 'Save first to unlock';
+    }
+    return btn;
+  };
 
-    const _mkTab = (key, label, icon) => {
-      const btn = document.createElement('button');
-      btn.dataset.tabKey = key;
-      btn.style.cssText = [
-        'padding: 9px 14px 8px; border: none; background: none; cursor: pointer;',
-        'font-size: var(--text-sm); font-family: var(--font-body);',
-        'display: flex; align-items: center; gap: 6px;',
-        'border-bottom: 2px solid transparent; margin-bottom: -1px;',
-        'transition: color 0.12s, border-color 0.12s;',
-      ].join(' ');
-      btn.innerHTML = `<span style="font-size:13px">${icon}</span><span>${label}</span>`;
-      return btn;
-    };
+  const tab1Btn = _mkTab('fields',    'Fields',           '📝');
+  const tab2Btn = _mkTab('details',   'Details',          '📋', !_editEntity);
+  const tab3Btn = _mkTab('relations', 'Relations',        '🔗', !_editEntity);
 
-    const tab1Btn = _mkTab('fields',    'Fields',           '📝');
-    const tab2Btn = _mkTab('details',   'Details',          '📋');
-    const tab3Btn = _mkTab('relations', 'Relations',        '🔗');
+  const _applyTabStyles = () => {
+    [tab1Btn, tab2Btn, tab3Btn].forEach(b => {
+      const active = b.dataset.tabKey === _activeFormTab;
+      b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
+      b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
+      b.style.fontWeight = active ? '600' : '400';
+    });
+  };
 
-    const _applyTabStyles = () => {
-      [tab1Btn, tab2Btn, tab3Btn].forEach(b => {
-        const active = b.dataset.tabKey === _activeFormTab;
-        b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
-        b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
-        b.style.fontWeight = active ? '600' : '400';
-      });
-    };
-
+  if (_editEntity) {
     const _switchTab = (key) => {
       _activeFormTab = key;
       _applyTabStyles();
@@ -414,8 +421,6 @@ function _buildAndMount(config) {
       if (footerEl) footerEl.style.display = (key === 'details' || key === 'relations') ? 'none' : '';
       // Lazy-load Tab 2 on first open
       if (key === 'details' && tab2Body) {
-        // Always rebuild Tab 2 on open — config may have changed (e.g. after Convert)
-        // and _editEntity may have been updated by status toggle or archive actions.
         tab2Body.dataset.loaded = '1';
         const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
         _buildDetailsTab(tab2Body, freshConfig || config);
@@ -430,12 +435,12 @@ function _buildAndMount(config) {
     tab1Btn.addEventListener('click', () => _switchTab('fields'));
     tab2Btn.addEventListener('click', () => _switchTab('details'));
     tab3Btn.addEventListener('click', () => _switchTab('relations'));
-
-    tabStrip.appendChild(tab1Btn);
-    tabStrip.appendChild(tab2Btn);
-    tabStrip.appendChild(tab3Btn);
-    _applyTabStyles();
   }
+
+  tabStrip.appendChild(tab1Btn);
+  tabStrip.appendChild(tab2Btn);
+  tabStrip.appendChild(tab3Btn);
+  _applyTabStyles();
 
   // ── Body ─────────────────────────────────────────────── //
   const body = document.createElement('div');
@@ -1238,6 +1243,7 @@ function _buildTagControl(field) {
       createBtn.style.display = 'none';
       results.innerHTML = ''; results.style.display = 'none';
     });
+    })();
   });
 
   // ── Also support Enter / comma to add raw tag name ────── //
@@ -1596,7 +1602,11 @@ function _buildRelationControl(field, config) {
   createBtn.style.display = 'none';
   wrap.appendChild(createBtn);
   createBtn.addEventListener('click', () => {
-    openQuickCreateModal(typeToSearch, { title: searchInput.value.trim() }, newEntity => {
+    (() => {
+      // Look up the target type's title field key (not always 'title')
+      const _tCfg = getEntityTypeConfig(typeToSearch);
+      const _tKey = _tCfg?.fields?.find(f => f.isTitle)?.key || 'title';
+      openQuickCreateModal(typeToSearch, { [_tKey]: searchInput.value.trim() }, newEntity => {
       const arr = _relationValues.get(field.key) || [];
       if (!arr.find(r => r.id === newEntity.id)) {
         arr.push({ id: newEntity.id, label: newEntity.title || newEntity.name || newEntity.id,
@@ -1889,7 +1899,10 @@ async function _buildRelationsTab(container) {
             const chosenType = typeSelect.value;
             if (!chosenType) return;
             pickerWrap.remove();
-            openQuickCreateModal(chosenType, { title: q }, async newEnt => {
+            (() => {
+              const _tCfg2 = getEntityTypeConfig(chosenType);
+              const _tKey2 = _tCfg2?.fields?.find(f => f.isTitle)?.key || 'title';
+              openQuickCreateModal(chosenType, { [_tKey2]: q }, async newEnt => {
               if (!newEnt) return;
               const rel = relationInput.value.trim() || 'related to';
               await saveEdge({ fromId: entity.id, fromType: entity.type, toId: newEnt.id, toType: newEnt.type, relation: rel }, getAccount()?.id);
@@ -1898,6 +1911,7 @@ async function _buildRelationsTab(container) {
               resultsList.style.display = 'none';
               await _refreshConnections();
             });
+            })();
           });
           pickerWrap.append(lbl, typeSelect, goBtn);
           searchWrap.parentNode.insertBefore(pickerWrap, searchWrap.nextSibling);
