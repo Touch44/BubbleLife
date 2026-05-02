@@ -14,6 +14,7 @@
 import { getSetting, setSetting, getEdgesFrom, getEdgesTo,
          getEntity, saveEntity, initDB } from './db.js';
 import { emit, EVENTS } from './events.js';
+import { getAccount } from './auth.js';
 
 // ── Settings key ─────────────────────────────────────────── //
 
@@ -1105,7 +1106,6 @@ export async function convertEntity(entityId, newType) {
     }
   }
 
-  const { getAccount } = await import('./auth.js');
   const saved = await saveEntity(converted, getAccount()?.id);
   console.log(`[graph-engine] [minor] convertEntity: "${entityId}" ${entity.type} → ${newType}`);
 

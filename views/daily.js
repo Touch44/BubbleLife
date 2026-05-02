@@ -26,7 +26,7 @@ import { registerView, navigate, VIEW_KEYS } from '../core/router.js';
 import { getEntitiesByType, getEntity, getSetting,
          saveEntity, saveEdge, getEdgesFrom }  from '../core/db.js';
 import { emit, on, EVENTS }                    from '../core/events.js';
-import { openEditForm, openForm }               from '../components/entity-form.js';
+import { openForm }                             from '../components/entity-form.js';  // openEditForm removed — form-first v4.0.3+
 import { getAccount }                      from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                            from '../core/toast.js';
@@ -980,14 +980,9 @@ function _prependCapturedItem(entity, type, dateStr, sectionRefs) {
         </div>
       </div>
     `;
-    // Title click → full edit form (only title span, not meta badges)
-    row.querySelector('.daily-task-info-clickable').addEventListener('click', async () => {
-      // Re-fetch fresh entity — rendered entity object may be stale
-      try {
-        const { getEntity } = await import('../core/db.js');
-        const fresh = await getEntity(entity.id);
-        openEditForm(fresh || entity);
-      } catch { openEditForm(entity); }
+    // Title click → form-first UX; PANEL_OPENED routes to openEditForm with fresh entity
+    row.querySelector('.daily-task-info-clickable').addEventListener('click', () => {
+      emit(EVENTS.PANEL_OPENED, { entityType: entity.type || type, entityId: entity.id });
     });
     const cb = row.querySelector('.daily-task-checkbox');
     cb.addEventListener('change', async () => {
@@ -1418,9 +1413,9 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
       </div>
     `;
 
-    // Title click → full edit form (checklist add/delete, all fields)
+    // Title click → form-first UX; route through PANEL_OPENED so openPanel fetches fresh entity
     row.querySelector('.daily-task-info-clickable').addEventListener('click', () => {
-      openEditForm(task);
+      emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id });
     });
 
     const checkbox = row.querySelector('.daily-task-checkbox');

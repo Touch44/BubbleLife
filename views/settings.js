@@ -120,8 +120,8 @@ async function renderSettings() {
         <hr style="margin:var(--space-3) 0;border:none;border-top:1px solid var(--color-border);">
         <div style="display:flex;flex-direction:column;gap:var(--space-2);">
           <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;">Update Profile</div>
-          <input id="settings-display-name" type="text" class="input" placeholder="Display name" style="font-size:var(--text-sm);">
-          <input id="settings-email" type="email" class="input" placeholder="Email (optional)" style="font-size:var(--text-sm);">
+          <input id="settings-display-name" type="text" class="input" placeholder="Display name" value="${_esc(account?.memberId ? '' : account?.username || '')}" style="font-size:var(--text-sm);">
+          <input id="settings-email" type="email" class="input" placeholder="Email (optional)" value="${_esc(account?.email || '')}" style="font-size:var(--text-sm);">
           <hr style="margin:var(--space-1) 0;border:none;border-top:1px solid var(--color-border);">
           <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;">Change Password</div>
           <input id="settings-current-pass" type="password" class="input" placeholder="Current password" style="font-size:var(--text-sm);" autocomplete="current-password">
@@ -225,6 +225,18 @@ async function renderSettings() {
   el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyTheme('light'));
 
   // ── Account update form ──────────────────────────────────
+  // Pre-fill display name from person entity
+  (async () => {
+    if (account?.memberId) {
+      try {
+        const { getEntity } = await import('../core/db.js');
+        const person = await getEntity(account.memberId);
+        const displayInput = el.querySelector('#settings-display-name');
+        if (displayInput && person) displayInput.value = person.name || person.title || '';
+      } catch { /* skip */ }
+    }
+  })();
+
   el.querySelector('#settings-account-save')?.addEventListener('click', async () => {
     const { updateAccount } = await import('../core/auth.js');
     const displayName   = el.querySelector('#settings-display-name')?.value.trim() || '';

@@ -17,9 +17,9 @@
 
 import { registerView }                         from '../core/router.js';
 import { getEntitiesByType, getEdgesFrom,
-         saveEntity }                            from '../core/db.js';
+         getEntity, saveEntity }                 from '../core/db.js';
 import { emit, on, EVENTS }                      from '../core/events.js';
-import { openEditForm }                           from '../components/entity-form.js';
+// openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
 import { filterByContext, getActiveContext }      from '../core/context.js';
 
@@ -76,6 +76,30 @@ let _filterAssignees = new Set();
 let _filterTags      = new Set();
 let _filterPriority  = null;   // 'Critical' | 'High' | ... | null
 let _filterOverdue   = false;
+
+// ── Capacities-style view modes + filter tabs ─────────────── //
+let _viewMode   = 'kanban';
+let _filterTab  = 'status';
+
+const _VIEW_MODES = [
+  { key: 'list',    label: 'List',    icon: '\uD83D\uDCCB' },
+  { key: 'wall',    label: 'Wall',    icon: '\uD83E\uDDE0' },
+  { key: 'kanban',  label: 'Kanban',  icon: '\uD83D\uDCCA' },
+  { key: 'gallery', label: 'Gallery', icon: '\uD83D\uDDBC\uFE0F' },
+  { key: 'table',   label: 'Table',   icon: '\uD83D\uDDD3\uFE0F' },
+  { key: 'embed',   label: 'Embed',   icon: '\uD83D\uDCCE' },
+];
+
+const _FILTER_TABS = [
+  { key: 'inbox',     label: 'Inbox',     icon: '\uD83D\uDCEC' },
+  { key: 'scheduled', label: 'Scheduled', icon: '\uD83D\uDCC5' },
+  { key: 'today',     label: 'Today',     icon: '\u2600\uFE0F' },
+  { key: 'status',    label: 'Status',    icon: '\uD83D\uDD04' },
+  { key: 'context',   label: 'Context',   icon: '\uD83C\uDFF7\uFE0F' },
+  { key: 'open',      label: 'Open',      icon: '\u25CB' },
+  { key: 'completed', label: 'Completed', icon: '\u2705' },
+  { key: 'all',       label: 'All',       icon: '\uD83D\uDDC2\uFE0F' },
+];
 
 // Sort state per column key
 let _sortBy = {};  // { 'Inbox': 'deadline', ... }
@@ -231,6 +255,49 @@ function _collectAssignees() {
   return [...ids].map(id => _personMap.get(id)).filter(Boolean);
 }
 
+// ── Filter tab logic ──────────────────────────────────────── //
+
+function _applyFilterTab(tasks) {
+  const today = _todayStr();
+  switch (_filterTab) {
+    case 'inbox':     return tasks.filter(t => t.status === 'Inbox' || !t.status);
+    case 'scheduled': return tasks.filter(t => t.dueDate);
+    case 'today':     return tasks.filter(t => t.dueDate && t.dueDate.slice(0,10) === today);
+    case 'open':      return tasks.filter(t => t.status !== 'Done');
+    case 'completed': return tasks.filter(t => t.status === 'Done');
+    case 'status': case 'context': case 'all': default:
+      return tasks;
+  }
+}
+
+function _groupByStatus(tasks) {
+  // Only include statuses that actually have tasks (no empty group clutter)
+  const order = ['Inbox', 'In Progress', 'Review', 'Done'];
+  const groups = new Map();
+  for (const t of tasks) {
+    const s = t.status || 'Inbox';
+    if (!groups.has(s)) groups.set(s, []);
+    groups.get(s).push(t);
+  }
+  // Sort by known order first, then alphabetical for custom statuses
+  const sorted = new Map();
+  for (const key of order) { if (groups.has(key)) sorted.set(key, groups.get(key)); }
+  for (const [k, v] of groups) { if (!sorted.has(k)) sorted.set(k, v); }
+  return sorted;
+}
+
+function _groupByContext(tasks) {
+  const groups = new Map();
+  for (const t of tasks) {
+    const ctx = t.context || 'none';
+    if (!groups.has(ctx)) groups.set(ctx, []);
+    groups.get(ctx).push(t);
+  }
+  return groups;
+}
+
+// _todayStr() defined above
+
 // ── DOM: Filter bar ───────────────────────────────────────── //
 
 function _buildFilterBar(container) {
@@ -356,7 +423,9 @@ function _rerenderColumns() {
   if (!_boardEl) return;
   _boardEl.innerHTML = '';
 
-  const filtered = _applyFilters(_tasks);
+  // Apply filter tab even in kanban mode (e.g. 'completed' → only Done column tasks)
+  const _tabFiltered = _applyFilterTab(_tasks);
+  const filtered = _applyFilters(_tabFiltered);
 
   // Show a friendly empty state banner when filters yield no results
   const anyFilter = _filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue;
@@ -560,15 +629,10 @@ function _buildCard(task) {
     titleSpan.style.cssText += 'text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 2px; transition: text-decoration-color 0.15s;';
     titleSpan.addEventListener('mouseenter', () => { titleSpan.style.textDecorationColor = 'var(--color-text-muted)'; });
     titleSpan.addEventListener('mouseleave', () => { titleSpan.style.textDecorationColor = 'transparent'; });
-    titleSpan.addEventListener('click', async (e) => {
+    titleSpan.addEventListener('click', (e) => {
       e.stopPropagation(); // prevent card click from also firing
-      // Re-fetch fresh entity from IDB so edits aren't based on stale render-time snapshot
-      try {
-        const fresh = await getEntity(task.id);
-        openEditForm(fresh || task);
-      } catch {
-        openEditForm(task);
-      }
+      // Route through PANEL_OPENED → openPanel fetches fresh entity → openEditForm (form-first UX)
+      emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id });
     });
   }
   card.addEventListener('click', (e) => {
@@ -990,8 +1054,11 @@ function _injectStyles() {
       display: flex;
       flex-direction: column;
       height: 100%;
-      overflow: hidden;
+      overflow: hidden;   /* board mode: columns scroll horizontally */
       padding: 0;
+    }
+    #view-kanban.active.alt-view {
+      overflow-y: auto;   /* alt views: body scrolls vertically */
     }
 
     /* ── Filter Bar ─────────────────────────────────── */
@@ -1371,62 +1438,250 @@ async function renderKanban(params = {}) {
 
   _injectStyles();
 
-  viewEl.innerHTML = `
-    <div style="padding: var(--space-8); color: var(--color-text-muted); text-align: center;">
-      Loading tasks…
-    </div>
-  `;
+  viewEl.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading tasks\u2026</div>';
 
-  // Apply navigation params — e.g. systray overdue badge navigates here with filter:'overdue'
-  if (params.filter === 'overdue') {
-    _filterOverdue = true;
-  }
+  if (params.filter === 'overdue') _filterOverdue = true;
+  if (params.viewMode) _viewMode = params.viewMode;
+  if (params.filterTab) _filterTab = params.filterTab;
 
   try {
     await _loadData();
     viewEl.innerHTML = '';
 
-    _buildFilterBar(viewEl);
-    _buildBoard(viewEl);
+    // \u2500\u2500 Header: icon + title \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:var(--space-4) var(--space-5) 0;';
+    header.innerHTML = '<div style="display:flex;align-items:center;gap:var(--space-3);"><span style="font-size:1.4rem;">\u2299</span><span style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:var(--color-text);">Tasks</span></div><div style="display:flex;align-items:center;gap:var(--space-2);"><span class="kanban-search-toggle" title="Search" style="cursor:pointer;font-size:1.1rem;">\uD83D\uDD0D</span><span class="kanban-collapse-toggle" title="Collapse" style="cursor:pointer;font-size:1.1rem;">\u2303</span></div>';
+    viewEl.appendChild(header);
+
+    // BUG 21: Wire search toggle — focuses the filter bar project/tag controls
+    header.querySelector('.kanban-search-toggle')?.addEventListener('click', () => {
+      const filterBar = viewEl.querySelector('.kanban-filter-bar');
+      if (filterBar) filterBar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      else {
+        // In alt view, scroll to top
+        viewEl.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
+    // BUG 22: Wire collapse toggle — cycles between compact and normal tab bar
+    header.querySelector('.kanban-collapse-toggle')?.addEventListener('click', () => {
+      const tabBar = viewEl.querySelector('[data-kanban-tabbar]');
+      if (tabBar) tabBar.style.display = tabBar.style.display === 'none' ? '' : 'none';
+    });
+
+    // \u2500\u2500 Filter tabs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    const tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;gap:var(--space-1);padding:var(--space-3) var(--space-5) 0;flex-wrap:wrap;border-bottom:1px solid var(--color-border);';
+    tabBar.dataset.kanbanTabbar = '1';
+    for (const tab of _FILTER_TABS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const isActive = _filterTab === tab.key;
+      btn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border:none;border-radius:var(--radius-md) var(--radius-md) 0 0;cursor:pointer;font-size:var(--text-sm);font-weight:' + (isActive ? 'var(--weight-bold)' : 'var(--weight-normal)') + ';background:' + (isActive ? 'var(--color-surface)' : 'transparent') + ';color:' + (isActive ? 'var(--color-text)' : 'var(--color-text-muted)') + ';border-bottom:2px solid ' + (isActive ? 'var(--color-accent)' : 'transparent') + ';transition:all 0.15s;';
+      btn.textContent = tab.icon + ' ' + tab.label;
+      btn.addEventListener('click', () => { _filterTab = tab.key; renderKanban({ _internal: true }); });
+      tabBar.appendChild(btn);
+    }
+    viewEl.appendChild(tabBar);
+
+    // \u2500\u2500 Controls row: count + view mode dropdown \u2500\u2500\u2500\u2500
+    const filtered = _applyFilterTab(_applyFilters(_tasks));  // both filter-tab AND kanban bar filters
+    const controls = document.createElement('div');
+    controls.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;gap:var(--space-3);padding:var(--space-2) var(--space-5);';
+
+    const countEl = document.createElement('span');
+    countEl.style.cssText = 'font-size:var(--text-sm);color:var(--color-text-muted);font-weight:var(--weight-semibold);';
+    countEl.textContent = '# ' + filtered.length + ' tasks';
+    controls.appendChild(countEl);
+
+    // View mode dropdown
+    const vmWrap = document.createElement('div');
+    vmWrap.style.cssText = 'position:relative;';
+    const currentVm = _VIEW_MODES.find(v => v.key === _viewMode) || _VIEW_MODES.find(v => v.key === 'kanban') || _VIEW_MODES[0];
+    const vmBtn = document.createElement('button');
+    vmBtn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);cursor:pointer;font-size:var(--text-sm);color:var(--color-text);';
+    vmBtn.innerHTML = currentVm.icon + ' \u25BE';
+
+    const vmDd = document.createElement('div');
+    vmDd.style.cssText = 'display:none;position:absolute;right:0;top:100%;margin-top:4px;min-width:180px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:200;padding:var(--space-2);';
+    const vmSearchInp = document.createElement('input');
+    vmSearchInp.type = 'text';
+    vmSearchInp.placeholder = 'Search';
+    vmSearchInp.style.cssText = 'width:100%;padding:var(--space-1) var(--space-2);border:none;border-bottom:1px solid var(--color-border);outline:none;font-size:var(--text-sm);background:transparent;color:var(--color-text);margin-bottom:var(--space-1);';
+    vmDd.appendChild(vmSearchInp);
+    for (const vm of _VIEW_MODES) {
+      const item = document.createElement('div');
+      item.className = 'kanban-vm-item';
+      item.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);padding:6px 8px;border-radius:var(--radius-sm);cursor:pointer;font-size:var(--text-sm);color:var(--color-text);' + (_viewMode === vm.key ? 'background:var(--color-surface-2);font-weight:var(--weight-bold);' : '');
+      item.innerHTML = '<span>' + vm.icon + '</span> <span style="flex:1;">' + _esc(vm.label) + '</span>' + (_viewMode === vm.key ? '<span style="color:var(--color-accent);">\u2713</span>' : '');
+      item.addEventListener('click', () => { _viewMode = vm.key; vmDd.style.display = 'none'; renderKanban({ _internal: true }); });
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = _viewMode === vm.key ? 'var(--color-surface-2)' : 'transparent'; });
+      vmDd.appendChild(item);
+    }
+    vmSearchInp.addEventListener('input', () => {
+      const q = vmSearchInp.value.toLowerCase();
+      vmDd.querySelectorAll('.kanban-vm-item').forEach(el => { el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+    });
+    vmBtn.addEventListener('click', (e) => { e.stopPropagation(); vmDd.style.display = vmDd.style.display === 'none' ? '' : 'none'; });
+    // Store named ref on element so VIEW_CHANGED can clean it up (prevents listener accumulation)
+    const _vmClickAway = (ev) => { if (!vmWrap.contains(ev.target)) vmDd.style.display = 'none'; };
+    document.addEventListener('click', _vmClickAway);
+    if (!viewEl._vmListeners) viewEl._vmListeners = [];
+    viewEl._vmListeners.push(_vmClickAway);
+    vmWrap.appendChild(vmBtn);
+    vmWrap.appendChild(vmDd);
+    controls.appendChild(vmWrap);
+    viewEl.appendChild(controls);
+
+    // \u2500\u2500 Render body based on view mode \u2500\u2500\u2500\u2500\u2500\u2500
+    if (_viewMode === 'kanban') {
+      viewEl.classList.remove('alt-view');
+      _buildFilterBar(viewEl);
+      _buildBoard(viewEl);
+    } else {
+      viewEl.classList.add('alt-view');
+      _renderAltView(viewEl, filtered);
+    }
 
   } catch (err) {
     console.error('[kanban] Render failed:', err);
-    viewEl.innerHTML = `
-      <div style="padding: var(--space-8); color: var(--color-danger-text); text-align: center;">
-        Failed to load Kanban board. Please try refreshing.
-      </div>
-    `;
+    viewEl.innerHTML = '<div style="padding:var(--space-8);color:var(--color-danger-text);text-align:center;">Failed to load tasks. Please try refreshing.</div>';
   }
+}
+
+// ── Alternative view modes (non-Kanban) ───────────────────── //
+
+function _renderAltView(container, tasks) {
+  const grouped = (_filterTab === 'context')
+    ? _groupByContext(tasks)
+    : _groupByStatus(tasks);
+
+  const body = document.createElement('div');
+  body.style.cssText = 'padding:0 var(--space-5) var(--space-5);';
+
+  // BUG 13: Show empty state when no tasks
+  if (tasks.length === 0) {
+    body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-6);gap:var(--space-3);color:var(--color-text-muted);text-align:center;"><div style="font-size:2.5rem;">\uD83C\uDF89</div><div style="font-size:var(--text-base);font-weight:var(--weight-semibold);color:var(--color-text);">No tasks here</div><div style="font-size:var(--text-sm);">Switch tabs or clear filters to see tasks.</div></div>';
+    container.appendChild(body);
+    return;
+  }
+
+  const _statusColors = { 'Inbox':'#6b7280','Not Started':'#f97316','Next Up':'#eab308','In Progress':'#3b82f6','Review':'#8b5cf6','Done':'#22c55e' };
+
+  for (const [groupKey, groupTasks] of grouped) {
+    if (!groupTasks.length) continue;  // skip empty groups
+    // Group badge
+    const badge = document.createElement('div');
+    badge.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);margin:var(--space-4) 0 var(--space-2);';
+    const bc = _statusColors[groupKey] || 'var(--color-text-muted)';
+    badge.innerHTML = '<span style="display:inline-block;padding:2px 10px;border:1.5px solid ' + bc + ';border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:var(--weight-bold);color:' + bc + ';">' + _esc(groupKey || 'None') + '</span> <span style="font-size:var(--text-xs);color:var(--color-text-muted);">' + groupTasks.length + '</span>';
+    body.appendChild(badge);
+
+    if (_viewMode === 'list' || _viewMode === 'embed') {
+      for (const task of groupTasks) {
+        const row = document.createElement('div');
+        const isEmbed = _viewMode === 'embed';
+        row.style.cssText = 'display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
+        row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-surface)'; });
+        row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+        const cb = task.status === 'Done' ? '\u2705' : '\u25CB';
+        const projId = task.project || _taskProjectMap.get(task.id) || '';
+        const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
+        const due = task.dueDate ? task.dueDate.slice(0,10) : '';
+        const overdue = due && due < _todayStr() && task.status !== 'Done';
+        const expandChevron = isEmbed ? '<span style="font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">\u25B6</span>' : '';
+        row.innerHTML = expandChevron + '<span style="font-size:1rem;">' + cb + '</span><span style="flex:1;font-size:var(--text-sm);color:var(--color-text);">' + _esc(task.title || 'Untitled') + '</span>' + (due ? '<span style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : 'var(--color-text-muted)') + ';">' + due + '</span>' : '') + (pName ? '<span style="font-size:var(--text-xs);color:var(--color-accent);background:var(--color-surface-2);padding:1px 8px;border-radius:var(--radius-full);">' + _esc(pName) + '</span>' : '');
+        row.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }));
+        body.appendChild(row);
+      }
+    } else if (_viewMode === 'wall' || _viewMode === 'gallery') {
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-3);width:100%;';
+      for (const task of groupTasks) {
+        const card = document.createElement('div');
+        card.style.cssText = 'flex:0 0 260px;border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3);background:var(--color-surface);cursor:pointer;display:flex;flex-direction:column;gap:var(--space-1);transition:box-shadow 0.15s;';
+        card.addEventListener('mouseenter', () => { card.style.boxShadow = 'var(--shadow-md)'; });
+        card.addEventListener('mouseleave', () => { card.style.boxShadow = ''; });
+        const cb = task.status === 'Done' ? '\u2705' : '\u25CB';
+        const due = task.dueDate ? task.dueDate.slice(0,10) : '';
+        const overdue = due && due < _todayStr() && task.status !== 'Done';
+        const projId = task.project || _taskProjectMap.get(task.id) || '';
+        const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
+        card.innerHTML = '<div style="font-size:var(--text-xs);color:var(--color-accent);font-weight:var(--weight-bold);">\u2299 Task</div><div style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);">' + cb + ' ' + _esc(task.title || 'Untitled') + '</div>' + (due ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : 'var(--color-text-muted)') + ';">' + due + ' \uD83D\uDCC5' + (overdue ? ' \u26A0' : '') + '</div>' : '') + (pName ? '<div style="font-size:var(--text-xs);color:var(--color-text-muted);">\uD83C\uDF10 ' + _esc(pName) + '</div>' : '');
+        card.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }));
+        grid.appendChild(card);
+      }
+      body.appendChild(grid);
+    } else if (_viewMode === 'table') {
+      if (groupTasks.length) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'overflow-x:auto;border:1px solid var(--color-border);border-radius:var(--radius-lg);margin-bottom:var(--space-2);';
+        const t = document.createElement('table');
+        t.style.cssText = 'width:100%;border-collapse:collapse;font-size:var(--text-sm);min-width:700px;';
+        t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
+        const tbody = document.createElement('tbody');
+        let _rowIdx = 0;
+        groupTasks.forEach((tk, i) => {
+          _rowIdx++;
+          const tr = document.createElement('tr');
+          tr.style.cssText = 'border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
+          tr.addEventListener('mouseenter', () => { tr.style.background = 'var(--color-surface)'; });
+          tr.addEventListener('mouseleave', () => { tr.style.background = ''; });
+          const due = tk.dueDate ? new Date(tk.dueDate + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
+          const ov = tk.dueDate && tk.dueDate.slice(0,10) < _todayStr() && tk.status !== 'Done';
+          const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';
+          const bodyTxt = tk.details ? String(tk.details).replace(/<[^>]+>/g,' ').trim() : '';
+          const wc = bodyTxt ? bodyTxt.split(/\s+/).length : 0;
+          tr.innerHTML = '<td style="padding:8px 12px;color:var(--color-text-muted);">' + _rowIdx + '</td><td style="padding:8px 12px;font-weight:var(--weight-semibold);">' + _esc(tk.title||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.status||'') + '</td><td style="padding:8px 12px;">' + due + (ov ? ' <span style="color:var(--color-danger);font-size:var(--text-xs);">Overdue</span>' : '') + '</td><td style="padding:8px 12px;">' + _esc(tk.priority||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.context||'') + '</td><td style="padding:8px 12px;">' + _esc(tags) + '</td><td style="padding:8px 12px;">\u270E ' + wc + ' words</td>';
+          tr.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: tk.id }));
+          tbody.appendChild(tr);
+        });
+        t.appendChild(tbody);
+        wrap.appendChild(t);
+        body.appendChild(wrap);
+      }
+    }
+  }
+
+  container.appendChild(body);
 }
 
 // ── Listen for entity saves to refresh board ──────────────── //
 
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
-  // Refresh on task saves, and also on person/project saves since those affect
-  // the _personMap and _projectMap used by card display and edge resolution.
   const KANBAN_REFRESH_TYPES = new Set(['task', 'person', 'project']);
   if (entity && !KANBAN_REFRESH_TYPES.has(entity.type)) return;
-  if (!_boardEl) return;
-  if (!document.getElementById('view-kanban')?.classList.contains('active')) return;
-  _loadData().then(() => _rerenderColumns()).catch(() => {});
+  const viewActive = document.getElementById('view-kanban')?.classList.contains('active');
+  if (!viewActive) return;
+  if (_viewMode === 'kanban') {
+    _loadData().then(() => _rerenderColumns()).catch(() => {});
+  } else {
+    renderKanban({ _internal: true }).catch(() => {});
+  }
 });
 
-// BUG-1 fix: re-render board when a task is deleted
 on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
   const entityType = entity?.type;
-  if ((entityType === 'task' || !entityType) && _boardEl &&
-      document.getElementById('view-kanban')?.classList.contains('active')) {
+  if (entityType && !['task', 'person', 'project'].includes(entityType)) return;
+  const viewActive = document.getElementById('view-kanban')?.classList.contains('active');
+  if (!viewActive) return;
+  if (_viewMode === 'kanban') {
     _loadData().then(() => _rerenderColumns()).catch(() => {});
+  } else {
+    renderKanban({ _internal: true }).catch(() => {});
   }
 });
 
 // BUG-D fix: close state dot popover and collapse any open dropdowns on navigation
 on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
   if (viewKey !== 'kanban') {
-    // Close state dot popover if open
-    if (_activeDotPopover) {
-      _activeDotPopover.remove();
-      _activeDotPopover = null;
+    if (_activeDotPopover) { _activeDotPopover.remove(); _activeDotPopover = null; }
+    // Clean up any stale document click listeners from the view mode dropdown
+    const viewEl = document.getElementById('view-kanban');
+    if (viewEl?._vmListeners) {
+      viewEl._vmListeners.forEach(fn => document.removeEventListener('click', fn));
+      viewEl._vmListeners = [];
     }
   }
 });
@@ -1435,8 +1690,11 @@ on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
 
 // CS-04: Re-render board when context changes (only when kanban is the active view)
 on('context:changed', () => {
-  if (_boardEl && document.getElementById('view-kanban')?.classList.contains('active')) {
+  if (!document.getElementById('view-kanban')?.classList.contains('active')) return;
+  if (_viewMode === 'kanban') {
     _loadData().then(() => _rerenderColumns()).catch(() => {});
+  } else {
+    renderKanban({ _internal: true }).catch(() => {});
   }
 });
 

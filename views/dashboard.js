@@ -197,7 +197,8 @@ function _injectStyles() {
 .dash-scroll-btn-right { margin-left:  var(--space-2); }
 
 .dash-card {
-  flex: 0 0 210px;
+  flex: 0 0 230px;
+  min-width: 0;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -242,6 +243,8 @@ function _injectStyles() {
   font-weight: var(--weight-bold);
   color: var(--color-accent);
   line-height: 1.2;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .dash-card-stat.danger  { color: var(--color-danger); }
 .dash-card-stat.success { color: var(--color-success); }
@@ -300,7 +303,7 @@ function _injectStyles() {
 }
 @media (max-width: 640px) {
   .dash-grid { grid-template-columns: 1fr; }
-  .dash-card { flex: 0 0 180px; }
+  .dash-card { flex: 0 0 200px; }
 }
 
 .dash-widget {
@@ -706,7 +709,7 @@ async function renderDashboard() {
 
       // Clean up scroll listener when navigating away — prevents listener accumulation
       const _cleanupScroll = () => scroll.removeEventListener('scroll', _updateBtns);
-      on(EVENTS.VIEW_CHANGED, _cleanupScroll, { once: true });
+      const _unsubScroll = on(EVENTS.VIEW_CHANGED, () => { _cleanupScroll(); _unsubScroll(); });
     }
   }
 

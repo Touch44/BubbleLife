@@ -521,6 +521,17 @@ export async function openPanel(entityId, entityTypeHint) {
       return;
     }
 
+    // ── Form-first routing ─────────────────────────────────────
+    // Outside of graph mode: every entity click goes to the edit form (modal overlay)
+    // rather than the slide panel. The panel is reserved for graph-view entity browsing.
+    // Exception: skipFormFirst flag allows internal navigation (graph button, close-graph restore).
+    if (!_graphViewActive && !openPanel._skipFormFirst) {
+      openEditForm(entity);
+      return;
+    }
+    // Graph mode (or explicit bypass): fall through to the panel rendering below.
+    // ────────────────────────────────────────────────────────────
+
     _entity    = entity;
     _config    = config;
     // Content-first types default to 'content' view; others to 'properties'
@@ -1015,7 +1026,7 @@ async function _showProjectPicker() {
           toId:     newProj.id,
           toType:   'project',
           relation: 'project',
-        });
+        }, getAccount()?.id);
         _renderActiveTab();
       });
     });
@@ -1045,7 +1056,7 @@ async function _showProjectPicker() {
             toId:     proj.id,
             toType:   'project',
             relation: 'project',
-          });
+          }, getAccount()?.id);
           dropdown.remove();
           _renderActiveTab();
         });
@@ -1357,6 +1368,7 @@ function _renderPropertiesTab(container) {
 function _createFieldRow(field) {
   const row = document.createElement('div');
   row.className = 'panel-field-row';
+  row.dataset.fieldKey = field.key;  // enables _applyOnChanges highlight flash
   row.style.cssText = `
     display: flex; align-items: flex-start; gap: var(--space-3);
     padding: var(--space-2) 0;
@@ -2251,7 +2263,7 @@ async function _showRelationPicker(wrap, field) {
               toId:     newEnt.id,
               toType:   newEnt.type,
               relation: field.key,
-            });
+            }, getAccount()?.id);
             _renderRelationChips(wrap, field);
           });
         }
@@ -2292,7 +2304,7 @@ async function _showRelationPicker(wrap, field) {
           toId:     candidate.id,
           toType:   candidate.type,
           relation: field.key,
-        });
+        }, getAccount()?.id);
         _renderRelationChips(wrap, field);
       });
 
@@ -2415,7 +2427,7 @@ async function _updateDailyReviewEdgesForDateChange(entity, dateFieldKey, oldDat
             toId:     newDR.id,
             toType:   'dailyReview',
             relation: 'in daily review',
-          });
+          }, getAccount()?.id);
         }
         console.log('[entity-panel] linked', entity.id, '→ DR', newDateStr);
       }
@@ -2510,7 +2522,7 @@ async function _ensureDailyLinks(entity) {
         toId:     dr.id,
         toType:   'dailyReview',
         relation: 'in daily review',
-      });
+      }, getAccount()?.id);
       _dailyLinksEnsured.add(cacheKey);
     } catch (err) {
       console.warn('[entity-panel] _ensureDailyLinks failed for date:', dateStr, err);
@@ -3009,20 +3021,21 @@ function _navigateToLinkedEntity(linked) {
       navigate('daily', { date: dateStr }, `Daily Review — ${_formatDateForTitle(dateStr)}`);
       return;
     }
-    // No date available — just open the panel
-    openPanel(linked.id);
+    // No date available — open form (form-first UX)
+    emit(EVENTS.PANEL_OPENED, { entityId: linked.id, entityType: 'dailyReview' });
     return;
   }
 
   if (linked.type === 'task') {
+    // Navigate to kanban and open the form for that task (form-first UX)
     navigate('kanban', {}, 'Tasks');
-    setTimeout(() => openPanel(linked.id), 150);
+    setTimeout(() => emit(EVENTS.PANEL_OPENED, { entityId: linked.id, entityType: 'task' }), 200);
     return;
   }
 
   if (linked.type === 'event' || linked.type === 'appointment') {
     navigate('calendar', {}, 'Calendar');
-    setTimeout(() => openPanel(linked.id), 150);
+    setTimeout(() => emit(EVENTS.PANEL_OPENED, { entityId: linked.id, entityType: linked.type }), 200);
     return;
   }
 
@@ -3696,8 +3709,10 @@ function _navigateToEntityView(entity, config) {
   }
 
   // Re-open panel after a tick so the view renders first
+  // Use _skipFormFirst so panel renders (not form) as user was just browsing graph
   setTimeout(() => {
-    openPanel(entity.id);
+    openPanel._skipFormFirst = true;
+    openPanel(entity.id).finally(() => { openPanel._skipFormFirst = false; });
   }, 100);
 }
 

@@ -494,10 +494,13 @@ function _buildAndMount(config) {
           const eid = _editEntity?.id;
           if (!eid) return;
           closeForm();
-          // Open panel then trigger graph view
+          // Open panel bypassing form-first, then trigger graph view
           try {
             const { openPanel } = await import('./entity-panel.js');
+            // Set skipFormFirst so panel renders (not form) before clicking graph btn
+            openPanel._skipFormFirst = true;
             await openPanel(eid);
+            openPanel._skipFormFirst = false;
             // Wait for panel graph button to exist (retries for up to 1s to handle slow IDB)
             let _retries = 0;
             const _clickGraph = () => {
@@ -510,6 +513,7 @@ function _buildAndMount(config) {
             };
             setTimeout(_clickGraph, 80);
           } catch (err) {
+            openPanel && (openPanel._skipFormFirst = false);
             console.warn('[entity-form] graph open failed:', err);
           }
         });
@@ -2042,7 +2046,8 @@ async function _renderFormConnectionsList(container, entity) {
           if (e.target.classList.contains('rel-rm-btn')) return;
           try {
             const { openPanel } = await import('./entity-panel.js');
-            openPanel(linked.id);
+            // Use form-first routing (opens editForm) — correct UX
+            emit(EVENTS.PANEL_OPENED, { entityId: linked.id });
           } catch (err) { console.warn('[entity-form] openPanel failed:', err); }
         });
 
@@ -2186,8 +2191,8 @@ function _buildDetailsTab(container, config) {
       emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: true });
       toast.success('Duplicated — opening copy');
       closeForm();
-      // Open panel for the duplicate
-      import('./entity-panel.js').then(({ openPanel }) => openPanel(saved.id)).catch(() => {});
+      // Open edit form for the duplicate (form-first UX)
+      setTimeout(() => emit(EVENTS.PANEL_OPENED, { entityId: saved.id }), 100);
     }));
     toolbar.appendChild(btn);
   }
@@ -2233,7 +2238,7 @@ function _buildDetailsTab(container, config) {
           dd.remove();
           openQuickCreateModal('project', { name: q || '' }, async np => {
             if (!np) return;
-            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'project' });
+            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'project' }, getAccount()?.id);
             toast.success(`Added to ${np.name || 'project'}`);
           });
         });
@@ -2246,7 +2251,7 @@ function _buildDetailsTab(container, config) {
           row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-2)');
           row.addEventListener('mouseleave', () => row.style.background = '');
           row.addEventListener('click', async () => {
-            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'project' });
+            await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'project' }, getAccount()?.id);
             dd.remove();
             toast.success(`Added to ${proj.name || 'project'}`);
           });

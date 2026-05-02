@@ -263,6 +263,13 @@
         </button>
       </li>
       <li role="listitem">
+        <button class="nav-item" data-view="projects"
+                aria-label="Projects">
+          <span class="nav-item-icon" aria-hidden="true">⊞</span>
+          <span class="nav-item-label">Projects</span>
+        </button>
+      </li>
+      <li role="listitem">
         <button class="nav-item" data-view="calendar"
                 aria-label="Calendar">
           <span class="nav-item-icon" aria-hidden="true">▦</span>
@@ -277,20 +284,8 @@
         </button>
       </li>
 
-      <li role="listitem">
-        <button class="nav-item" data-view="notes"
-                aria-label="Notes">
-          <span class="nav-item-icon" aria-hidden="true">≡</span>
-          <span class="nav-item-label">Notes</span>
-        </button>
-      </li>
-      <li role="listitem">
-        <button class="nav-item" data-view="projects"
-                aria-label="Projects">
-          <span class="nav-item-icon" aria-hidden="true">⊞</span>
-          <span class="nav-item-label">Projects</span>
-        </button>
-      </li>
+
+
       <li role="listitem">
         <button class="nav-item" data-view="graph"
                 aria-label="Knowledge Graph">
@@ -1188,7 +1183,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '4.0.1', emit, on, env: window._fhEnv,
+        version: '4.0.6', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

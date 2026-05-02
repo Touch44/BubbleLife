@@ -26,7 +26,7 @@
 import { registerView }              from '../core/router.js';
 import { getEntitiesByType, getEntity, saveEntity, getEdgesFrom } from '../core/db.js';
 import { emit, on, EVENTS }         from '../core/events.js';
-import { openEditForm }              from '../components/entity-form.js';
+// openEditForm import removed — all entity clicks route through PANEL_OPENED (form-first v4.0.3+)
 import { getAccount }                from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                     from '../core/toast.js';
@@ -912,14 +912,11 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
       row.addEventListener('click', (e) => {
         e.stopPropagation();
         _closePopover();
-        if (item.entityType === 'task') {
-          openEditForm(item.entity);
-        } else {
-          emit(EVENTS.PANEL_OPENED, {
-            entityType: item.entityType,
-            entityId:   item.entity.id,
-          });
-        }
+        // All entity types now route through PANEL_OPENED → openEditForm (form-first UX)
+        emit(EVENTS.PANEL_OPENED, {
+          entityType: item.entityType,
+          entityId:   item.entity.id,
+        });
       });
 
       list.appendChild(row);
@@ -1426,14 +1423,11 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap) {
 
       block.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (item.entityType === 'task') {
-          openEditForm(item.entity);
-        } else {
-          emit(EVENTS.PANEL_OPENED, {
-            entityType: item.entityType,
-            entityId:   item.entity.id,
-          });
-        }
+        // All entity types now route through PANEL_OPENED → openEditForm (form-first UX)
+        emit(EVENTS.PANEL_OPENED, {
+          entityType: item.entityType,
+          entityId:   item.entity.id,
+        });
       });
 
       bodyEl.appendChild(block);
@@ -1528,14 +1522,11 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
 
       // Task agenda rows open edit form; other entity types open panel
       row.addEventListener('click', () => {
-        if (item.entityType === 'task') {
-          openEditForm(item.entity);
-        } else {
-          emit(EVENTS.PANEL_OPENED, {
-            entityType: item.entityType,
-            entityId:   item.entity.id,
-          });
-        }
+        // All entity types now route through PANEL_OPENED → openEditForm (form-first UX)
+        emit(EVENTS.PANEL_OPENED, {
+          entityType: item.entityType,
+          entityId:   item.entity.id,
+        });
       });
 
       itemList.appendChild(row);
