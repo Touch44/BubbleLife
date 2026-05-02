@@ -1243,7 +1243,6 @@ function _buildTagControl(field) {
       createBtn.style.display = 'none';
       results.innerHTML = ''; results.style.display = 'none';
     });
-    })();
   });
 
   // ── Also support Enter / comma to add raw tag name ────── //
@@ -1602,11 +1601,10 @@ function _buildRelationControl(field, config) {
   createBtn.style.display = 'none';
   wrap.appendChild(createBtn);
   createBtn.addEventListener('click', () => {
-    (() => {
-      // Look up the target type's title field key (not always 'title')
-      const _tCfg = getEntityTypeConfig(typeToSearch);
-      const _tKey = _tCfg?.fields?.find(f => f.isTitle)?.key || 'title';
-      openQuickCreateModal(typeToSearch, { [_tKey]: searchInput.value.trim() }, newEntity => {
+    // Look up the target type's title field key (not always 'title')
+    const _tCfg = getEntityTypeConfig(typeToSearch);
+    const _tKey = _tCfg?.fields?.find(f => f.isTitle)?.key || 'title';
+    openQuickCreateModal(typeToSearch, { [_tKey]: searchInput.value.trim() }, newEntity => {
       const arr = _relationValues.get(field.key) || [];
       if (!arr.find(r => r.id === newEntity.id)) {
         arr.push({ id: newEntity.id, label: newEntity.title || newEntity.name || newEntity.id,
@@ -1899,10 +1897,9 @@ async function _buildRelationsTab(container) {
             const chosenType = typeSelect.value;
             if (!chosenType) return;
             pickerWrap.remove();
-            (() => {
-              const _tCfg2 = getEntityTypeConfig(chosenType);
-              const _tKey2 = _tCfg2?.fields?.find(f => f.isTitle)?.key || 'title';
-              openQuickCreateModal(chosenType, { [_tKey2]: q }, async newEnt => {
+            const _tCfg2 = getEntityTypeConfig(chosenType);
+            const _tKey2 = _tCfg2?.fields?.find(f => f.isTitle)?.key || 'title';
+            openQuickCreateModal(chosenType, { [_tKey2]: q }, async newEnt => {
               if (!newEnt) return;
               const rel = relationInput.value.trim() || 'related to';
               await saveEdge({ fromId: entity.id, fromType: entity.type, toId: newEnt.id, toType: newEnt.type, relation: rel }, getAccount()?.id);
@@ -1911,7 +1908,6 @@ async function _buildRelationsTab(container) {
               resultsList.style.display = 'none';
               await _refreshConnections();
             });
-            })();
           });
           pickerWrap.append(lbl, typeSelect, goBtn);
           searchWrap.parentNode.insertBefore(pickerWrap, searchWrap.nextSibling);
