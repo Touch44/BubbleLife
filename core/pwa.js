@@ -155,7 +155,7 @@ function _showBanner() {
         Later
       </button>
       <button id="fh-pwa-install" style="
-        padding:7px 18px;background:var(--color-accent,#0A7B6C);
+        padding:7px 18px;background:var(--color-accent,#3B82F6);
         color:#fff;border:none;border-radius:8px;
         cursor:pointer;font-size:13px;font-weight:600;">
         Install

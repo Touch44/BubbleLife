@@ -658,10 +658,13 @@ function _buildCard(task) {
       card.style.opacity = '0.35';
     }
     try {
+      // Fetch fresh entity to avoid saving stale render-time snapshot
+      let freshTaskCb;
+      try { freshTaskCb = await getEntity(task.id); } catch { freshTaskCb = task; }
       const entityToSave = {
-        ...task,
+        ...freshTaskCb,
         status: newStatus,
-        previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
+        previousStatus: newStatus === 'Done' ? freshTaskCb.status : freshTaskCb.previousStatus,
       };
       await saveEntity(entityToSave, account?.id);
       // ENTITY_SAVED listener handles _loadData + _rerenderColumns — no manual call needed
@@ -727,7 +730,10 @@ function _showStateDotPopover(dotEl, task) {
 
       const account = getAccount();
       try {
-        await saveEntity({ ...task, kanban_state: state.key }, account?.id);
+        // Fetch fresh entity to avoid saving stale snapshot
+        let freshTask;
+        try { freshTask = await getEntity(task.id); } catch { freshTask = task; }
+        await saveEntity({ ...freshTask, kanban_state: state.key }, account?.id);
         // Update dot immediately without full re-render
         dotEl.className = `kanban-state-dot kanban-state-dot--${state.key}`;
         dotEl.setAttribute('title', `State: ${state.key}`);
@@ -1416,6 +1422,44 @@ function _injectStyles() {
       padding: var(--space-2);
     }
 
+    /* ── Kanban State Dot ──────────────────────────── */
+    .kanban-state-dot {
+      width: 10px; height: 10px;
+      border-radius: var(--radius-full);
+      border: none; padding: 0; cursor: pointer;
+      flex-shrink: 0; margin-top: 3px;
+      transition: transform 0.12s;
+    }
+    .kanban-state-dot:hover { transform: scale(1.3); }
+    .kanban-state-dot--normal  { background: var(--color-text-muted); }
+    .kanban-state-dot--done    { background: var(--color-success); }
+    .kanban-state-dot--blocked { background: var(--color-danger); }
+    .kanban-state-popover {
+      position: absolute; z-index: 9999;
+      background: var(--color-bg); border: 1px solid var(--color-border);
+      border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+      padding: var(--space-1); min-width: 120px;
+    }
+    .kanban-state-option {
+      display: flex; align-items: center; gap: var(--space-2);
+      padding: var(--space-1-5) var(--space-2); border: none;
+      background: transparent; cursor: pointer; width: 100%;
+      font-size: var(--text-sm); color: var(--color-text);
+      border-radius: var(--radius-sm); transition: background 0.1s;
+    }
+    .kanban-state-option:hover { background: var(--color-surface-2); }
+    .kanban-state-option--active { font-weight: var(--weight-bold); }
+    .kanban-state-option-dot {
+      width: 8px; height: 8px; border-radius: var(--radius-full); flex-shrink: 0;
+    }
+    .kanban-card-new {
+      animation: cardSlideIn 0.3s ease;
+    }
+    @keyframes cardSlideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: none; }
+    }
+
     /* ── Mobile ─────────────────────────────────────── */
     @media (max-width: 600px) {
       .kanban-filter-bar {
@@ -1500,6 +1544,7 @@ async function renderKanban(params = {}) {
     const currentVm = _VIEW_MODES.find(v => v.key === _viewMode) || _VIEW_MODES.find(v => v.key === 'kanban') || _VIEW_MODES[0];
     const vmBtn = document.createElement('button');
     vmBtn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);cursor:pointer;font-size:var(--text-sm);color:var(--color-text);';
+    vmBtn.type = 'button';
     vmBtn.innerHTML = currentVm.icon + ' \u25BE';
 
     const vmDd = document.createElement('div');
@@ -1602,7 +1647,7 @@ function _renderAltView(container, tasks) {
         const card = document.createElement('div');
         card.style.cssText = 'flex:0 0 260px;border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3);background:var(--color-surface);cursor:pointer;display:flex;flex-direction:column;gap:var(--space-1);transition:box-shadow 0.15s;';
         card.addEventListener('mouseenter', () => { card.style.boxShadow = 'var(--shadow-md)'; });
-        card.addEventListener('mouseleave', () => { card.style.boxShadow = ''; });
+        card.addEventListener('mouseleave', () => { card.style.boxShadow = 'none'; });
         const cb = task.status === 'Done' ? '\u2705' : '\u25CB';
         const due = task.dueDate ? task.dueDate.slice(0,10) : '';
         const overdue = due && due < _todayStr() && task.status !== 'Done';
@@ -1627,7 +1672,7 @@ function _renderAltView(container, tasks) {
           const tr = document.createElement('tr');
           tr.style.cssText = 'border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
           tr.addEventListener('mouseenter', () => { tr.style.background = 'var(--color-surface)'; });
-          tr.addEventListener('mouseleave', () => { tr.style.background = ''; });
+          tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
           const due = tk.dueDate ? new Date(tk.dueDate + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
           const ov = tk.dueDate && tk.dueDate.slice(0,10) < _todayStr() && tk.status !== 'Done';
           const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';

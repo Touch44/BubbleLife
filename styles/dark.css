@@ -1,32 +1,32 @@
 /* ============================================================
-   FamilyHub v2.0 — Dark Mode Overrides (dark.css)
-   Blueprint §9.1 — dark column values applied via [data-theme="dark"]
+   FamilyHub v4.1 — Dark Mode Overrides (dark.css)
+   GUI Revamp — dark values applied via [data-theme="dark"]
    ============================================================ */
 
 [data-theme="dark"] {
 
   /* ── Brand / Accent ──────────────────────────────────────── */
   --color-brand:        #E2E8F0;
-  --color-accent:       #14B8A6;
-  --color-accent-muted: rgba(20, 184, 166, 0.15);   /* accent at 15% on dark */
+  --color-accent:       #60A5FA;
+  --color-accent-muted: rgba(96, 165, 250, 0.15);
 
-  /* ── Background / Surface (Blueprint §9.1 dark values) ───── */
+  /* ── Background / Surface ─────────────────────────────────── */
   --color-bg:           #0F172A;
   --color-surface:      #1E293B;
   --color-surface-2:    #334155;
 
   /* ── Borders ─────────────────────────────────────────────── */
   --color-border:       #334155;
-  --color-border-focus: #14B8A6;
+  --color-border-focus: #60A5FA;
 
   /* ── Typography ──────────────────────────────────────────── */
   --color-text:         #F1F5F9;
   --color-text-muted:   #94A3B8;
   --color-text-inverse: #0F172A;
-  --color-text-accent:  #14B8A6;
-  --color-text-link:    #14B8A6;
+  --color-text-accent:  #60A5FA;
+  --color-text-link:    #60A5FA;
 
-  /* ── Status Colours (same hue, dark context) ─────────────── */
+  /* ── Status Colours ────────────────────────────────────── */
   --color-danger-bg:    rgba(239, 68, 68, 0.12);
   --color-danger-text:  #FCA5A5;
   --color-warning-bg:   rgba(245, 158, 11, 0.12);
@@ -36,20 +36,20 @@
   --color-info-bg:      rgba(59, 130, 246, 0.12);
   --color-info-text:    #93C5FD;
 
-  /* ── Sidebar (remains dark — slightly lighter than bg) ────── */
-  --color-sidebar-bg:          #080F1E;
+  /* ── Sidebar (dark variant of light sidebar) ────────────── */
+  --color-sidebar-bg:          #0B1120;
   --color-sidebar-text:        #64748B;
   --color-sidebar-text-active: #E2E8F0;
   --color-sidebar-hover:       rgba(255,255,255,0.05);
-  --color-sidebar-active:      rgba(20,184,166,0.18);
+  --color-sidebar-active:      rgba(96,165,250,0.15);
   --color-sidebar-border:      rgba(255,255,255,0.06);
-  --color-sidebar-accent:      #14B8A6;
+  --color-sidebar-accent:      #60A5FA;
 
   /* ── Topbar ──────────────────────────────────────────────── */
   --color-topbar-bg:     #1E293B;
   --color-topbar-border: #334155;
 
-  /* ── Shadows (darken significantly in dark mode) ─────────── */
+  /* ── Shadows ───────────────────────────────────────────── */
   --shadow-xs:           0 1px 2px rgba(0, 0, 0, 0.20);
   --shadow-sm:           0 1px 3px rgba(0, 0, 0, 0.30), 0 1px 2px rgba(0, 0, 0, 0.20);
   --shadow-md:           0 4px 6px rgba(0, 0, 0, 0.30), 0 2px 4px rgba(0, 0, 0, 0.25);
@@ -57,7 +57,7 @@
   --shadow-xl:           0 20px 25px rgba(0, 0, 0, 0.40), 0 10px 10px rgba(0, 0, 0, 0.25);
   --shadow-2xl:          0 25px 50px rgba(0, 0, 0, 0.60);
   --shadow-inner:        inset 0 2px 4px rgba(0, 0, 0, 0.25);
-  --shadow-focus:        0 0 0 3px rgba(20, 184, 166, 0.30);
+  --shadow-focus:        0 0 0 3px rgba(96, 165, 250, 0.25);
   --shadow-focus-danger: 0 0 0 3px rgba(239, 68, 68, 0.30);
   --shadow-panel:        -4px 0 24px rgba(0, 0, 0, 0.40);
   --shadow-sidebar:      2px 0 12px rgba(0, 0, 0, 0.40);
@@ -66,8 +66,8 @@
   --scrollbar-thumb:    #334155;
 
   /* ── Overlay ─────────────────────────────────────────────── */
-  --color-overlay:       rgba(0, 0, 0, 0.70);
-  --color-overlay-light: rgba(0, 0, 0, 0.40);
+  --color-overlay:       rgba(0, 0, 0, 0.65);
+  --color-overlay-light: rgba(0, 0, 0, 0.35);
 }
 
 /* ── Component Overrides ─────────────────────────────────── */
@@ -80,7 +80,7 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394A3B8' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
-/* Skeleton shimmer uses dark surfaces */
+/* Skeleton shimmer */
 [data-theme="dark"] .skeleton {
   background: linear-gradient(
     90deg,
@@ -95,6 +95,10 @@
 [data-theme="dark"] .auth-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
+}
+
+[data-theme="dark"] #auth-screen {
+  background: #080F1E;
 }
 
 /* Kanban card dark */
@@ -112,7 +116,7 @@
 
 /* FAB glow adjustment */
 [data-theme="dark"] #fab-main-btn {
-  box-shadow: var(--shadow-lg), 0 4px 16px rgba(20, 184, 166, 0.35);
+  box-shadow: var(--shadow-lg), 0 4px 16px rgba(96, 165, 250, 0.30);
 }
 
 /* Tooltip */
@@ -157,8 +161,6 @@
   background: var(--color-surface);
 }
 
-/* Status badges — already using CSS variables, auto-handled */
-
 /* Input / select / textarea */
 [data-theme="dark"] .input,
 [data-theme="dark"] .select,
@@ -171,11 +173,6 @@
 [data-theme="dark"] .input::placeholder,
 [data-theme="dark"] .textarea::placeholder {
   color: var(--color-text-muted);
-}
-
-/* Auth screen keeps deep dark brand bg regardless */
-[data-theme="dark"] #auth-screen {
-  background: #080F1E;
 }
 
 /* Dropdown menu */
@@ -222,6 +219,17 @@
 /* Drag handle on mobile entity panel */
 [data-theme="dark"] #entity-panel::before {
   background: var(--color-surface-2);
+}
+
+/* ── Dark mode: nav icon backgrounds use darker tints ─────── */
+[data-theme="dark"] .nav-item-icon {
+  background: var(--color-surface) !important;
+}
+
+/* ── Dark mode sidebar scrollbar ─────────────────────────── */
+[data-theme="dark"] #sidebar {
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+  border-right-color: var(--color-sidebar-border);
 }
 
 /* ── Quill Rich Text Editor — Dark Mode Overrides ─────────── */

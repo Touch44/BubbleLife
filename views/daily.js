@@ -384,13 +384,14 @@ async function _getOrCreateDailyReview(dateStr) {
 async function _linkToDailyReview(drId, entityId, entityType, existing) {
   if (!drId || !entityId || existing.has(entityId)) return;
   try {
+    const _acct = getAccount();
     await saveEdge({
       fromId:   drId,
       fromType: 'dailyReview',
       toId:     entityId,
       toType:   entityType,
       relation: 'contains',
-    });
+    }, _acct?.id);
   } catch (err) {
     console.warn('[daily] saveEdge contains failed:', entityId, err);
   }
@@ -581,7 +582,7 @@ async function _createAndLink(entityType, dateStr, prefill = {}) {
         toId:     entity.id,
         toType:   entityType,
         relation: 'contains',
-      });
+      }, getAccount()?.id);
       console.log('[daily] linked', entityType, entity.id, '→ DR', dr.id);
     } catch (err) {
       console.warn('[daily] failed to link entity to DR:', err);
@@ -869,7 +870,7 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
           toId:     saved.id,
           toType:   selectedType,
           relation: 'contains',
-        });
+        }, getAccount()?.id);
       }
 
       // Prepend new item to correct live section
@@ -1238,7 +1239,7 @@ function _openNoteModal(entity) {
       titleEl.textContent = entity.title;
       // input may already be detached if modal closed, guard before replaceWith
       if (input.parentNode) input.replaceWith(titleEl);
-      try { await saveEntity(entity); } catch (e) { console.warn('[daily-modal] title save failed', e); }
+      try { await saveEntity(entity, getAccount()?.id); } catch (e) { console.warn('[daily-modal] title save failed', e); }
     };
     input.addEventListener('blur', saveTitle);
     input.addEventListener('keydown', e => {
@@ -1291,7 +1292,7 @@ function _openNoteModal(entity) {
 
   const doSave = async () => {
     entity.body = editor.innerHTML;
-    try { await saveEntity(entity); } catch (e) { console.warn('[daily-modal] save failed', e); }
+    try { await saveEntity(entity, getAccount()?.id); } catch (e) { console.warn('[daily-modal] save failed', e); }
   };
   const schedSave = () => { clearTimeout(_debounce); _debounce = setTimeout(doSave, 800); };
   editor.addEventListener('input', schedSave);

@@ -346,7 +346,7 @@ async function _repairCorruptedTypes() {
       if (correctType) {
         entity._subtype = entity.type;
         entity.type = correctType;
-        await saveEntity(entity);
+        await saveEntity(entity, getAccount()?.id);
         repairCount++;
       }
     }
@@ -381,7 +381,7 @@ async function _migrateDailyReviewEdges() {
       if (!dr.date || dr.deleted) continue;
       const correctTitle = `Daily Review — ${_formatDateForTitle(dr.date)}`;
       if (dr.title !== correctTitle) {
-        try { await saveEntity({ ...dr, title: correctTitle }); titleFixed++; } catch { /* skip */ }
+        try { await saveEntity({ ...dr, title: correctTitle }, getAccount()?.id); titleFixed++; } catch { /* skip */ }
       }
     }
     if (titleFixed > 0) {
@@ -511,7 +511,7 @@ export async function openPanel(entityId, entityTypeHint) {
         entity._subtype = entity.type;
         entity.type = entityTypeHint;
         // Persist the repair so it doesn't recur
-        try { await saveEntity(entity); } catch { /* best effort */ }
+        try { await saveEntity(entity, getAccount()?.id); } catch { /* best effort */ }
         console.info(`[entity-panel] Repaired entity "${entityId}": type "${entity._subtype}" → "${entityTypeHint}"`);
       }
     }
@@ -924,7 +924,7 @@ function _renderHeaderActions() {
         `;
         row.textContent = item.label;
         row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-2)');
-        row.addEventListener('mouseleave', () => row.style.background = 'none');
+        row.addEventListener('mouseleave', () => row.style.background = 'transparent');
         row.addEventListener('click', () => { _menu?.remove(); _menu = null; item.fn(); });
         _menu.appendChild(row);
       }
@@ -1048,7 +1048,7 @@ async function _showProjectPicker() {
         `;
         item.textContent = `📁 ${proj.name || 'Untitled'}`;
         item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
-        item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+        item.addEventListener('mouseleave', () => { item.style.background = 'transparent'; });
         item.addEventListener('click', async () => {
           await saveEdge({
             fromId:   _entity.id,
@@ -1250,7 +1250,15 @@ function _renderContentView(container) {
     white-space: pre-wrap;
     word-break: break-word;
   `;
-  editor.innerHTML = value || '';
+  // Sanitize content to prevent XSS from sync'd data
+  if (value) {
+    const _dp37 = new DOMParser();
+    const _doc37 = _dp37.parseFromString(value, 'text/html');
+    _doc37.querySelectorAll('script,iframe,object,embed').forEach(el => el.remove());
+    editor.innerHTML = _doc37.body.innerHTML;
+  } else {
+    editor.innerHTML = '';
+  }
 
   editor.className = 'panel-content-editor';
 
@@ -2294,7 +2302,7 @@ async function _showRelationPicker(wrap, field) {
       item.innerHTML = `<span>${cfg?.icon || '📎'}</span> <span>${_getDisplayTitle(candidate)}</span>`;
 
       item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
-      item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+      item.addEventListener('mouseleave', () => { item.style.background = 'transparent'; });
 
       item.addEventListener('click', async () => {
         // Create edge
@@ -2366,7 +2374,7 @@ async function _getOrCreateDailyReview(dateStr) {
       type:  'dailyReview',
       title: `Daily Review — ${_formatDateForTitle(dateStr)}`,
       date:  dateStr,
-    });
+    }, getAccount()?.id);
   } catch (err) {
     console.warn('[entity-panel] _getOrCreateDailyReview failed:', dateStr, err);
     return null;

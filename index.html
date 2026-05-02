@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="description" content="FamilyHub — Private family management &amp; knowledge app" />
-  <meta name="theme-color" content="#0D1B2A" />
+  <meta name="theme-color" content="#F6F8FC" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -221,20 +221,20 @@
 
     <!-- CS-02: Context Switcher -->
     <div id="context-switcher" style="padding:8px 16px 4px;margin-bottom:4px;">
-      <div id="ctx-buttons" style="display:flex;gap:3px;background:rgba(255,255,255,0.08);border-radius:8px;padding:3px;">
+      <div id="ctx-buttons" style="display:flex;gap:3px;background:rgba(0,0,0,0.04);border-radius:8px;padding:3px;">
         <button class="ctx-btn" data-ctx="all"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;color:rgba(255,255,255,0.4);background:transparent;transition:all .15s;">ALL</button>
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;color:rgba(0,0,0,0.35);background:transparent;transition:all .15s;">ALL</button>
         <button class="ctx-btn" data-ctx="family"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;transition:all .15s;"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;color:#475569;transition:all .15s;"
                 title="Family">🏠</button>
         <button class="ctx-btn" data-ctx="personal"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;transition:all .15s;"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;color:#475569;transition:all .15s;"
                 title="Personal">👤</button>
         <button class="ctx-btn" data-ctx="business"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;transition:all .15s;"
+                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;color:#475569;transition:all .15s;"
                 title="Business">💼</button>
       </div>
-      <div id="ctx-label" style="text-align:center;font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px;letter-spacing:0.08em;text-transform:uppercase;">All Contexts</div>
+      <div id="ctx-label" style="text-align:center;font-size:10px;color:rgba(0,0,0,0.30);margin-top:4px;letter-spacing:0.08em;text-transform:uppercase;">All Contexts</div>
     </div>
 
     <!-- Nav items (Blueprint §4.2 — complete list) -->
@@ -244,42 +244,42 @@
       <li role="listitem">
         <button class="nav-item" data-view="dashboard"
                 aria-label="Dashboard">
-          <span class="nav-item-icon" aria-hidden="true">⊹</span>
+          <span class="nav-item-icon" aria-hidden="true">🏠</span>
           <span class="nav-item-label">Dashboard</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="daily"
                 aria-label="Daily Review">
-          <span class="nav-item-icon" aria-hidden="true">◈</span>
+          <span class="nav-item-icon" aria-hidden="true">☀️</span>
           <span class="nav-item-label">Daily</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="kanban"
                 aria-label="Tasks and Kanban board">
-          <span class="nav-item-icon" aria-hidden="true">⊡</span>
+          <span class="nav-item-icon" aria-hidden="true">✅</span>
           <span class="nav-item-label">Tasks</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="projects"
                 aria-label="Projects">
-          <span class="nav-item-icon" aria-hidden="true">⊞</span>
+          <span class="nav-item-icon" aria-hidden="true">📁</span>
           <span class="nav-item-label">Projects</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="calendar"
                 aria-label="Calendar">
-          <span class="nav-item-icon" aria-hidden="true">▦</span>
+          <span class="nav-item-icon" aria-hidden="true">📅</span>
           <span class="nav-item-label">Calendar</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="activity-center"
                 aria-label="Activity Center">
-          <span class="nav-item-icon" aria-hidden="true">⬡</span>
+          <span class="nav-item-icon" aria-hidden="true">🔔</span>
           <span class="nav-item-label">Activity Center</span>
         </button>
       </li>
@@ -289,7 +289,7 @@
       <li role="listitem">
         <button class="nav-item" data-view="graph"
                 aria-label="Knowledge Graph">
-          <span class="nav-item-icon" aria-hidden="true">◎</span>
+          <span class="nav-item-icon" aria-hidden="true">🔮</span>
           <span class="nav-item-label">Graph</span>
         </button>
       </li>
@@ -301,35 +301,35 @@
       <li role="listitem">
         <button class="nav-item" data-view="budget"
                 aria-label="Budget and expenses">
-          <span class="nav-item-icon" aria-hidden="true">◷</span>
+          <span class="nav-item-icon" aria-hidden="true">💰</span>
           <span class="nav-item-label">Budget</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="recipes"
                 aria-label="Recipes and meal planner">
-          <span class="nav-item-icon" aria-hidden="true">⊛</span>
+          <span class="nav-item-icon" aria-hidden="true">🍽️</span>
           <span class="nav-item-label">Recipes</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="documents"
                 aria-label="Documents and expiry tracker">
-          <span class="nav-item-icon" aria-hidden="true">⊟</span>
+          <span class="nav-item-icon" aria-hidden="true">📄</span>
           <span class="nav-item-label">Documents</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="contacts"
                 aria-label="Contacts">
-          <span class="nav-item-icon" aria-hidden="true">⊕</span>
+          <span class="nav-item-icon" aria-hidden="true">📇</span>
           <span class="nav-item-label">Contacts</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="gallery"
                 aria-label="Photo gallery">
-          <span class="nav-item-icon" aria-hidden="true">▣</span>
+          <span class="nav-item-icon" aria-hidden="true">🖼️</span>
           <span class="nav-item-label">Gallery</span>
         </button>
       </li>
@@ -341,42 +341,42 @@
       <li role="listitem">
         <button class="nav-item" data-view="entity-type" data-entity-type="idea"
                 data-label="Ideas" aria-label="Ideas">
-          <span class="nav-item-icon" aria-hidden="true">◇</span>
+          <span class="nav-item-icon" aria-hidden="true">💡</span>
           <span class="nav-item-label">Ideas</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="entity-type" data-entity-type="research"
                 data-label="Research" aria-label="Research">
-          <span class="nav-item-icon" aria-hidden="true">⊘</span>
+          <span class="nav-item-icon" aria-hidden="true">🔬</span>
           <span class="nav-item-label">Research</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="entity-type" data-entity-type="book"
                 data-label="Books" aria-label="Books">
-          <span class="nav-item-icon" aria-hidden="true">⊏</span>
+          <span class="nav-item-icon" aria-hidden="true">📚</span>
           <span class="nav-item-label">Books</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="entity-type" data-entity-type="trip"
                 data-label="Trips" aria-label="Trips">
-          <span class="nav-item-icon" aria-hidden="true">△</span>
+          <span class="nav-item-icon" aria-hidden="true">✈️</span>
           <span class="nav-item-label">Trips</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="entity-type" data-entity-type="place"
                 data-label="Places" aria-label="Places">
-          <span class="nav-item-icon" aria-hidden="true">◉</span>
+          <span class="nav-item-icon" aria-hidden="true">📍</span>
           <span class="nav-item-label">Places</span>
         </button>
       </li>
       <li role="listitem">
         <button class="nav-item" data-view="entity-type" data-entity-type="weblink"
                 data-label="Web Links" aria-label="Web Links">
-          <span class="nav-item-icon" aria-hidden="true">⊗</span>
+          <span class="nav-item-icon" aria-hidden="true">🔗</span>
           <span class="nav-item-label">Web Links</span>
         </button>
       </li>
@@ -390,7 +390,7 @@
       <li role="listitem">
         <button class="nav-item" data-view="object-studio"
                 aria-label="Object Studio — manage entity types">
-          <span class="nav-item-icon" aria-hidden="true">⬡</span>
+          <span class="nav-item-icon" aria-hidden="true">🧩</span>
           <span class="nav-item-label">Object Studio</span>
         </button>
       </li>
@@ -400,11 +400,11 @@
     <!-- Sidebar footer: Settings + Logout -->
     <div class="sidebar-footer">
       <button class="nav-item" data-view="settings" aria-label="Settings">
-        <span class="nav-item-icon" aria-hidden="true">⊙</span>
+        <span class="nav-item-icon" aria-hidden="true">⚙️</span>
         <span class="nav-item-label">Settings</span>
       </button>
       <button class="sidebar-logout-btn" id="sidebar-logout-btn" aria-label="Sign out">
-        <span style="font-size: 1rem;" aria-hidden="true">→</span>
+        <span style="font-size: 0.9rem;" aria-hidden="true">↗</span>
         Sign Out
       </button>
     </div>
@@ -972,7 +972,7 @@
         const { on: _ctxOn } = await import('./core/events.js');
 
         const CTX_LABELS = { all: 'All Contexts', family: 'Family', personal: 'Personal', business: 'Business' };
-        const CTX_COLORS = { all: '#0a7b6c', family: '#0891b2', personal: '#7c3aed', business: '#b45309' };
+        const CTX_COLORS = { all: '#3B82F6', family: '#0891b2', personal: '#7c3aed', business: '#b45309' };
 
         function _updateSwitcherUI(ctx) {
           const label = document.getElementById('ctx-label');
@@ -980,7 +980,7 @@
           document.querySelectorAll('.ctx-btn').forEach(btn => {
             const isActive = btn.dataset.ctx === ctx;
             btn.style.background = isActive ? (CTX_COLORS[ctx] || CTX_COLORS.all) : 'transparent';
-            btn.style.color = isActive ? '#fff' : 'rgba(255,255,255,0.4)';
+            btn.style.color = isActive ? '#fff' : 'rgba(0,0,0,0.35)';
           });
         }
 
@@ -1183,7 +1183,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '4.0.6', emit, on, env: window._fhEnv,
+        version: '4.0.7', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 
@@ -1226,7 +1226,7 @@
           const iconSpan = document.createElement('span');
           iconSpan.className = 'nav-item-icon';
           iconSpan.setAttribute('aria-hidden', 'true');
-          iconSpan.textContent = config.icon || '◇';
+          iconSpan.textContent = config.icon || '📎';
 
           const labelSpan = document.createElement('span');
           labelSpan.className = 'nav-item-label';
@@ -1267,7 +1267,7 @@
           else if (config) {
             const existing = _sidebarNav?.querySelector(`[data-entity-type="${config.key}"]`);
             if (existing) {
-              existing.querySelector('.nav-item-icon').textContent = config.icon || '◇';
+              existing.querySelector('.nav-item-icon').textContent = config.icon || '📎';
               existing.querySelector('.nav-item-label').textContent = config.labelPlural || config.label + 's';
               existing.setAttribute('data-label', config.labelPlural || config.label + 's');
               existing.setAttribute('aria-label', config.labelPlural || config.label + 's');
@@ -1294,7 +1294,7 @@
             ${err?.message || 'An unexpected error occurred during startup.'}
           </p>
           <button onclick="window.location.reload()"
-                  style="padding:0.5rem 1.5rem;background:#0A7B6C;color:#fff;border:none;
+                  style="padding:0.5rem 1.5rem;background:#3B82F6;color:#fff;border:none;
                          border-radius:0.5rem;cursor:pointer;font-size:0.875rem;">
             Reload
           </button>

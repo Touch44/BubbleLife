@@ -33,7 +33,7 @@ export const ALWAYS_PERSONAL_TYPES = new Set(['medication']);
 
 /** Context accent colours — applied as CSS --color-accent */
 const CONTEXT_COLORS = Object.freeze({
-  all:      '#0a7b6c',
+  all:      '#3B82F6',
   family:   '#0891b2',
   personal: '#7c3aed',
   business: '#b45309',

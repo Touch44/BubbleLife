@@ -45,8 +45,8 @@
   border-color: var(--color-accent);
 }
 .btn-primary:hover {
-  background: #0a6b5e;
-  border-color: #0a6b5e;
+  background: #2563EB;
+  border-color: #2563EB;
   box-shadow: var(--shadow-sm);
 }
 .btn-primary:focus-visible {
@@ -570,6 +570,8 @@
 .section-title {
   font-family: var(--font-heading);
   font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
   color: var(--color-text);
 }
 

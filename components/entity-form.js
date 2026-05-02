@@ -2703,7 +2703,7 @@ async function _submitForm() {
                   toId:     target.id,
                   toType:   target.type || field.relatesTo || '',
                   relation: field.key,
-                });
+                }, getAccount()?.id);
               } catch (edgeErr) { console.warn('[entity-form] Edge save failed:', edgeErr); }
             }
           }
