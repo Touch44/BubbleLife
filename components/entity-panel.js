@@ -123,20 +123,34 @@ export function initEntityPanel() {
     }
   }, { passive: true });
 
-  // Esc key closes panel
+  // Esc key closes panel — but not if a form modal is open or a panel input has focus
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && _panel.classList.contains('open')) {
+      // Suppress if entity-form overlay is visible
+      if (document.querySelector('.ef-overlay')) return;
+      // Suppress if focus is inside the panel (title input, relation search, etc.)
+      // Let the focused element handle Escape first (clear/blur), don't close panel
+      const active = document.activeElement;
+      if (active && _panel.contains(active) &&
+          (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
+           active.getAttribute('contenteditable') === 'true')) {
+        active.blur();
+        return;
+      }
       closePanel();
     }
   });
 
-  // Cmd+S saves panel when open (P-26)
-  document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 's' && _panel?.classList.contains('open')) {
-      e.preventDefault();
-      if (_dirty) _save();
-    }
-  });
+  // Cmd+S saves panel when open (P-26) — use named handler to prevent duplicate registration
+  if (!document._fhPanelSaveListenerWired) {
+    document._fhPanelSaveListenerWired = true;
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's' && _panel?.classList.contains('open')) {
+        e.preventDefault();
+        if (_dirty) _save();
+      }
+    });
+  }
 
   // Listen for open requests from anywhere
   on(EVENTS.PANEL_OPENED, ({ entityId, entityType } = {}) => {
@@ -147,13 +161,28 @@ export function initEntityPanel() {
   on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
     if (entity && _entity && entity.id === _entity.id && !_saving) {
       _entity = entity;
+      // If entity type changed (e.g. after Convert), reload config to match new type
+      if (_config && entity.type && entity.type !== _config.key) {
+        const newCfg = getEntityTypeConfig(entity.type);
+        if (newCfg) {
+          _config    = newCfg;
+          _activeTab = 'properties';
+          _renderHeader();
+        }
+      }
       _renderActiveTab();
     }
   });
 
-  // Close if entity got deleted
+  // Close panel (or clear graph panel) if shown entity was deleted
   on(EVENTS.ENTITY_DELETED, ({ id } = {}) => {
-    if (_entity && id === _entity.id) closePanel();
+    if (!_entity || _entity.id !== id) return;
+    if (_graphViewActive) {
+      // In graph mode: just clear the panel content; don't exit graph entirely
+      _clearGraphPanel();
+    } else {
+      closePanel();
+    }
   });
 
   // Graph canvas: single-click → update panel to that entity
@@ -231,6 +260,15 @@ export function initEntityPanel() {
         _panel.classList.remove('graph-mode');
         _panel.classList.remove('graph-panel-empty');
       }
+      // Also close the panel when graph is torn down by navigation
+      // so it doesn't float over the newly-restored view.
+      if (_panel && _panel.classList.contains('open')) {
+        _panel.classList.remove('open');
+        _panel.setAttribute('aria-hidden', 'true');
+        const _bd = document.getElementById('entity-panel-backdrop');
+        if (_bd) { _bd.classList.remove('visible'); _bd.classList.remove('modal-backdrop'); }
+        _entity = null; _config = null;
+      }
     }
 
     // BUG-2 fix: close the panel on ANY view change (sidebar clicks, hotkeys, etc.)
@@ -238,7 +276,11 @@ export function initEntityPanel() {
     if (_panel && _panel.classList.contains('open') && !_graphViewActive) {
       // Auto-save if dirty before closing — prevents silent data loss on navigation
       if (_dirty && _entity) {
-        _save().catch(() => {});  // best-effort; error shown by _save() internally
+        // Snapshot entity before clearing module state — _save() is async and
+        // would race with the null assignments below, restoring _entity after close.
+        const _snapEntity = _entity;
+        const _snapAcct   = getAccount()?.id;
+        saveEntity(_snapEntity, _snapAcct).catch(() => {}); // best-effort
         toast.info('Changes saved automatically.');
       }
       _panel.classList.remove('open');
@@ -680,6 +722,10 @@ function _renderHeader() {
   graphBtn.addEventListener('click', () => {
     if (_entity?.id) _openGraphView(_entity.id);
   });
+  // Hide graph button for types that have graphVisible: false in their config
+  if (_config?.graphVisible === false) {
+    graphBtn.style.display = 'none';
+  }
   toolbar.appendChild(graphBtn);
 
   // Separator before close
@@ -751,15 +797,17 @@ function _makeTitleEditable(titleField) {
 
   const commit = async () => {
     const val = input.value.trim();
-    if (val !== current) {
-      _entity[titleField.key] = val;
+    // Guard: never save an empty title — revert to previous value
+    const effectiveVal = val || current;
+    if (effectiveVal !== current && effectiveVal) {
+      _entity[titleField.key] = effectiveVal;
       _markDirty();
       await _save();
     }
     // Rebuild title span — CSS handles styling via #entity-panel-title
     const span = document.createElement('span');
     span.id          = 'entity-panel-title';
-    span.textContent = val || 'Untitled';
+    span.textContent = effectiveVal || current || 'Untitled';
     span.title       = 'Click to edit title';
     input.replaceWith(span);
     _panelTitle = span;
@@ -887,6 +935,7 @@ function _renderHeaderActions() {
 
 async function _duplicateEntity() {
   if (!_entity) return;
+  const sourceId = _entity.id;
   const dup = { ..._entity };
   delete dup.id; delete dup.createdAt; delete dup.updatedAt;
   delete dup.createdBy; // will be set to current user by saveEntity
@@ -894,6 +943,22 @@ async function _duplicateEntity() {
   if (titleK && dup[titleK]) dup[titleK] += ' (copy)';
   const account = getAccount();
   const saved = await saveEntity(dup, account?.id);
+
+  // Copy outgoing relation edges to the duplicate
+  try {
+    const srcEdges = await getEdgesFrom(sourceId);
+    await Promise.all(srcEdges.map(edge =>
+      saveEdge({
+        fromId:   saved.id,
+        fromType: saved.type,
+        toId:     edge.toId,
+        toType:   edge.toType,
+        relation: edge.relation,
+        metadata: edge.metadata,
+      }, account?.id).catch(() => {})
+    ));
+  } catch { /* edge copy is best-effort */ }
+
   openPanel(saved.id);
 }
 
@@ -994,9 +1059,12 @@ async function _showProjectPicker() {
   setTimeout(() => projSearchInput.focus(), 30);
 
   // Position relative to header
+  // Anchor to the panel header — ensure position:relative
   const header = document.getElementById('entity-panel-header');
   if (header) {
-    header.style.position = 'relative';
+    if (!header.style.position || header.style.position === 'static') {
+      header.style.position = 'relative';
+    }
     header.appendChild(dropdown);
   }
 
@@ -1709,6 +1777,7 @@ function _editSelect(wrap, field) {
         _entity[field.key] = val || null;
       }
       _markDirty();
+      await _applyOnChanges(field.key, val || null);  // P-27: cascade urgency etc.
       await _save();
     }
     _renderFieldValue(wrap, field);
@@ -1747,7 +1816,21 @@ function _editDate(wrap, field) {
 
   const commit = async () => {
     const val = input.value;
-    const isoVal = val ? (field.type === 'datetime' ? new Date(val).toISOString() : val) : null;
+    // For 'datetime' fields: val is 'YYYY-MM-DDTHH:mm' (local time from browser input).
+    // new Date(val) treats it as UTC in some engines → date shifts in negative TZ.
+    // Use explicit local-time construction to preserve the user's intended date/time.
+    let isoVal = null;
+    if (val) {
+      if (field.type === 'datetime') {
+        // Parse as local time: 'YYYY-MM-DDTHH:mm' → local Date → ISO string
+        const [datePart, timePart = '00:00'] = val.split('T');
+        const [y, mo, d] = datePart.split('-').map(Number);
+        const [h, mi]    = timePart.split(':').map(Number);
+        isoVal = new Date(y, mo - 1, d, h, mi).toISOString();
+      } else {
+        isoVal = val; // 'date' fields store YYYY-MM-DD directly — no TZ issue
+      }
+    }
     if (isoVal !== current) {
       // Capture old/new date strings BEFORE mutating entity, for DR edge update
       const oldDateStr = DR_DATE_FIELDS.has(field.key) ? _isoToLocalDate(current) : null;
@@ -1890,9 +1973,15 @@ async function _renderRelationChips(wrap, field) {
   // Guard: entity panel may have been closed or navigated away during await
   if (!_entity || _entity.id !== _entityIdForChips) return;
 
-  for (const edge of edges) {
-    const linked = await getEntity(edge.toId);
-    if (!linked) continue;
+  // Resolve all linked entities concurrently (O(1) vs O(n) sequential IDB reads)
+  const linkedEntities = await Promise.all(
+    edges.map(edge => getEntity(edge.toId).catch(() => null))
+  );
+
+  for (let i = 0; i < edges.length; i++) {
+    const edge   = edges[i];
+    const linked = linkedEntities[i];
+    if (!linked || linked.deleted) continue;  // skip null and deleted
 
     const linkedConfig = getEntityTypeConfig(linked.type);
     const chip = document.createElement('span');
@@ -1964,9 +2053,16 @@ function _renderTagChips(wrap, field) {
           emit(EVENTS.PANEL_OPENED, { entityId: tagEntity.id, entityType: 'tag' });
         } else {
           // Tag entity doesn't exist yet — offer to create it
-          import('../components/entity-form.js').then(({ openForm }) => {
-            openForm('tag', { name: tagName });
-          }).catch(() => {});
+          // Only open create form if no other form is currently open
+          if (!document.querySelector('.ef-overlay')) {
+            import('../components/entity-form.js').then(({ openForm }) => {
+              openForm('tag', { name: tagName });
+            }).catch(() => {});
+          } else {
+            import('../core/toast.js').then(({ toast }) => {
+              toast.info(`Tag "${tagName}" not found — close the current form to create it`);
+            }).catch(() => {});
+          }
         }
       } catch (err) {
         console.warn('[panel] tag lookup failed:', err);
@@ -1976,11 +2072,13 @@ function _renderTagChips(wrap, field) {
     const remove = document.createElement('span');
     remove.textContent = '×';
     remove.style.cssText = 'cursor: pointer; margin-left: var(--space-1); color: var(--color-text-muted); font-weight: bold;';
-    const idx = i;
+    const tagToRemove = tags[i];  // capture value, not index — index is stale after removals
     remove.addEventListener('click', async (e) => {
       e.stopPropagation();
+      // Find by value to handle index-shift from prior removals
       const arr = [...(_entity[field.key] || [])];
-      arr.splice(idx, 1);
+      const pos = arr.indexOf(tagToRemove);
+      if (pos !== -1) arr.splice(pos, 1);
       _entity[field.key] = arr;
       _markDirty();
       await _save();
@@ -2058,8 +2156,11 @@ async function _showRelationPicker(wrap, field) {
   if (existingEdges.length > 0) {
     const chipStrip = document.createElement('div');
     chipStrip.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-1);margin-bottom:var(--space-1);';
-    for (const edge of existingEdges) {
-      const linked = await getEntity(edge.toId).catch(() => null);
+    // Resolve all linked entities in parallel
+    const linkedEntities34 = await Promise.all(existingEdges.map(e => getEntity(e.toId).catch(() => null)));
+    for (let _i34 = 0; _i34 < existingEdges.length; _i34++) {
+      const edge = existingEdges[_i34];
+      const linked = linkedEntities34[_i34];
       if (!linked || linked.deleted) continue;
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
@@ -2137,7 +2238,7 @@ async function _showRelationPicker(wrap, field) {
               toId:     newEnt.id,
               toType:   newEnt.type,
               relation: field.key,
-            });
+            }, getAccount()?.id);
             _renderRelationChips(wrap, field);
           });
         } else {
@@ -2329,6 +2430,9 @@ async function _updateDailyReviewEdgesForDateChange(entity, dateFieldKey, oldDat
  * Idempotent — checks existing edges before creating. Non-blocking.
  * @param {object} entity
  */
+/** Cache of 'entityId:dateStr' pairs already ensured this session — prevents redundant IDB writes */
+const _dailyLinksEnsured = new Set();
+
 async function _ensureDailyLinks(entity) {
   if (!entity?.id || !entity?.type) return;
 
@@ -2391,9 +2495,15 @@ async function _ensureDailyLinks(entity) {
   const linkedIds = new Set(existingEdges.map(e => e.toId));
 
   for (const dateStr of datesToLink) {
+    // Skip if already ensured this entity+date pair in this session
+    const cacheKey = `${entity.id}:${dateStr}`;
+    if (_dailyLinksEnsured.has(cacheKey)) continue;
     try {
       const dr = await _getOrCreateDailyReview(dateStr);
-      if (!dr || linkedIds.has(dr.id)) continue;
+      if (!dr || linkedIds.has(dr.id)) {
+        _dailyLinksEnsured.add(cacheKey); // mark even if already linked
+        continue;
+      }
       await saveEdge({
         fromId:   entity.id,
         fromType: entity.type,
@@ -2401,6 +2511,7 @@ async function _ensureDailyLinks(entity) {
         toType:   'dailyReview',
         relation: 'in daily review',
       });
+      _dailyLinksEnsured.add(cacheKey);
     } catch (err) {
       console.warn('[entity-panel] _ensureDailyLinks failed for date:', dateStr, err);
     }
@@ -2508,6 +2619,10 @@ async function _renderRelationsTab(container) {
   let _allEntities = [];
   let _searchDebounce = null;
 
+  // Show loading state in search input while entities load
+  searchInput.placeholder = 'Loading entities…';
+  searchInput.disabled = true;
+
   const loadAllEntities = async () => {
     try {
       const allTypes = getAllEntityTypes();
@@ -2521,6 +2636,8 @@ async function _renderRelationsTab(container) {
   };
 
   await loadAllEntities();
+  searchInput.placeholder = '🔍 Search all entities — type to filter…';
+  searchInput.disabled = false;
 
   // Get set of already-linked entity IDs
   const getLinkedIds = async () => {
@@ -2723,17 +2840,16 @@ async function _renderConnectionsList(container) {
     ]);
 
     // Resolve all linked entities and sort by updatedAt desc
-    const items = [];
+    // Resolve all linked entities concurrently (O(1) vs O(n) sequential IDB reads)
+    const [outResolved, inResolved] = await Promise.all([
+      Promise.all(outgoing.map(edge => getEntity(edge.toId).then(e => ({ edge, linked: e, direction: 'out' })).catch(() => null))),
+      Promise.all(incoming.map(edge => getEntity(edge.fromId).then(e => ({ edge, linked: e, direction: 'in' })).catch(() => null))),
+    ]);
 
-    for (const edge of outgoing) {
-      const linked = await getEntity(edge.toId);
-      if (!linked || linked.deleted) continue;
-      items.push({ edge, linked, direction: 'out', sortKey: linked.updatedAt || linked.createdAt || '' });
-    }
-    for (const edge of incoming) {
-      const linked = await getEntity(edge.fromId);
-      if (!linked || linked.deleted) continue;
-      items.push({ edge, linked, direction: 'in', sortKey: linked.updatedAt || linked.createdAt || '' });
+    const items = [];
+    for (const r of [...outResolved, ...inResolved]) {
+      if (!r || !r.linked || r.linked.deleted) continue;
+      items.push({ ...r, sortKey: r.linked.updatedAt || r.linked.createdAt || '' });
     }
 
     // Sort by most recent first
@@ -2950,16 +3066,17 @@ async function _renderActivityTab(container) {
     ]);
     const log = Array.isArray(rec) ? rec : [];
 
-    // Build accountId → display name map via memberId → person entity
+    // Build accountId → display name map (parallel IDB reads)
     const accountMap = new Map();
-    for (const acct of (authData?.accounts || [])) {
+    const accounts = authData?.accounts || [];
+    await Promise.all(accounts.map(async (acct) => {
       if (acct.memberId) {
-        const person = await getEntity(acct.memberId);
+        const person = await getEntity(acct.memberId).catch(() => null);
         accountMap.set(acct.id, person?.name || person?.title || acct.username || acct.id);
       } else {
         accountMap.set(acct.id, acct.username || acct.id);
       }
-    }
+    }));
 
     // Filter to this entity, newest first
     const entries = log
@@ -3006,14 +3123,13 @@ async function _renderActivityTab(container) {
       const _looksLikeId = (v) => v && v.length > 8 && !v.includes(' ') &&
         !/^\d{4}-\d{2}-\d{2}/.test(v) && isNaN(Number(v));
 
-      if (_looksLikeId(oldDisplay)) {
-        const resolved = await getEntity(oldDisplay).catch(() => null);
-        if (resolved) oldDisplay = resolved.name || resolved.title || oldDisplay;
-      }
-      if (_looksLikeId(newDisplay)) {
-        const resolved = await getEntity(newDisplay).catch(() => null);
-        if (resolved) newDisplay = resolved.name || resolved.title || newDisplay;
-      }
+      // Resolve both values concurrently
+      const [resolvedOld, resolvedNew] = await Promise.all([
+        _looksLikeId(oldDisplay) ? getEntity(oldDisplay).then(e => (e ? (e.name || e.title || oldDisplay) : oldDisplay)).catch(() => oldDisplay) : Promise.resolve(oldDisplay),
+        _looksLikeId(newDisplay) ? getEntity(newDisplay).then(e => (e ? (e.name || e.title || newDisplay) : newDisplay)).catch(() => newDisplay) : Promise.resolve(newDisplay),
+      ]);
+      oldDisplay = resolvedOld;
+      newDisplay = resolvedNew;
 
       let desc = `${icon} ${_capitalize(entry.action || 'updated')}`;
       if (entry.field) {
@@ -3067,6 +3183,11 @@ async function _renderActivityTab(container) {
  */
 async function _openGraphView(entityId) {
   if (!entityId) return;
+  // Guard: if already in graph view, just update the focused entity
+  if (_graphViewActive) {
+    await openPanel(entityId);
+    return;
+  }
 
   const main    = document.getElementById('main');
   const viewEl  = document.getElementById('view-graph');
@@ -3186,7 +3307,16 @@ async function _openGraphView(entityId) {
     _panel.setAttribute('aria-hidden', 'false');
   }
 
-  await openPanel(entityId);
+  try {
+    await openPanel(entityId);
+  } catch (err) {
+    // If openPanel fails, reset graph state so it isn't permanently stuck
+    console.error('[entity-panel] openPanel failed during graph open:', err);
+    _graphViewActive    = false;
+    _graphPanelEntityId = null;
+    if (_panel) _panel.classList.remove('graph-mode');
+    throw err;
+  }
 
   // Force properties tab in graph mode
   _activeTab = 'properties';
@@ -3369,6 +3499,8 @@ function _clearGraphPanel() {
   _graphPanelEntityId = null;
   _entity = null;
   _config = null;
+  // Clean up activity stream subscription to prevent stale listener leaks
+  if (_activityCleanup) { _activityCleanup(); _activityCleanup = null; }
   if (_panelBody)  _panelBody.innerHTML  = '';
   const headerEl = document.getElementById('entity-panel-header');
   if (headerEl)    headerEl.innerHTML    = '';
@@ -3517,6 +3649,10 @@ async function _save() {
   } finally {
     _saving = false;
     if (_savingIndicator) _savingIndicator.classList.add('hidden');
+    // If another change came in while we were saving, schedule a retry save
+    if (_dirty && _entity) {
+      setTimeout(() => { if (_dirty && _entity) _save(); }, 100);
+    }
   }
 }
 

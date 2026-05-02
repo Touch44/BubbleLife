@@ -225,6 +225,7 @@ async function _mergeEntities(serverEntities) {
   let   merged    = 0;
   let   conflicts = 0;
 
+  const mergedEntities = [];  // track actually-written entities for ENTITY_SAVED events
   for (const se of serverEntities) {
     if (!se || !se.id) continue;
     try {
@@ -236,6 +237,7 @@ async function _mergeEntities(serverEntities) {
         conflicts++;
       }
       await db.saveEntity(se, account.id || '');
+      mergedEntities.push(se);
       merged++;
     } catch (err) {
       console.warn('[sync] merge entity failed:', se.id, err);
@@ -249,7 +251,8 @@ async function _mergeEntities(serverEntities) {
   if (merged > 0) {
     try {
       const evMod = await import('../core/events.js');
-      for (const entity of serverEntities) {
+      // Only emit for entities that were actually written to IDB (mergedIds tracks them)
+      for (const entity of mergedEntities) {
         if (entity && entity.type) {
           evMod.emit(evMod.EVENTS.ENTITY_SAVED, { entity, isNew: false });
         }

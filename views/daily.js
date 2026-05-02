@@ -191,22 +191,18 @@ async function _loadData(dateStr) {
   const fDateEntities = _filterByDailyContext(dateEntities);
   const fMealPlans    = _filterByDailyContext(mealPlans);
 
-  // Build edge-resolved relation maps for tasks (entity-form stores relations as edges)
+  // Build edge-resolved relation maps for tasks — parallel IDB reads
   const taskProjectEdgeMap  = new Map(); // taskId → projectId
   const taskAssigneeEdgeMap = new Map(); // taskId → personId
-  for (const task of fTasks) {
-    if (!task.project) {
-      try {
-        const edges = await getEdgesFrom(task.id, 'project');
-        if (edges.length > 0) taskProjectEdgeMap.set(task.id, edges[0].toId);
-      } catch { /* non-fatal */ }
-    }
-    if (!task.assignedTo) {
-      try {
-        const edges = await getEdgesFrom(task.id, 'assignedTo');
-        if (edges.length > 0) taskAssigneeEdgeMap.set(task.id, edges[0].toId);
-      } catch { /* non-fatal */ }
-    }
+  {
+    const needProject  = fTasks.filter(t => !t.project);
+    const needAssignee = fTasks.filter(t => !t.assignedTo);
+    const [projRes, assignRes] = await Promise.all([
+      Promise.all(needProject.map(t  => getEdgesFrom(t.id, 'project').catch(() => []))),
+      Promise.all(needAssignee.map(t => getEdgesFrom(t.id, 'assignedTo').catch(() => []))),
+    ]);
+    needProject.forEach((t, i)  => { if (projRes[i].length   > 0) taskProjectEdgeMap.set(t.id,  projRes[i][0].toId); });
+    needAssignee.forEach((t, i) => { if (assignRes[i].length  > 0) taskAssigneeEdgeMap.set(t.id, assignRes[i][0].toId); });
   }
 
   const accountMap = new Map();
@@ -985,8 +981,13 @@ function _prependCapturedItem(entity, type, dateStr, sectionRefs) {
       </div>
     `;
     // Title click → full edit form (only title span, not meta badges)
-    row.querySelector('.daily-task-info-clickable').addEventListener('click', () => {
-      openEditForm(entity);
+    row.querySelector('.daily-task-info-clickable').addEventListener('click', async () => {
+      // Re-fetch fresh entity — rendered entity object may be stale
+      try {
+        const { getEntity } = await import('../core/db.js');
+        const fresh = await getEntity(entity.id);
+        openEditForm(fresh || entity);
+      } catch { openEditForm(entity); }
     });
     const cb = row.querySelector('.daily-task-checkbox');
     cb.addEventListener('change', async () => {
@@ -1016,7 +1017,7 @@ function _prependCapturedItem(entity, type, dateStr, sectionRefs) {
   } else {
     // idea or other — open panel to show
     if (entity?.id) {
-      setTimeout(() => emit(EVENTS.PANEL_OPENED, { entityType: type, entityId: entity.id }), 200);
+      emit(EVENTS.PANEL_OPENED, { entityType: type, entityId: entity.id });
     }
   }
 }
@@ -1855,6 +1856,10 @@ function _updateSectionCount(wrapper) {
   const rows  = wrapper.querySelectorAll('.daily-task-row');
   const chip  = wrapper.querySelector('.daily-section-count');
   if (chip) chip.textContent = String(rows.length);
+  // Hide the entire section wrapper if all tasks are gone
+  if (rows.length === 0) {
+    wrapper.style.display = 'none';
+  }
 }
 
 // ── Styles injection ──────────────────────────────────────── //

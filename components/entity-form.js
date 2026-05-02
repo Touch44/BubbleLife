@@ -386,9 +386,12 @@ function _buildAndMount(config) {
       const footerEl = modal.querySelector('.modal-footer');
       if (footerEl) footerEl.style.display = (key === 'details' || key === 'relations') ? 'none' : '';
       // Lazy-load Tab 2 on first open
-      if (key === 'details' && tab2Body && !tab2Body.dataset.loaded) {
+      if (key === 'details' && tab2Body) {
+        // Always rebuild Tab 2 on open — config may have changed (e.g. after Convert)
+        // and _editEntity may have been updated by status toggle or archive actions.
         tab2Body.dataset.loaded = '1';
-        _buildDetailsTab(tab2Body, config);
+        const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
+        _buildDetailsTab(tab2Body, freshConfig || config);
       }
       // Lazy-load Tab 3 on first open
       if (key === 'relations' && tab3Body && !tab3Body.dataset.loaded) {
@@ -422,7 +425,10 @@ function _buildAndMount(config) {
     tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; gap: 0;';
 
     // ── Tab 1 action bar: status toggle + open graph ────────
+    let _tab1BarBuilding = false;
     const _buildTab1ActionBar = () => {
+      if (_tab1BarBuilding) return;
+      _tab1BarBuilding = true;
       const existing = tab1Body.querySelector('.ef-tab1-actionbar');
       if (existing) existing.remove();
 
@@ -492,11 +498,17 @@ function _buildAndMount(config) {
           try {
             const { openPanel } = await import('./entity-panel.js');
             await openPanel(eid);
-            // Give panel time to render then click its graph button
-            setTimeout(() => {
+            // Wait for panel graph button to exist (retries for up to 1s to handle slow IDB)
+            let _retries = 0;
+            const _clickGraph = () => {
               const panelGraphBtn = document.querySelector('[aria-label="Open Graph"]');
-              panelGraphBtn?.click();
-            }, 200);
+              if (panelGraphBtn) {
+                panelGraphBtn.click();
+              } else if (_retries++ < 10) {
+                setTimeout(_clickGraph, 80);
+              }
+            };
+            setTimeout(_clickGraph, 80);
           } catch (err) {
             console.warn('[entity-form] graph open failed:', err);
           }
@@ -508,6 +520,7 @@ function _buildAndMount(config) {
       if (actionBar.children.length > 0) {
         tab1Body.insertBefore(actionBar, tab1Body.firstChild);
       }
+      _tab1BarBuilding = false;
     };
 
     // Fields scroll container (padded, scrollable)
@@ -831,7 +844,15 @@ function _buildFieldControl(field, config) {
       input.value     = existing ? existing.slice(0, 16) : '';
       if (field.required) input.required = true;
       input.addEventListener('change', () => {
-        _draft[field.key] = input.value ? new Date(input.value).toISOString() : null;
+        // Parse datetime-local value as local time to avoid UTC shift in negative TZ
+        if (input.value) {
+          const [dp, tp = '00:00'] = input.value.split('T');
+          const [y, mo, d] = dp.split('-').map(Number);
+          const [h, mi]    = tp.split(':').map(Number);
+          _draft[field.key] = new Date(y, mo - 1, d, h, mi).toISOString();
+        } else {
+          _draft[field.key] = null;
+        }
       });
       return input;
     }
@@ -1595,6 +1616,7 @@ function _buildRelationControl(field, config) {
 
     const filtered = candidates.filter(e => {
       if (e.deleted) return false;
+      if (_editEntity && e.id === _editEntity.id) return false;  // exclude self-link
       return !query || _getDisplayTitle(e).toLowerCase().includes(query.toLowerCase());
     }).slice(0, 8);
 
@@ -1816,11 +1838,11 @@ async function _buildRelationsTab(container) {
             openQuickCreateModal(chosenType, { title: q }, async newEnt => {
               if (!newEnt) return;
               const rel = relationInput.value.trim() || 'related to';
-              await saveEdge({ fromId: entity.id, fromType: entity.type, toId: newEnt.id, toType: newEnt.type, relation: rel });
+              await saveEdge({ fromId: entity.id, fromType: entity.type, toId: newEnt.id, toType: newEnt.type, relation: rel }, getAccount()?.id);
               _linkedIds = await _getLinkedIds();
               searchInput.value = '';
               resultsList.style.display = 'none';
-              _refreshConnections();
+              await _refreshConnections();
             });
           });
           pickerWrap.append(lbl, typeSelect, goBtn);
@@ -1854,7 +1876,7 @@ async function _buildRelationsTab(container) {
         if (isLinked) return;
         const rel = relationInput.value.trim() || 'related to';
         try {
-          await saveEdge({ fromId: entity.id, fromType: entity.type, toId: ent.id, toType: ent.type, relation: rel });
+          await saveEdge({ fromId: entity.id, fromType: entity.type, toId: ent.id, toType: ent.type, relation: rel }, getAccount()?.id);
           _linkedIds.add(ent.id);
           item.style.opacity = '0.45';
           const pill = item.querySelector('span:last-child');
@@ -2142,7 +2164,11 @@ function _buildDetailsTab(container, config) {
       _editEntity = saved;
       emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
       toast.success(isArchived ? 'Unarchived' : 'Archived');
-      _buildDetailsTab(container, config);
+      // Only rebuild tab content if details tab is currently visible
+      if (_activeFormTab === 'details') {
+        const freshCfg = getEntityTypeConfig(_editEntity.type) || config;
+        _buildDetailsTab(container, freshCfg);
+      }
     }));
     toolbar.appendChild(btn);
   }
@@ -2311,14 +2337,21 @@ function _buildDetailsTab(container, config) {
     const btn = _mkBtn('⊗', 'Delete', true);
     btn.addEventListener('click', () => _guardedAction(async () => {
       const entityTitle = _editEntity.title || _editEntity.name || config.label;
+      const snapshot = { ..._editEntity };
       const confirmed = window.confirm(
-        `Delete "${entityTitle}"? This cannot be undone.`
+        `Delete "${entityTitle}"? Press Cmd+Z immediately after to undo.`
       );
       if (!confirmed) return;
       try {
         await deleteEntity(_editEntity.id);
-        emit(EVENTS.ENTITY_SAVED, { entity: { ..._editEntity, deleted: true }, isNew: false });
+        // db.deleteEntity already emits ENTITY_DELETED — don't also emit ENTITY_SAVED
         toast.success(`${config.label} deleted`);
+        // Push to undo stack — consistent with panel delete behaviour
+        window.FH?._pushUndoDelete?.({
+          snapshot,
+          entityLabel: config.label,
+          entityTitle,
+        });
         closeForm();
       } catch (err) {
         console.error('[entity-form] Delete failed:', err);
@@ -2431,7 +2464,18 @@ async function _loadEntityActivityLog(container, entity, config) {
     const _looksLikeId = (v) => v && v.length > 8 && !v.includes(' ')
       && !/^\d{4}-\d{2}-\d{2}/.test(v) && isNaN(Number(v));
 
-    for (const entry of entries) {
+    // Resolve all entity IDs in old/new values concurrently (avoids O(n) sequential reads)
+    const resolvedEntries = await Promise.all(entries.map(async (entry) => {
+      let oldVal = entry.oldValue != null ? String(entry.oldValue) : null;
+      let newVal = entry.newValue != null ? String(entry.newValue) : null;
+      const [resolvedOld, resolvedNew] = await Promise.all([
+        _looksLikeId(oldVal) ? getEntity(oldVal).then(e => e?.name || e?.title || oldVal).catch(() => oldVal) : Promise.resolve(oldVal),
+        _looksLikeId(newVal) ? getEntity(newVal).then(e => e?.name || e?.title || newVal).catch(() => newVal) : Promise.resolve(newVal),
+      ]);
+      return { ...entry, _resolvedOld: resolvedOld, _resolvedNew: resolvedNew };
+    }));
+
+    for (const entry of resolvedEntries) {
       const row = document.createElement('div');
       row.style.cssText = [
         'display: flex; flex-direction: column; gap: 3px;',
@@ -2446,15 +2490,9 @@ async function _loadEntityActivityLog(container, entity, config) {
                  : entry.action === 'unlink' ? '🔓'
                  : '✏️';
 
-      // Resolve entity IDs in old/new values to readable names
-      let oldVal = entry.oldValue != null ? String(entry.oldValue) : null;
-      let newVal = entry.newValue != null ? String(entry.newValue) : null;
-      if (_looksLikeId(oldVal)) {
-        oldVal = await getEntity(oldVal).then(e => e?.name || e?.title || oldVal).catch(() => oldVal);
-      }
-      if (_looksLikeId(newVal)) {
-        newVal = await getEntity(newVal).then(e => e?.name || e?.title || newVal).catch(() => newVal);
-      }
+      // Use pre-resolved values
+      let oldVal = entry._resolvedOld;
+      let newVal = entry._resolvedNew;
 
       // Build description
       let desc = `${icon} `;
@@ -2689,14 +2727,18 @@ async function _submitForm() {
     const cb = _onSave;
     const wasNew = !_editEntity;
     const entityLabel = config?.label || 'item';
-    closeForm();
+    // Emit ENTITY_SAVED FIRST so listeners (kanban, daily, panel) get fresh data,
+    // then run the onSave callback, then close the form.
+    // Closing last ensures any listener that checks the overlay won't see null prematurely.
     emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: wasNew });
     cb?.(saved);
+    closeForm();
     toast.success(wasNew ? `${entityLabel} created` : `${entityLabel} saved`);
 
   } catch (err) {
     console.error('[entity-form] Save failed:', err);
-    if (saveBtn) {
+    // Only re-enable if overlay is still in the DOM (user may have Escaped mid-save)
+    if (saveBtn && _overlay && document.body.contains(_overlay)) {
       saveBtn.disabled    = false;
       saveBtn.textContent = _editEntity ? 'Save changes' : `Create ${config?.label}`;
     }

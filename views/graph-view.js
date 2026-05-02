@@ -24,13 +24,14 @@ import {
 } from '../core/context.js';
 import {
   initGraph, destroyGraph, setActiveTypes,
-  refreshGraph, getAllGraphVisibleTypes, getActiveNodeTypes, setFocusId,
+  refreshGraph, getAllGraphVisibleTypes, getActiveNodeTypes, setFocusId, zoomBy,
 } from '../components/graph-canvas.js';
 
 // ── Module state ───────────────────────────────────────────────
 let _mounted       = false;       // true after first initGraph() call
 let _graphEl       = null;        // #view-graph container
 let _canvasEl      = null;        // <canvas> inside view
+let _savedTypeSet  = null;        // persists active type selections across re-navigation
 
 // ── Constants ──────────────────────────────────────────────────
 const CONTEXT_CHIPS = [
@@ -274,15 +275,29 @@ function _buildToolbar(container, activeTypeSet) {
     btn.title = `Show ${chip.label} context`;
     btn.innerHTML = `${chip.icon} <span>${chip.label}</span>`;
 
-    btn.addEventListener('click', () => {
-      // Update active context globally — graph-canvas filterByContext will pick it up
-      setActiveContext(chip.key);
-      // Update chip UI immediately (context:changed will also trigger refresh)
+    btn.addEventListener('click', async () => {
+      const prevCtx = getActiveContext();
+      // Update chip UI optimistically
       ctxRow.querySelectorAll('.gv-ctx-chip').forEach(b => {
         const isActive = b.dataset.ctx === chip.key;
         b.classList.toggle('active', isActive);
         b.setAttribute('aria-pressed', String(isActive));
       });
+      setActiveContext(chip.key);
+      // context:changed event triggers refreshGraph — but if it fails, revert chip
+      try {
+        await refreshGraph();
+        _updateEmptyState();
+      } catch (err) {
+        console.warn('[graph-view] context refresh failed:', err);
+        // Revert context and chip state
+        setActiveContext(prevCtx);
+        ctxRow.querySelectorAll('.gv-ctx-chip').forEach(b => {
+          const isActive = b.dataset.ctx === prevCtx;
+          b.classList.toggle('active', isActive);
+          b.setAttribute('aria-pressed', String(isActive));
+        });
+      }
     });
 
     ctxRow.appendChild(btn);
@@ -325,10 +340,11 @@ function _buildToolbar(container, activeTypeSet) {
       // Fix 7: update title tooltip to reflect new state
       btn.title = wasActive ? `Show ${typeConfig.label}` : `Hide ${typeConfig.label}`;
 
-      // Collect current active types and update graph
+      // Collect current active types and update graph + persist for re-navigation
       const active = new Set(
         [...typeRow.querySelectorAll('.gv-type-chip.active')].map(b => b.dataset.typeKey)
       );
+      _savedTypeSet = active;
       setActiveTypes(active);
     });
 
@@ -398,6 +414,18 @@ function _buildToolbar(container, activeTypeSet) {
 
   focusInput.addEventListener('blur', () => setTimeout(() => { focusSugg.hidden = true; }, 150));
 
+  // Also close on outside click (catches cases where blur doesn't fire)
+  const _closeFocusSugg = (e) => {
+    if (!focusWrap.contains(e.target)) focusSugg.hidden = true;
+  };
+  document.addEventListener('click', _closeFocusSugg);
+  // Clean up listener when graph view unmounts
+  const _origUnmount = window._gvCleanup || null;
+  window._gvCleanup = () => {
+    document.removeEventListener('click', _closeFocusSugg);
+    if (_origUnmount) _origUnmount();
+  };
+
   // ── Divider
   const div3 = document.createElement('div');
   div3.className = 'gv-divider';
@@ -413,18 +441,21 @@ function _buildToolbar(container, activeTypeSet) {
   `;
   toolbar.appendChild(zoomWrap);
 
-  zoomWrap.querySelector('#gv-zoom-in').addEventListener('click', () => {
-    // Simulate wheel zoom in on the canvas
-    const canvas = document.querySelector('#view-graph canvas');
-    if (!canvas) return;
-    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -150, bubbles: true, cancelable: true }));
-  });
-  zoomWrap.querySelector('#gv-zoom-out').addEventListener('click', () => {
-    const canvas = document.querySelector('#view-graph canvas');
-    if (!canvas) return;
-    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 150, bubbles: true, cancelable: true }));
-  });
+  // Use direct zoomBy API for clean, reliable zooming
+  const _doZoom = (zoomIn) => {
+    const steps = 6;
+    let i = 0;
+    const factor = zoomIn ? 1.10 : 0.91;
+    const step = () => {
+      zoomBy(factor);
+      if (++i < steps) requestAnimationFrame(step);
+    };
+    step();
+  };
+  zoomWrap.querySelector('#gv-zoom-in').addEventListener('click',  () => _doZoom(true));
+  zoomWrap.querySelector('#gv-zoom-out').addEventListener('click', () => _doZoom(false));
   zoomWrap.querySelector('#gv-zoom-reset').addEventListener('click', async () => {
+    _savedTypeSet = null; // clear type selection → next render restores all types
     try { await refreshGraph(); } catch { /* ignore */ }
   });
 
@@ -437,8 +468,8 @@ async function renderGraph(params = {}) {
   _graphEl = document.getElementById('view-graph');
   if (!_graphEl) return;
 
-  // Determine initial active types
-  const allVisibleTypes = getAllGraphVisibleTypes();
+  // Determine initial active types — restore user's previous selection if any
+  const allVisibleTypes = _savedTypeSet || getAllGraphVisibleTypes();
 
   // On first mount build the full UI; on subsequent calls just refresh the graph
   if (!params._internal || !_mounted) {
@@ -508,6 +539,8 @@ on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
   if (viewKey !== 'graph' && _mounted) {
     try { destroyGraph(); } catch { /* ignore */ }
     _mounted = false;
+    // Clean up any global event listeners added during graph view
+    try { window._gvCleanup?.(); window._gvCleanup = null; } catch { /* ignore */ }
   }
 });
 
@@ -527,18 +560,21 @@ on('context:changed', () => {
 });
 
 // Re-render when entities change
+// ENTITY_SAVED: graph-canvas already has a debounced 800ms refreshGraph listener.
+// graph-view only needs to update the empty-state indicator after refresh settles.
+// Removing redundant immediate refreshGraph() call to avoid double rebuild.
 on(EVENTS.ENTITY_SAVED, () => {
-  // Re-resolve _graphEl live — _graphEl can become stale across unmount/remount cycles
   const graphEl = _graphEl || document.getElementById('view-graph');
   if (_mounted && graphEl?.classList.contains('active')) {
-    refreshGraph().then(_updateEmptyState).catch(() => {});
+    // Let canvas debounce handle the rebuild; just refresh empty state after delay
+    setTimeout(_updateEmptyState, 900);
   }
 });
 
 on(EVENTS.ENTITY_DELETED, () => {
   const graphEl = _graphEl || document.getElementById('view-graph');
   if (_mounted && graphEl?.classList.contains('active')) {
-    refreshGraph().then(_updateEmptyState).catch(() => {});
+    setTimeout(_updateEmptyState, 900);
   }
 });
 

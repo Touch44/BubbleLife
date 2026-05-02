@@ -117,6 +117,18 @@ async function renderSettings() {
           </div>
           <div><strong>Account ID:</strong> <code style="font-size:var(--text-xs);color:var(--color-text-muted);">${_esc(account?.id || '')}</code></div>
         </div>
+        <hr style="margin:var(--space-3) 0;border:none;border-top:1px solid var(--color-border);">
+        <div style="display:flex;flex-direction:column;gap:var(--space-2);">
+          <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;">Update Profile</div>
+          <input id="settings-display-name" type="text" class="input" placeholder="Display name" style="font-size:var(--text-sm);">
+          <input id="settings-email" type="email" class="input" placeholder="Email (optional)" style="font-size:var(--text-sm);">
+          <hr style="margin:var(--space-1) 0;border:none;border-top:1px solid var(--color-border);">
+          <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;">Change Password</div>
+          <input id="settings-current-pass" type="password" class="input" placeholder="Current password" style="font-size:var(--text-sm);" autocomplete="current-password">
+          <input id="settings-new-pass" type="password" class="input" placeholder="New password (min 8 chars)" style="font-size:var(--text-sm);" autocomplete="new-password">
+          <button id="settings-account-save" class="btn btn-primary" style="align-self:flex-start;">Save Changes</button>
+          <div id="settings-account-status" style="font-size:var(--text-xs);display:none;"></div>
+        </div>
       `)}
 
       ${isAdmin ? _section('Family Members', '👨‍👩‍👧‍👦', `
@@ -211,6 +223,39 @@ async function renderSettings() {
     }
   };
   el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyTheme('light'));
+
+  // ── Account update form ──────────────────────────────────
+  el.querySelector('#settings-account-save')?.addEventListener('click', async () => {
+    const { updateAccount } = await import('../core/auth.js');
+    const displayName   = el.querySelector('#settings-display-name')?.value.trim() || '';
+    const email         = el.querySelector('#settings-email')?.value.trim() || '';
+    const currentPass   = el.querySelector('#settings-current-pass')?.value || '';
+    const newPass       = el.querySelector('#settings-new-pass')?.value || '';
+    const statusEl      = el.querySelector('#settings-account-status');
+    const saveBtn       = el.querySelector('#settings-account-save');
+    if (statusEl) { statusEl.style.display = 'none'; }
+    if (saveBtn)  { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+    const changes = {};
+    if (displayName) changes.displayName   = displayName;
+    if (email)       changes.email         = email;
+    if (newPass)     changes.newPassword   = newPass;
+    if (currentPass) changes.currentPassword = currentPass;
+    if (!Object.keys(changes).length) {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
+      return;
+    }
+    const result = await updateAccount(changes).catch(err => ({ ok: false, error: err.message }));
+    if (statusEl) {
+      statusEl.style.display = 'block';
+      statusEl.textContent   = result.ok ? '✅ Profile updated.' : `❌ ${result.error}`;
+      statusEl.style.color   = result.ok ? 'var(--color-accent)' : 'var(--color-danger)';
+    }
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
+    if (result.ok) {
+      if (el.querySelector('#settings-current-pass')) el.querySelector('#settings-current-pass').value = '';
+      if (el.querySelector('#settings-new-pass'))     el.querySelector('#settings-new-pass').value = '';
+    }
+  });
   el.querySelector('#settings-theme-dark')?.addEventListener('click',  () => _applyTheme('dark'));
   el.querySelector('#settings-theme-auto')?.addEventListener('click',  () => _applyTheme('auto'));
 

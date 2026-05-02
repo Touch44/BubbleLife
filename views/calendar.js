@@ -299,16 +299,17 @@ async function _loadData() {
   // C-01: build personMap (id → person entity) for color lookups
   data._personMap = new Map(personRaw.filter(p => !p.deleted).map(p => [p.id, p]));
 
-  // Build edge-resolved assignedTo map for tasks (entity-form stores assignedTo as edge)
+  // Build edge-resolved assignedTo map — parallel IDB reads
   const taskAssigneeEdgeMap = new Map();
-  for (const task of (data.task || [])) {
-    if (!task.assignedTo) {
+  await Promise.all((data.task || [])
+    .filter(t => !t.assignedTo)
+    .map(async task => {
       try {
         const edges = await getEdgesFrom(task.id, 'assignedTo');
         if (edges.length > 0) taskAssigneeEdgeMap.set(task.id, edges[0].toId);
       } catch { /* non-fatal */ }
-    }
-  }
+    })
+  );
   data._taskAssigneeEdgeMap = taskAssigneeEdgeMap;
   return data;
 }
@@ -767,7 +768,7 @@ function _showWeekSlotQuickCreate(anchorEl, dateTime) {
       box.remove();
       document.removeEventListener('click', _outside);
       toast.success('Event added');
-      renderCalendar({ _internal: true });
+      _debouncedRender();  // use debounce to avoid double-render with ENTITY_SAVED
     } catch(e) {
       console.error('[cal] slot quick-create failed:', e);
       toast.error('Could not create event');
@@ -1717,7 +1718,7 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
       }
     }
 
-    await saveEntity(entity);
+    await saveEntity(entity, getAccount()?.id);
     console.log(`[calendar] Rescheduled ${entityType} "${entity.title || entity.id}" → ${newDateStr}`);
   } catch (err) {
     console.error('[calendar] Reschedule failed:', err);

@@ -357,18 +357,51 @@ export async function saveEntity(entity, byAccountId) {
     };
 
     const db = await _getDB();
+
+    // Read old entity BEFORE opening the transaction (avoids nested-tx IDB issues)
+    const oldEntity = isNew ? null : await db.get(STORES.ENTITIES, saved.id).catch(() => null);
+
     const tx = db.transaction([STORES.ENTITIES, STORES.SETTINGS], 'readwrite');
 
     await tx.objectStore(STORES.ENTITIES).put(saved);
     await _addToDirtyQueue(tx, 'dirtyEntities', saved.id);
-    await _appendAuditLog(tx, {
-      action:      isNew ? 'create' : 'update',
-      entityType:  saved.type,
-      entityId:    saved.id,
-      entityTitle: saved.title || saved.name || (saved.body ? saved.body.slice(0,60) : null) || saved.id,
-      byAccountId,
-      at:          now,
-    });
+
+    const entityTitle = saved.title || saved.name || (saved.body ? saved.body.slice(0,60) : null) || saved.id;
+
+    if (isNew || !oldEntity) {
+      // New entity — single 'create' entry
+      await _appendAuditLog(tx, {
+        action: 'create', entityType: saved.type, entityId: saved.id,
+        entityTitle, byAccountId, at: now,
+      });
+    } else {
+      // Existing entity — write one audit entry per changed field
+      // Skip internal/structural fields that aren't meaningful to show
+      const SKIP_FIELDS = new Set(['updatedAt', 'createdAt', 'createdBy', 'id',
+                                    'deleted', 'dirtyAt', '_authorName', '_authorPersonId']);
+      let wroteAny = false;
+      for (const key of Object.keys(saved)) {
+        if (SKIP_FIELDS.has(key)) continue;
+        const oldVal = oldEntity[key];
+        const newVal = saved[key];
+        // Simple equality check (JSON-serializable values)
+        if (JSON.stringify(oldVal) === JSON.stringify(newVal)) continue;
+        await _appendAuditLog(tx, {
+          action:      'update',
+          entityType:  saved.type,
+          entityId:    saved.id,
+          entityTitle,
+          field:       key,
+          oldValue:    oldVal != null ? String(typeof oldVal === 'object' ? JSON.stringify(oldVal) : oldVal).slice(0, 200) : null,
+          newValue:    newVal != null ? String(typeof newVal === 'object' ? JSON.stringify(newVal) : newVal).slice(0, 200) : null,
+          byAccountId,
+          at:          now,
+        });
+        wroteAny = true;
+      }
+      // If nothing changed (e.g. touch-save), skip audit entry — avoids polluting activity log
+      // with meaningless 'updated' records that have no field delta to show.
+    }
 
     await tx.done;
 

@@ -29,6 +29,8 @@ let _ctx = null;
 
 /** @type {{ id:string, type:string, label:string, icon:string, color:string, x:number, y:number, vx:number, vy:number }[]} */
 let _nodes = [];
+/** @type {Map<string, object>} O(1) id→node lookup for physics and render */
+let _nodeMap = new Map();
 /** @type {{ fromId:string, toId:string, relation:string, color:string }[]} */
 let _edges = [];
 
@@ -41,6 +43,7 @@ let _focusId   = null;
 let _focusTrail = [];
 
 let _isDragging  = false;
+let _dragMoved   = false;   // true if drag actually moved node (suppresses click on mouseup)
 let _dragNode    = null;
 let _dragVx      = 0;
 let _dragVy      = 0;
@@ -135,6 +138,7 @@ export async function initGraph(canvasEl, options = {}) {
   _focusId    = options.focusEntityId || null;
   _focusTrail = [];
   _isDragging = false;
+  _dragMoved  = false;
   _dragNode   = null;
   _dragVx     = 0;
   _dragVy     = 0;
@@ -167,6 +171,8 @@ export function destroyGraph() {
   _ctx        = null;
   _nodes      = [];
   _edges      = [];
+  _nodeMap    = new Map();
+  _buildSerial = 0;
   _offset     = { x: 0, y: 0 };
   _scale      = 1.0;
   _hoverId    = null;
@@ -193,13 +199,17 @@ export function destroyGraph() {
  */
 export async function setFocusId(id) {
   if (id) {
-    const entity = await getEntity(id);
-    if (entity) {
-      _focusTrail.push({
-        id:    entity.id,
-        type:  entity.type,
-        label: _getDisplayTitle(entity),
-      });
+    // Guard: don't push duplicate if already focused on this node
+    const alreadyTop = _focusTrail.length > 0 && _focusTrail[_focusTrail.length - 1].id === id;
+    if (!alreadyTop) {
+      const entity = await getEntity(id);
+      if (entity) {
+        _focusTrail.push({
+          id:    entity.id,
+          type:  entity.type,
+          label: _getDisplayTitle(entity),
+        });
+      }
     }
     _focusId = id;
   } else {
@@ -223,6 +233,24 @@ export async function setActiveTypes(typesSet) {
  */
 export async function refreshGraph() {
   await _buildGraph();
+}
+
+/**
+ * Apply a zoom step programmatically (used by toolbar + / - buttons).
+ * @param {number} factor — scale multiplier, e.g. 1.15 = zoom in 15%
+ * @param {number} [cx]   — CSS-px X to zoom toward (defaults to canvas center)
+ * @param {number} [cy]   — CSS-px Y to zoom toward (defaults to canvas center)
+ */
+export function zoomBy(factor, cx, cy) {
+  if (!_canvas) return;
+  const mx = cx ?? (_canvas.width  / (window.devicePixelRatio || 1) / 2);
+  const my = cy ?? (_canvas.height / (window.devicePixelRatio || 1) / 2);
+  const newScale = Math.max(0.2, Math.min(5.0, _scale * factor));
+  const ratio = newScale / _scale;
+  _offset.x = mx - (mx - _offset.x) * ratio;
+  _offset.y = my - (my - _offset.y) * ratio;
+  _scale    = newScale;
+  _render();
 }
 
 /**
@@ -260,10 +288,17 @@ export function getAllGraphVisibleTypes() {
  * 4. Run static layout (200 iterations)
  * 5. Start RAF physics loop
  */
+let _buildSerial = 0;  // incremented on each _buildGraph call; stale builds abort
+
 async function _buildGraph() {
   _stopPhysics();
 
   if (!_canvas || !_ctx) return;
+
+  // Increment serial — any prior in-flight build will see its serial is stale and abort
+  const thisBuild = ++_buildSerial;
+  // Helper: returns true if this build has been superseded
+  const _stale = () => thisBuild !== _buildSerial;
 
   const w = _canvas.width;
   const h = _canvas.height;
@@ -288,20 +323,34 @@ async function _buildGraph() {
     }
   }
 
-  // ── Step 2: Gather edges ────────────────────────────────
+  // Abort if a newer build was triggered while we were loading entities
+  if (_stale()) return;
+
+  // ── Step 2: Gather edges — parallel IDB reads (vs sequential) ──────
+  // Run all getEdgesFrom() calls concurrently instead of sequentially
+  // to prevent O(n) sequential IDB round-trips on large graphs.
   const rawEdges = [];
-  for (const [id] of entityMap) {
-    try {
-      const outgoing = await getEdgesFrom(id);
-      for (const edge of outgoing) {
-        if (entityMap.has(edge.toId)) {
-          rawEdges.push(edge);
-        }
+  const edgeResults = await Promise.all(
+    [...entityMap.keys()].map(id => getEdgesFrom(id).catch(() => []))
+  );
+  for (const outgoing of edgeResults) {
+    for (const edge of outgoing) {
+      if (entityMap.has(edge.toId)) {
+        rawEdges.push(edge);
       }
-    } catch { /* skip */ }
+    }
   }
 
   // ── Step 2b: Focus mode — keep only focusId + neighbors ─
+  // If _focusId no longer exists in entityMap (filtered out by context or type toggle),
+  // clear focus mode to prevent rendering dimming against a ghost entity.
+  if (_focusId && !entityMap.has(_focusId)) {
+    console.warn('[graph-canvas] Focus entity not in entityMap — clearing focus mode');
+    _focusId    = null;
+    _focusTrail = [];
+    emit('graph:focusExited', {});
+  }
+
   let visibleIds;
   if (_focusId && entityMap.has(_focusId)) {
     visibleIds = new Set([_focusId]);
@@ -319,6 +368,9 @@ async function _buildGraph() {
   } else {
     visibleIds = new Set(entityMap.keys());
   }
+
+  // Abort if superseded during edge loading
+  if (_stale()) return;
 
   // ── Step 3: Build node objects, preserve positions ──────
   const prevPositions = new Map(_nodes.map(n => [n.id, { x: n.x, y: n.y }]));
@@ -345,8 +397,9 @@ async function _buildGraph() {
     });
   }
 
-  // Build node id set for edge filtering
+  // Build node id set for edge filtering + O(1) lookup map for physics
   const nodeIdSet = new Set(_nodes.map(n => n.id));
+  _nodeMap = new Map(_nodes.map(n => [n.id, n]));
 
   // ── Step 4: Build edge objects ──────────────────────────
   _edges = [];
@@ -374,6 +427,8 @@ async function _buildGraph() {
   // [minor] Fix: guard against destroyGraph() being called during async build
   // If _canvas was nulled while we were awaiting DB calls, abort cleanly
   if (!_canvas || !_ctx) return;
+  // Abort if superseded during static layout
+  if (_stale()) return;
   _frameCount = 0;
   _physicsRunning = true;
   _rafLoop();
@@ -422,8 +477,8 @@ function _physicsTick() {
 
   // ── Springs: stiffness 0.04, rest length 130px ─────────
   for (const edge of _edges) {
-    const a = _nodes.find(nd => nd.id === edge.fromId);
-    const b = _nodes.find(nd => nd.id === edge.toId);
+    const a = _nodeMap.get(edge.fromId);
+    const b = _nodeMap.get(edge.toId);
     if (!a || !b) continue;
 
     let dx   = b.x - a.x;
@@ -530,6 +585,14 @@ function _startPhysics() {
 // RENDERING
 // ══════════════════════════════════════════════════════════════
 
+/** Read current text color from CSS variable — works in both light and dark mode. */
+function _getTextColor() {
+  try {
+    const c = getComputedStyle(document.documentElement).getPropertyValue('--color-text').trim();
+    return c || '#334155';
+  } catch { return '#334155'; }
+}
+
 function _render() {
   if (!_ctx || !_canvas) return;
 
@@ -560,8 +623,8 @@ function _render() {
 
   // ── Draw edges ─────────────────────────────────────────
   for (const edge of _edges) {
-    const from = _nodes.find(n => n.id === edge.fromId);
-    const to   = _nodes.find(n => n.id === edge.toId);
+    const from = _nodeMap.get(edge.fromId);
+    const to   = _nodeMap.get(edge.toId);
     if (!from || !to) continue;
 
     const dimmed = isFocusMode &&
@@ -626,7 +689,7 @@ function _render() {
 
     // Label below
     ctx.font         = LABEL_FONT;
-    ctx.fillStyle    = dimmed ? 'rgba(100,116,139,0.4)' : '#334155';
+    ctx.fillStyle    = dimmed ? 'rgba(100,116,139,0.4)' : _getTextColor();
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText(node.label, node.x, node.y + r + 6);
@@ -636,7 +699,7 @@ function _render() {
 
   // ── Tooltip for hovered node ───────────────────────────
   if (_hoverId) {
-    const hovNode = _nodes.find(n => n.id === _hoverId);
+    const hovNode = _nodeMap.get(_hoverId);
     if (hovNode) {
       const tooltipText = hovNode.label;
       ctx.font = TOOLTIP_FONT;
@@ -773,7 +836,16 @@ function _wireListeners() {
   window.addEventListener('resize', _onResize);
 
   // Listen for data changes to auto-refresh
-  _unsubEntitySaved   = on(EVENTS.ENTITY_SAVED,   () => refreshGraph());
+  // Debounce graph refresh on ENTITY_SAVED — rapid saves (panel field edits)
+  // would otherwise cause a full IDB rebuild + physics restart on every keystroke.
+  let _refreshDebounce = null;
+  _unsubEntitySaved = on(EVENTS.ENTITY_SAVED, () => {
+    if (!_canvas) return;           // graph not mounted — ignore
+    clearTimeout(_refreshDebounce);
+    _refreshDebounce = setTimeout(() => {
+      if (_canvas) refreshGraph();  // re-check: graph may have closed during delay
+    }, 800);
+  });
   _unsubEntityDeleted = on(EVENTS.ENTITY_DELETED,  () => refreshGraph());
   _unsubEdgeSaved     = on(EVENTS.EDGE_SAVED,      () => refreshGraph());
   _unsubEdgeDeleted   = on(EVENTS.EDGE_DELETED,    () => refreshGraph());
@@ -873,6 +945,7 @@ function _handleMouseDown(e) {
     _dragVx     = 0;
     _dragVy     = 0;
     _wPh        = 0;
+    _dragMoved  = false;   // reset drag-distance flag
     _canvas.style.cursor = 'grabbing';
   } else {
     // Start panning background
@@ -903,6 +976,8 @@ function _handleMouseMove(e) {
     const dy    = y - prevY;
     const dist  = Math.sqrt(dx * dx + dy * dy);
 
+    // Mark that the node actually moved (suppresses mouseup select)
+    _dragMoved = true;
     // Move node to cursor
     _dragNode.x = x;
     _dragNode.y = y;
@@ -926,9 +1001,9 @@ function _handleMouseMove(e) {
     for (const edge of _edges) {
       let neighbor = null;
       if (edge.fromId === _dragNode.id) {
-        neighbor = _nodes.find(n => n.id === edge.toId);
+        neighbor = _nodeMap.get(edge.toId);
       } else if (edge.toId === _dragNode.id) {
-        neighbor = _nodes.find(n => n.id === edge.fromId);
+        neighbor = _nodeMap.get(edge.fromId);
       }
       if (neighbor && neighbor !== _dragNode) {
         const ndx   = _dragNode.x - neighbor.x;
@@ -982,6 +1057,11 @@ function _handleMouseUp(e) {
   const node = _nodeAt(x, y);
 
   if (node) {
+    // If we just finished dragging, don't treat mouseup as a click
+    if (_dragMoved) {
+      _dragMoved = false;
+      return;
+    }
     const now = Date.now();
 
     // Double-click detection (< 350ms, same node)
@@ -1150,8 +1230,8 @@ function _handleTouchMove(e) {
     // Neighbor ripple
     for (const edge of _edges) {
       let neighbor = null;
-      if (edge.fromId === _dragNode.id) neighbor = _nodes.find(n => n.id === edge.toId);
-      else if (edge.toId === _dragNode.id) neighbor = _nodes.find(n => n.id === edge.fromId);
+      if (edge.fromId === _dragNode.id) neighbor = _nodeMap.get(edge.toId);
+      else if (edge.toId === _dragNode.id) neighbor = _nodeMap.get(edge.fromId);
       if (neighbor && neighbor !== _dragNode) {
         const ndx = _dragNode.x - neighbor.x;
         const ndy = _dragNode.y - neighbor.y;
@@ -1241,7 +1321,7 @@ async function _focusBack() {
     _focusId = prev.id;
     // Don't re-push to trail since prev is already there
     await _buildGraph();
-    // [minor] Notify entity-panel to refresh filter chips for new focus
+    // Emit AFTER _buildGraph completes — filter chips reflect correct new state
     emit('graph:focusExited', {});
   } else {
     _focusExit();
@@ -1267,8 +1347,13 @@ function _resizeCanvas() {
   if (!parent) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const w   = parent.clientWidth;
-  const h   = parent.clientHeight || 400;
+  const w   = parent.clientWidth  || parent.offsetWidth  || 800;
+  // Walk up if flex parent reports 0 height — use offsetHeight for rendered height
+  let h = parent.clientHeight || parent.offsetHeight;
+  if (!h) {
+    // Last resort: use a large portion of the viewport
+    h = Math.max(window.innerHeight * 0.7, 400);
+  }
 
   _canvas.width  = w * dpr;
   _canvas.height = h * dpr;

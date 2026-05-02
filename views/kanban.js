@@ -116,40 +116,43 @@ async function _loadData() {
 async function _buildRelationEdgeMaps() {
   _taskProjectMap.clear();
   _taskAssigneeMap.clear();
-  for (const task of _tasks) {
-    // project edge
-    if (!task.project) {
-      try {
-        const projEdges = await getEdgesFrom(task.id, 'project');
-        if (projEdges.length > 0) {
-          _taskProjectMap.set(task.id, projEdges[0].toId);
-        }
-      } catch { /* non-fatal */ }
-    }
-    // assignedTo edge
-    if (!task.assignedTo) {
-      try {
-        const assignEdges = await getEdgesFrom(task.id, 'assignedTo');
-        if (assignEdges.length > 0) {
-          _taskAssigneeMap.set(task.id, assignEdges[0].toId);
-        }
-      } catch { /* non-fatal */ }
-    }
-  }
+
+  // Parallel IDB reads — fire all edge lookups concurrently instead of sequentially
+  const needProject  = _tasks.filter(t => !t.project);
+  const needAssignee = _tasks.filter(t => !t.assignedTo);
+
+  const [projResults, assignResults] = await Promise.all([
+    Promise.all(needProject.map(t  => getEdgesFrom(t.id, 'project').catch(() => []))),
+    Promise.all(needAssignee.map(t => getEdgesFrom(t.id, 'assignedTo').catch(() => []))),
+  ]);
+
+  needProject.forEach((t, i) => {
+    if (projResults[i].length > 0) _taskProjectMap.set(t.id, projResults[i][0].toId);
+  });
+  needAssignee.forEach((t, i) => {
+    if (assignResults[i].length > 0) _taskAssigneeMap.set(t.id, assignResults[i][0].toId);
+  });
 }
 
 async function _buildBlockerMap() {
   _blockMap.clear();
-  const doneSet = new Set(['Done', 'done']);
-  for (const task of _tasks) {
-    const edges = await getEdgesFrom(task.id, 'blockedBy');
-    if (edges.length === 0) continue;
+  const doneSet   = new Set(['Done', 'done']);
+  const taskIndex = new Map(_tasks.map(t => [t.id, t]));
+
+  // Parallel IDB reads — all blocker edge lookups fire concurrently
+  const edgeResults = await Promise.all(
+    _tasks.map(t => getEdgesFrom(t.id, 'blockedBy').catch(() => []))
+  );
+
+  _tasks.forEach((task, i) => {
+    const edges = edgeResults[i];
+    if (edges.length === 0) return;
     const isBlocked = edges.some(edge => {
-      const blocker = _tasks.find(t => t.id === edge.toId);
+      const blocker = taskIndex.get(edge.toId);
       return blocker && !doneSet.has(blocker.status);
     });
     if (isBlocked) _blockMap.set(task.id, true);
-  }
+  });
 }
 
 // ── Filter / sort helpers ─────────────────────────────────── //
@@ -557,9 +560,15 @@ function _buildCard(task) {
     titleSpan.style.cssText += 'text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 2px; transition: text-decoration-color 0.15s;';
     titleSpan.addEventListener('mouseenter', () => { titleSpan.style.textDecorationColor = 'var(--color-text-muted)'; });
     titleSpan.addEventListener('mouseleave', () => { titleSpan.style.textDecorationColor = 'transparent'; });
-    titleSpan.addEventListener('click', (e) => {
+    titleSpan.addEventListener('click', async (e) => {
       e.stopPropagation(); // prevent card click from also firing
-      openEditForm(task);
+      // Re-fetch fresh entity from IDB so edits aren't based on stale render-time snapshot
+      try {
+        const fresh = await getEntity(task.id);
+        openEditForm(fresh || task);
+      } catch {
+        openEditForm(task);
+      }
     });
   }
   card.addEventListener('click', (e) => {
@@ -573,16 +582,30 @@ function _buildCard(task) {
   cb.addEventListener('change', async (e) => {
     e.stopPropagation();
     const account = getAccount();
-    const newStatus = cb.checked ? 'Done' : 'Inbox';
+    // Revert to last non-Done status, not always 'Inbox'
+    const revertStatus = (task.previousStatus && task.previousStatus !== 'Done')
+      ? task.previousStatus
+      : 'In Progress';
+    const newStatus = cb.checked ? 'Done' : revertStatus;
     if (newStatus === 'Done') window._fhEnv?.services?.effects?.play('confetti');
+    // Optimistic fade for Done tasks
+    if (newStatus === 'Done') {
+      card.style.transition = 'opacity 0.25s';
+      card.style.opacity = '0.35';
+    }
     try {
-      await saveEntity({ ...task, status: newStatus }, account?.id);
-      // Reload data and re-render
-      await _loadData();
-      _rerenderColumns();
+      const entityToSave = {
+        ...task,
+        status: newStatus,
+        previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
+      };
+      await saveEntity(entityToSave, account?.id);
+      // ENTITY_SAVED listener handles _loadData + _rerenderColumns — no manual call needed
+      // (avoids the double-render flash caused by calling it here too)
     } catch (err) {
       console.error('[kanban] Complete failed:', err);
       cb.checked = !cb.checked;
+      card.style.opacity = '1';
     }
   });
 
@@ -883,12 +906,7 @@ function _wireTouchDrag(card, task) {
     }
   }, { passive: false });
 
-  card.addEventListener('touchend', async () => {
-    if (isDragging && _dragTaskId && _dropTarget) {
-      await _moveTask(_dragTaskId, _dropTarget);
-    }
-
-    // Cleanup
+  const _touchCleanup = () => {
     card.classList.remove('kanban-card-dragging');
     _dragGhost?.remove();
     _dragGhost  = null;
@@ -896,18 +914,39 @@ function _wireTouchDrag(card, task) {
     _dragTaskId = null;
     isDragging  = false;
     _clearDropIndicators();
+  };
+
+  card.addEventListener('touchend', async () => {
+    if (isDragging && _dragTaskId && _dropTarget) {
+      await _moveTask(_dragTaskId, _dropTarget);
+    }
+    _touchCleanup();
   });
+
+  // touchcancel fires when the OS interrupts (e.g. incoming call, notification)
+  // Without this, the ghost element leaks and _dragTaskId stays set
+  card.addEventListener('touchcancel', _touchCleanup);
 }
 
 // ── Move task to new status ───────────────────────────────── //
 
 async function _moveTask(taskId, newStatus) {
-  const task = _tasks.find(t => t.id === taskId);
+  // Fetch fresh entity from IDB — avoids saving stale render-time snapshot
+  let task;
+  try {
+    task = await getEntity(taskId);
+  } catch {
+    task = _tasks.find(t => t.id === taskId);
+  }
   if (!task || task.status === newStatus) return;
 
   const account = getAccount();
   try {
-    await saveEntity({ ...task, status: newStatus }, account?.id);
+    await saveEntity({
+    ...task,
+    status: newStatus,
+    previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
+  }, account?.id);
     await _loadData();
     _rerenderColumns();
 

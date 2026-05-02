@@ -225,6 +225,17 @@ export async function seedActivityFeed() {
       'recipe', 'document', 'contact', 'idea', 'goal', 'habit',
     ];
 
+    // Load existing activities from IDB to build dedup set — prevents re-seeding on reload
+    let existingActivityIds = new Set();
+    try {
+      const existing = await getEntitiesByType('activity');
+      for (const a of existing) {
+        if (a.entityId && a.activityType) {
+          existingActivityIds.add(a.entityId + ':' + a.activityType);
+        }
+      }
+    } catch { /* if load fails, dedup falls back to in-memory only */ }
+
     for (const type of SEED_TYPES) {
       const entities = await getEntitiesByType(type);
       // Seed only the 20 most recent per type to avoid flooding
@@ -232,7 +243,10 @@ export async function seedActivityFeed() {
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
         .slice(0, 20);
       for (const entity of recent) {
-        const dedupKey = (entity.id || '') + ':' + type + ':created';
+        const actKey  = (entity.id || '') + ':' + type + ':created';
+        const dedupKey = actKey;
+        // Skip if already in IDB or in-memory map
+        if (existingActivityIds.has(actKey)) continue;
         if (_lastWritten.get(dedupKey)) continue;
         await _writeActivity(`${type}:created`, entity);
       }

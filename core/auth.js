@@ -665,10 +665,12 @@ export async function updateAccount(changes) {
     account.email = changes.email || null;
   }
 
-  // Update person entity display name
+  // Update person entity display name — fetch first to preserve all other fields
   if (changes.displayName?.trim()) {
-    const { saveEntity } = await import('./db.js');
+    const { saveEntity, getEntity } = await import('./db.js');
+    const existing = account.memberId ? await getEntity(account.memberId).catch(() => null) : null;
     await saveEntity({
+      ...(existing || {}),
       id:    account.memberId,
       type:  'person',
       title: changes.displayName.trim(),

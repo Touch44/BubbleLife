@@ -701,7 +701,12 @@ async function renderDashboard() {
       btnL.addEventListener('click', () => { scroll.scrollBy({ left: -STEP, behavior: 'smooth' }); setTimeout(_updateBtns, 350); });
       btnR.addEventListener('click', () => { scroll.scrollBy({ left:  STEP, behavior: 'smooth' }); setTimeout(_updateBtns, 350); });
       scroll.addEventListener('scroll', _updateBtns, { passive: true });
-      _updateBtns();
+      // Defer initial check — card content loads async so scrollWidth isn't final yet
+      requestAnimationFrame(() => requestAnimationFrame(_updateBtns));
+
+      // Clean up scroll listener when navigating away — prevents listener accumulation
+      const _cleanupScroll = () => scroll.removeEventListener('scroll', _updateBtns);
+      on(EVENTS.VIEW_CHANGED, _cleanupScroll, { once: true });
     }
   }
 
@@ -1063,7 +1068,7 @@ function _populateShoppingWidget(el, items) {
       try {
         lbl.classList.add('checked');
         row.style.opacity = '0.5';
-        await saveEntity({ ...item, checked: true, updatedAt: new Date().toISOString() });
+        await saveEntity({ ...item, checked: true, updatedAt: new Date().toISOString() }, getAccount()?.id);
         // Re-populate this widget only
         _populateShoppingWidget(el, items.map(i => i.id === id ? { ...i, checked: true } : i));
       } catch (err) {

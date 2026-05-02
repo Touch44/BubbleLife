@@ -334,21 +334,23 @@ async function renderProjects(params = {}) {
 }
 
 // ── Module-level listeners ─────────────────────────────────────
+let _projRefreshTimer = null;
+function _debouncedProjectRefresh() {
+  if (!document.getElementById('view-projects')?.classList.contains('active')) return;
+  clearTimeout(_projRefreshTimer);
+  _projRefreshTimer = setTimeout(() => renderProjects(), 400);
+}
+
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   // Refresh on project/task saves, and person saves (member avatars use _personMap)
   const PROJ_REFRESH_TYPES = new Set(['project', 'task', 'person']);
   if (entity && !PROJ_REFRESH_TYPES.has(entity.type)) return;
-  if (!document.getElementById('view-projects')?.classList.contains('active')) return;
-  renderProjects();
+  _debouncedProjectRefresh();
 });
 
 on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
-  // Only re-render if a project or task was deleted (tasks affect project progress)
   const t = entity?.type;
-  if ((t === 'project' || t === 'task' || !t) &&
-      document.getElementById('view-projects')?.classList.contains('active')) {
-    renderProjects();
-  }
+  if (t === 'project' || t === 'task' || !t) _debouncedProjectRefresh();
 });
 
 on('context:changed', () => {

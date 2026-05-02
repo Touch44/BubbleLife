@@ -200,7 +200,16 @@ function _renderDetail() {
     outline:none;padding:var(--space-2) var(--space-6);
     white-space:pre-wrap;word-break:break-word;box-sizing:border-box;
   `;
-  bodyEditor.innerHTML = note.body || note.description || '';
+  // Set body content — sanitize to prevent <script> execution from sync'd content
+  const _rawBody = note.body || note.description || '';
+  if (_rawBody) {
+    const _dp = new DOMParser();
+    const _doc = _dp.parseFromString(_rawBody, 'text/html');
+    _doc.querySelectorAll('script,iframe,object,embed').forEach(el => el.remove());
+    bodyEditor.innerHTML = _doc.body.innerHTML;
+  } else {
+    bodyEditor.innerHTML = '';
+  }
 
   // Footer
   const footer = document.createElement('div');
@@ -219,6 +228,8 @@ function _renderDetail() {
   titleInput.addEventListener('blur', async () => {
     titleInput.style.borderBottomColor = 'transparent';
     const newTitle = titleInput.value.trim();
+    // Guard: validate this note is still selected before saving (rapid switch protection)
+    if (note.id !== _selectedId) return;
     if (newTitle !== (note.title || '')) {
       const account = getAccount();
       _isSaving = true;
@@ -233,6 +244,8 @@ function _renderDetail() {
   });
 
   bodyEditor.addEventListener('blur', async () => {
+    // Guard: validate this note is still selected before saving (rapid switch protection)
+    if (note.id !== _selectedId) return;
     // Normalize empty editor states (<br>, empty div) to null
     const rawBody = bodyEditor.innerHTML;
     const newBody = (rawBody === '' || rawBody === '<br>' || rawBody === '<div><br></div>') ? null : rawBody;
@@ -341,7 +354,15 @@ async function renderNotes(params = {}) {
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   if (_isSaving) return;
   if (entity?.type === 'note' && document.getElementById('view-notes')?.classList.contains('active')) {
-    _loadNotes().then(() => { _renderList(); _renderDetail(); });
+    const prevSelected = _selectedId;  // preserve selection across reload
+    _loadNotes().then(() => {
+      // Restore selection if the note still exists
+      if (prevSelected && _notes.find(n => n.id === prevSelected)) {
+        _selectedId = prevSelected;
+      }
+      _renderList();
+      _renderDetail();
+    });
   }
 });
 

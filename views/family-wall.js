@@ -121,9 +121,10 @@ async function _loadPostEdges(pid) {
 }
 
 async function _loadComments(ids) {
-  const arr = [];
-  for (const id of ids) { const e = await getEntity(id); if (e && !e.deleted) arr.push(e); }
-  return arr.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  const results = await Promise.all(ids.map(id => getEntity(id).catch(() => null)));
+  return results
+    .filter(e => e && !e.deleted)
+    .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
 }
 
 // ── Filter & sort ────────────────────────────────────────────
@@ -832,7 +833,21 @@ async function _buildCard(post, pm, apm) {
   if (isAdmin||author?.role==='Parent') {
     const pb=document.createElement('button'); pb.className='btn-icon fw-act-btn';
     pb.title=post.pinned?'Unpin':'Pin'; pb.textContent=post.pinned?'📌':'📍';
-    pb.addEventListener('click',async e=>{ e.stopPropagation(); post.pinned=!post.pinned; await saveEntity(post,acct?.id); renderWall({_internal:true}); });
+    pb.addEventListener('click',async e=>{
+      e.stopPropagation();
+      // Re-fetch post before mutating to avoid stale closure overwrite
+      try {
+        const { getEntity: _ge } = await import('../core/db.js');
+        const fresh = await _ge(post.id);
+        const toSave = fresh || post;
+        toSave.pinned = !toSave.pinned;
+        await saveEntity(toSave, acct?.id);
+      } catch {
+        post.pinned = !post.pinned;
+        await saveEntity(post, acct?.id);
+      }
+      renderWall({_internal:true});
+    });
     acts.appendChild(pb);
   }
   if (isOwn||isAdmin) {
@@ -952,7 +967,10 @@ async function _buildCard(post, pm, apm) {
     b.innerHTML=`${emoji}${ms.length?` <span class="fw-rxn-c">${ms.length}</span>`:''}`;
     b.addEventListener('click',async e=>{
       e.stopPropagation();
-      if (!myPid) { toast.error('You need a member profile to react.'); return; }
+      if (!myPid || !acct?.id) { toast.error('You need a member profile to react.'); return; }
+      // Debounce rapid clicks on same reaction button
+      if (b.dataset.saving) return;
+      b.dataset.saving = '1';
       try {
         if(my) await deleteEdge(my.edgeId,acct?.id);
         else await saveEdge({fromId:myPid,toId:post.id,relation:'reacts-to',metadata:{emoji}},acct?.id);
@@ -960,6 +978,8 @@ async function _buildCard(post, pm, apm) {
       } catch(err) {
         console.error('[fw] reaction failed:', err);
         toast.error('Could not save reaction — please try again.');
+      } finally {
+        delete b.dataset.saving;
       }
     });
     rb.appendChild(b);
@@ -996,7 +1016,7 @@ async function _buildCard(post, pm, apm) {
       },a?.id);
       await saveEdge({fromId:saved.id,fromType:'comment',toId:post.id,toType:'post',relation:'comments-on'},a?.id);
       cf.value=''; renderWall({_internal:true}); toast.success('Comment added');
-    } catch(e){ console.error(e); toast.error('Could not add comment'); } finally{ cr.disabled=false; }
+    } catch(e){ console.error('[fw] comment failed:', e); toast.error('Could not add comment'); } finally{ cr.disabled=false; }
   });
   cf.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();cr.click();} });
   ci.append(cf,cr); thread.appendChild(ci); card.appendChild(thread);

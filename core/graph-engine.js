@@ -1081,12 +1081,14 @@ export async function convertEntity(entityId, newType) {
   const srcTitleField = sourceConfig?.fields.find(f => f.isTitle);
   const tgtTitleField = targetConfig.fields.find(f => f.isTitle);
 
-  // Build the converted entity
+  // Build the converted entity — preserve structural metadata including context
   const converted = {
     id:        entity.id,
     type:      newType,
     createdAt: entity.createdAt,
     createdBy: entity.createdBy,
+    context:   entity.context || null,   // preserve family/personal/business context
+    _subtype:  null,                     // clear subtype — new type is now canonical
   };
 
   // Copy matching fields
@@ -1103,7 +1105,8 @@ export async function convertEntity(entityId, newType) {
     }
   }
 
-  const saved = await saveEntity(converted);
+  const { getAccount } = await import('./auth.js');
+  const saved = await saveEntity(converted, getAccount()?.id);
   console.log(`[graph-engine] [minor] convertEntity: "${entityId}" ${entity.type} → ${newType}`);
 
   return saved;
