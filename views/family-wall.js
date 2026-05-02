@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — views/family-wall.js
+ * FamilyHub v4.2 — views/family-wall.js
  * Family Wall — Feed + Timeline, photos, files, lightbox, links
  *
  * Features:

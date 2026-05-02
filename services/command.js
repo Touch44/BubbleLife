@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/command.js
+ * FamilyHub v4.2 — services/command.js
  * Command service — registers, removes, and executes named commands.
  * Used by the command palette (⌘K) and keyboard shortcuts.
  *
@@ -156,16 +156,16 @@ export function createCommandService(env) {
  */
 function _seedBuiltins(env, add) {
   const NAV_COMMANDS = [
-    { id: 'nav.dashboard', label: 'Go to Dashboard',        shortcut: 'H', icon: '⊹', category: 'Navigate', view: 'dashboard' },
-    { id: 'nav.daily',    label: 'Go to Daily Review',    shortcut: 'D', icon: '◈', category: 'Navigate', view: 'daily'    },
-    { id: 'nav.kanban',   label: 'Go to Tasks / Kanban',  shortcut: 'K', icon: '⊡', category: 'Navigate', view: 'kanban'   },
-    { id: 'nav.calendar', label: 'Go to Calendar',        shortcut: 'C', icon: '▦', category: 'Navigate', view: 'calendar' },
+    { id: 'nav.dashboard', label: 'Go to Dashboard',        shortcut: 'H', icon: '🏠', category: 'Navigate', view: 'dashboard' },
+    { id: 'nav.daily',    label: 'Go to Daily Review',    shortcut: 'D', icon: '☀️', category: 'Navigate', view: 'daily'    },
+    { id: 'nav.kanban',   label: 'Go to Tasks / Kanban',  shortcut: 'K', icon: '✅', category: 'Navigate', view: 'kanban'   },
+    { id: 'nav.calendar', label: 'Go to Calendar',        shortcut: 'C', icon: '📅', category: 'Navigate', view: 'calendar' },
     { id: 'nav.wall',     label: 'Go to Activity Center',           icon: '⬡', category: 'Navigate', view: 'activity-center' },
-    { id: 'nav.graph',    label: 'Go to Knowledge Graph', shortcut: 'G', icon: '◎', category: 'Navigate', view: 'graph'    },
+    { id: 'nav.graph',    label: 'Go to Knowledge Graph', shortcut: 'G', icon: '🔮', category: 'Navigate', view: 'graph'    },
     { id: 'nav.notes',    label: 'Go to Notes',                     icon: '≡', category: 'Navigate', view: 'notes'    },
-    { id: 'nav.budget',   label: 'Go to Budget',                    icon: '◷', category: 'Navigate', view: 'budget'   },
-    { id: 'nav.recipes',  label: 'Go to Recipes',                   icon: '⊛', category: 'Navigate', view: 'recipes'  },
-    { id: 'nav.settings', label: 'Go to Settings',                  icon: '⊙', category: 'Navigate', view: 'settings' },
+    { id: 'nav.budget',   label: 'Go to Budget',                    icon: '💰', category: 'Navigate', view: 'budget'   },
+    { id: 'nav.recipes',  label: 'Go to Recipes',                   icon: '🍽️', category: 'Navigate', view: 'recipes'  },
+    { id: 'nav.settings', label: 'Go to Settings',                  icon: '⚙️', category: 'Navigate', view: 'settings' },
   ];
 
   for (const { id, label, shortcut, icon, category, view } of NAV_COMMANDS) {
@@ -221,7 +221,7 @@ function _seedBuiltins(env, add) {
       } else {
         // Fallback: direct DOM update + localStorage
         document.documentElement.setAttribute('data-theme', next);
-        localStorage.setItem('fh_theme', next);
+        try { localStorage.setItem('fh_theme', next); } catch {}
         const { emit, EVENTS } = await import('../core/events.js');
         emit(EVENTS.THEME_CHANGED, { theme: next });
       }

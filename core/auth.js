@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — core/auth.js
+ * FamilyHub v4.2 — core/auth.js
  * PBKDF2 authentication, sessions, permissions, invite codes, audit log
  * Blueprint §3.1 – §3.5
  *

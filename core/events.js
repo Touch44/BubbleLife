@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — core/events.js
+ * FamilyHub v4.2 — core/events.js
  * App-wide pub/sub event bus (Blueprint §10.3)
  *
  * Usage:

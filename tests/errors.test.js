@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — tests/errors.test.js
+ * FamilyHub v4.2 — tests/errors.test.js
  * Tests for error classes and result tuple helpers.
  */
 

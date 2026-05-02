@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — components/entity-form.js
+ * FamilyHub v4.2 — components/entity-form.js
  * Universal create/edit form — modal on desktop, full-screen on mobile.
  * Blueprint §5.2 (entity form), Phase 1-C
  *
@@ -13,7 +13,7 @@
 import { saveEntity, saveEdge, deleteEdge, deleteEntity, getEdgesFrom, getEdgesTo,
          getEntitiesByType, getEntity, getSetting }            from '../core/db.js';
 import { getEntityTypeConfig, getAllEntityTypes,
-         convertEntity }                                       from '../core/graph-engine.js';
+         convertEntity }                     from '../core/graph-engine.js';
 import { emit, EVENTS }                                        from '../core/events.js';
 import { toast }                                               from '../core/toast.js';
 import { getAccount }                                          from '../core/auth.js';
@@ -44,6 +44,10 @@ const _tagValues = new Map();
 
 /** Active tab key in edit-mode form: 'fields' | 'details' | 'relations' */
 let _activeFormTab = 'fields';
+
+/** Stack of saved parent form states for stacked (child) forms.
+ *  When closeForm runs, if a parent state exists, it is restored. */
+const _parentFormStack = [];
 
 // ════════════════════════════════════════════════════════════
 // INIT
@@ -232,6 +236,29 @@ export function closeForm() {
     _onSave     = null;
     _relationValues.clear();
     _tagValues.clear();
+
+    // If a parent form was stacked, restore it
+    if (_parentFormStack.length > 0) {
+      const ps = _parentFormStack.pop();
+      setTimeout(() => {
+        _overlay       = ps.overlay;
+        _typeKey       = ps.typeKey;
+        _editEntity    = ps.editEntity;
+        _draft         = ps.draft;
+        _onSave        = ps.onSave;
+        _activeFormTab = ps.activeTab;
+        _relationValues.clear();
+        for (const [k, v] of ps.relVals) _relationValues.set(k, v);
+        _tagValues.clear();
+        for (const [k, v] of ps.tagVals) _tagValues.set(k, v);
+        if (_overlay) {
+          _overlay.style.display = '';
+          document.body.appendChild(_overlay);
+        }
+        // Run the onCreated/onCancel callback if present
+        if (ps.onCancel) ps.onCancel();
+      }, 50);
+    }
   }, 200);
 }
 
@@ -330,7 +357,7 @@ function _buildAndMount(config) {
 
   const title = document.createElement('h2');
   title.className = 'ef-modal-title';
-  title.style.cssText = 'font-family:var(--font-heading,Georgia,serif);font-size:1.3125rem;font-weight:700;color:var(--color-text);margin:0;line-height:1.3;';
+  title.style.cssText = 'font-family:var(--font-heading,system-ui,sans-serif);font-size:var(--text-xl,1.25rem);font-weight:700;color:var(--color-text);margin:0;line-height:1.3;';
   title.textContent = _editEntity ? `Edit ${config.label}` : `New ${config.label}`;
   titleRow.appendChild(title);
   header.appendChild(titleRow);
@@ -363,9 +390,9 @@ function _buildAndMount(config) {
       return btn;
     };
 
-    const tab1Btn = _mkTab('fields',    'Fields',           '⊞');
-    const tab2Btn = _mkTab('details',   'Details',          '◷');
-    const tab3Btn = _mkTab('relations', 'Relations',        '⌥');
+    const tab1Btn = _mkTab('fields',    'Fields',           '📝');
+    const tab2Btn = _mkTab('details',   'Details',          '📋');
+    const tab3Btn = _mkTab('relations', 'Relations',        '🔗');
 
     const _applyTabStyles = () => {
       [tab1Btn, tab2Btn, tab3Btn].forEach(b => {
@@ -488,7 +515,7 @@ function _buildAndMount(config) {
           'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
           'background: none; color: var(--color-accent); border: 1px solid var(--color-accent);',
         ].join(' ');
-        graphBtn.innerHTML = '<span>◎</span><span>Graph</span>';
+        graphBtn.innerHTML = '<span>🔮</span><span>Graph</span>';
         graphBtn.title = 'Open in Knowledge Graph';
         graphBtn.addEventListener('click', async () => {
           const eid = _editEntity?.id;
@@ -599,27 +626,6 @@ function _buildAndMount(config) {
         background:var(--color-accent-muted);color:var(--color-accent);
         font-size:var(--text-xs);cursor:pointer;text-align:left;}
       .ef-relation-create-btn:hover{background:var(--color-accent);color:#fff;}
-      .qcm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.38);z-index:500;
-        display:flex;align-items:center;justify-content:center;}
-      .qcm-modal{background:var(--color-bg);border:1px solid var(--color-border);
-        border-radius:var(--radius-xl);width:min(400px,95vw);padding:var(--space-5);
-        box-shadow:0 24px 64px rgba(0,0,0,.2);}
-      .qcm-header{display:flex;align-items:center;gap:var(--space-2);
-        margin-bottom:var(--space-4);font-size:var(--text-lg);font-weight:var(--weight-bold);}
-      .qcm-field{margin-bottom:var(--space-3);}
-      .qcm-label{display:block;font-size:var(--text-sm);font-weight:var(--weight-semibold);
-        margin-bottom:4px;color:var(--color-text);}
-      .qcm-input{width:100%;padding:8px 10px;border:1.5px solid var(--color-border);
-        border-radius:var(--radius-md);background:var(--color-surface);
-        color:var(--color-text);font-size:var(--text-sm);font-family:inherit;box-sizing:border-box;}
-      .qcm-input:focus{outline:none;border-color:var(--color-accent);}
-      .qcm-footer{display:flex;justify-content:flex-end;gap:var(--space-2);
-        padding-top:var(--space-4);border-top:1px solid var(--color-border);margin-top:var(--space-4);}
-      .qcm-cancel{padding:6px 14px;border:1px solid var(--color-border);
-        border-radius:var(--radius-md);background:none;cursor:pointer;color:var(--color-text-muted);}
-      .qcm-save{padding:6px 18px;background:var(--color-accent);color:#fff;border:none;
-        border-radius:var(--radius-md);font-weight:var(--weight-semibold);cursor:pointer;}
-      .qcm-save:disabled{opacity:.5;cursor:default;}
     `;
     document.head.appendChild(s);
   }
@@ -1407,77 +1413,38 @@ export function openQuickCreateModal(typeKey, prefill = {}, onCreated) {
   }
   const config = getEntityTypeConfig(typeKey);
   if (!config) { console.warn('[qcm] Unknown type:', typeKey); return; }
-  // Collect required/title fields for QCM form inputs.
-  // If none are marked required, fall back to the first field so the form isn't empty.
-  const required = (() => {
-    const r = (config.fields||[]).filter(f => f.isTitle || f.required);
-    return r.length ? r : (config.fields||[]).slice(0, 1);
-  })();
 
-  const overlay = document.createElement('div');
-  overlay.className = 'qcm-overlay';
-  overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-modal', 'true');
-  overlay.innerHTML = `
-    <div class="qcm-modal">
-      <div class="qcm-header">
-        <span class="qcm-icon">${_esc(config.icon||'\u25C7')}</span>
-        <span class="qcm-title">New ${_esc(config.label)}</span>
-      </div>
-      <div class="qcm-body" id="qcm-body-inner"></div>
-      <div class="qcm-footer">
-        <button class="qcm-cancel" id="qcm-cancel">Cancel</button>
-        <button class="qcm-save" id="qcm-save">Create →</button>
-      </div>
-    </div>
-  `;
+  // ── Stacking: push parent form state onto stack ── //
+  const parentState = {
+    overlay:     _overlay,
+    typeKey:     _typeKey,
+    editEntity:  _editEntity,
+    draft:       _draft ? { ..._draft } : null,
+    onSave:      _onSave,
+    relVals:     new Map(_relationValues),
+    tagVals:     new Map(_tagValues),
+    activeTab:   _activeFormTab,
+    onCancel:    null, // set below on save
+  };
 
-  const body = overlay.querySelector('#qcm-body-inner');
-  const fieldEls = {};
-  for (const f of required) {
-    const wrap  = document.createElement('div'); wrap.className = 'qcm-field';
-    const lbl   = document.createElement('label'); lbl.className = 'qcm-label';
-    lbl.textContent = f.label || f.key;
-    const input = document.createElement('input');
-    input.type = 'text'; input.className = 'qcm-input';
-    input.value = prefill[f.key] || '';
-    fieldEls[f.key] = input;
-    wrap.appendChild(lbl); wrap.appendChild(input); body.appendChild(wrap);
+  // Detach parent overlay so _buildAndMount won't remove it
+  if (parentState.overlay) {
+    parentState.overlay.style.display = 'none';
+    parentState.overlay.remove();
   }
 
-  const _closeQCM = () => {
-    document.removeEventListener('keydown', _kd);
-    overlay.remove();
-  };
-  const _kd = e => { if (e.key === 'Escape') _closeQCM(); };
-  document.addEventListener('keydown', _kd);
-  overlay.querySelector('#qcm-cancel').addEventListener('click', _closeQCM);
-  overlay.addEventListener('click', e => { if (e.target === overlay) _closeQCM(); });
+  // Push onto stack — closeForm will auto-restore parent on Escape or Save
+  _parentFormStack.push(parentState);
 
-  overlay.querySelector('#qcm-save').addEventListener('click', async () => {
-    const sb = overlay.querySelector('#qcm-save');
-    sb.disabled = true; sb.textContent = 'Creating…';
-    try {
-      const data = { type: typeKey };
-      for (const [key, el] of Object.entries(fieldEls)) data[key] = el.value.trim();
-      const titleField = required.find(f => f.isTitle);
-      if (titleField && !data[titleField.key]) {
-        toast.error(`${config.label} name is required`);
-        sb.disabled = false; sb.textContent = 'Create →'; return;
-      }
-      const acct = getAccount();
-      const saved = await saveEntity(data, acct?.id);
-      _closeQCM();
-      if (onCreated) onCreated(saved);
-    } catch (err) {
-      console.error('[qcm] save failed:', err);
-      toast.error('Create failed — see console');
-      sb.disabled = false; sb.textContent = 'Create →';
+  // Open full form for the child entity type
+  openForm(typeKey, prefill, (savedEntity) => {
+    // On save: inject onCreated into the stack entry so it fires
+    // when closeForm restores the parent
+    const entry = _parentFormStack[_parentFormStack.length - 1];
+    if (entry === parentState) {
+      entry.onCancel = () => { if (onCreated) onCreated(savedEntity); };
     }
   });
-
-  document.body.appendChild(overlay);
-  setTimeout(() => overlay.querySelector('.qcm-input')?.focus(), 30);
 }
 
 
@@ -1527,10 +1494,20 @@ function _refreshRelationChipsDom(chipRow, fieldKey) {
     const entity = vals[i];
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;cursor:default;';
     chip.dataset.id = entity.id;
+    chip.title = 'Double-click to open · × to remove';
     const label = document.createElement('span');
     label.textContent = entity.label || entity.id;
+    label.style.cssText = 'cursor:pointer;border-bottom:1px dashed transparent;transition:border-color 0.15s;';
+    label.addEventListener('mouseenter', () => { label.style.borderBottomColor = 'var(--color-accent)'; });
+    label.addEventListener('mouseleave', () => { label.style.borderBottomColor = 'transparent'; });
+    // Double-click → open that entity's edit form (stacked above parent)
+    label.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _openStackedEditForm(entity.id);
+    });
     chip.appendChild(label);
     const rm = document.createElement('span');
     rm.textContent = '×';
@@ -1544,6 +1521,42 @@ function _refreshRelationChipsDom(chipRow, fieldKey) {
     })(i));
     chip.appendChild(rm);
     chipRow.appendChild(chip);
+  }
+}
+
+/**
+ * Open an entity's edit form stacked above the current parent form.
+ * On save/close the parent form is restored.
+ */
+async function _openStackedEditForm(entityId) {
+  try {
+    const entity = await getEntity(entityId);
+    if (!entity) return;
+
+    // Push parent state onto stack
+    const parentState = {
+      overlay:    _overlay,
+      typeKey:    _typeKey,
+      editEntity: _editEntity,
+      draft:      _draft ? { ..._draft } : null,
+      onSave:     _onSave,
+      relVals:    new Map(_relationValues),
+      tagVals:    new Map(_tagValues),
+      activeTab:  _activeFormTab,
+      onCancel:   null,
+    };
+
+    if (parentState.overlay) {
+      parentState.overlay.style.display = 'none';
+      parentState.overlay.remove();
+    }
+
+    _parentFormStack.push(parentState);
+
+    // Open edit form — closeForm will auto-restore parent from stack
+    openEditForm(entity);
+  } catch (err) {
+    console.warn('[entity-form] stacked edit failed:', err);
   }
 }
 
@@ -1676,6 +1689,43 @@ function _buildRelationControl(field, config) {
 
   _renderChips();
   return wrap;
+}
+
+// ════════════════════════════════════════════════════════════
+// RELATION TYPE INFERENCE
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Infer the best relation type label based on from and to entity types.
+ * Used by the Relations tab to auto-select relation type when an entity is picked.
+ * @param {string} fromType - the entity being edited
+ * @param {string} toType   - the entity being connected
+ * @returns {string|null} inferred relation label, or null if no good guess
+ */
+function _inferRelationType(fromType, toType) {
+  // Direct type-pair map — must match preset chip labels exactly (lowercase)
+  const pairMap = {
+    'task:person':       'assigned to',
+    'task:project':      'part of',
+    'task:task':         'blocked by',
+    'event:person':      'assigned to',
+    'note:project':      'part of',
+    'document:person':   'belongs to',
+    'goal:project':      'part of',
+    'goal:person':       'assigned to',
+  };
+  const key = fromType + ':' + toType;
+  if (pairMap[key]) return pairMap[key];
+
+  // Generic toType fallback
+  const genericMap = {
+    'person':       'assigned to',
+    'project':      'part of',
+    'dailyReview':  'daily review',
+    'task':         'blocked by',
+    'tag':          'related to',
+  };
+  return genericMap[toType] || null;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1878,6 +1928,18 @@ async function _buildRelationsTab(container) {
       item.addEventListener('mouseleave', () => { item.style.background = ''; });
       item.addEventListener('click', async () => {
         if (isLinked) return;
+        // [MAJOR] Auto-detect relation type based on entity types
+        const autoRel = _inferRelationType(entity.type, ent.type);
+        if (autoRel && relationInput.value === 'related to') {
+          relationInput.value = autoRel;
+          // Highlight the matching preset chip
+          presetRow.querySelectorAll('button').forEach(b => {
+            const match = b.textContent === autoRel;
+            b.style.background   = match ? 'var(--color-accent)' : '';
+            b.style.color        = match ? '#fff' : '';
+            b.style.borderColor  = match ? 'var(--color-accent)' : '';
+          });
+        }
         const rel = relationInput.value.trim() || 'related to';
         try {
           await saveEdge({ fromId: entity.id, fromType: entity.type, toId: ent.id, toType: ent.type, relation: rel }, getAccount()?.id);
@@ -2157,7 +2219,7 @@ function _buildDetailsTab(container, config) {
   // ── Archive / Unarchive ──────────────────────────────────
   if (actions.includes('archive') || actions.includes('edit')) {
     const isArchived = entity.status === 'Archived' || entity.archived;
-    const btn = _mkBtn(isArchived ? '↑' : '⊟', isArchived ? 'Unarchive' : 'Archive');
+    const btn = _mkBtn(isArchived ? '↑' : '📦', isArchived ? 'Unarchive' : 'Archive');
     btn.addEventListener('click', () => _guardedAction(async () => {
       let updated;
       if (_editEntity.status !== undefined) {
@@ -2339,7 +2401,7 @@ function _buildDetailsTab(container, config) {
 
   // ── Delete ───────────────────────────────────────────────
   if (actions.includes('delete')) {
-    const btn = _mkBtn('⊗', 'Delete', true);
+    const btn = _mkBtn('🗑️', 'Delete', true);
     btn.addEventListener('click', () => _guardedAction(async () => {
       const entityTitle = _editEntity.title || _editEntity.name || config.label;
       const snapshot = { ..._editEntity };
@@ -2409,7 +2471,7 @@ function _buildDetailsTab(container, config) {
     'font-size: var(--text-sm); font-weight: 600; color: var(--color-text);',
     'font-family: var(--font-body);',
   ].join(' ');
-  actHeader.innerHTML = '<span>◷ Activity Log</span><span class="ef-act-chevron" style="font-size:10px;color:var(--color-text-muted)">▼</span>';
+  actHeader.innerHTML = '<span>📋 Activity Log</span><span class="ef-act-chevron" style="font-size:10px;color:var(--color-text-muted)">▼</span>';
 
   let actOpen = true;
   const actBody = document.createElement('div');
@@ -2458,7 +2520,7 @@ async function _loadEntityActivityLog(container, entity, config) {
     if (entries.length === 0) {
       container.innerHTML = [
         '<div style="display:flex;flex-direction:column;align-items:center;padding:28px 16px;gap:6px;">',
-        '  <div style="font-size:1.5rem;opacity:0.4">◷</div>',
+        '  <div style="font-size:1.5rem;opacity:0.4">📋</div>',
         '  <div style="font-size:var(--text-sm);color:var(--color-text-muted);">No activity recorded yet</div>',
         '  <div style="font-size:var(--text-xs);color:var(--color-text-muted);">Changes will appear here automatically</div>',
         '</div>',
@@ -2719,6 +2781,17 @@ async function _submitForm() {
               toType:   target.type || field.relatesTo || '',
               relation: field.key,
             });
+            // [minor] BIDIR: create reverse edge in create mode too
+            const biRev = { blockedBy: 'blocking', blocking: 'blockedBy' }[field.key];
+            if (biRev) {
+              const revExists = await getEdgesFrom(target.id, biRev).catch(() => []);
+              if (!revExists.some(e => e.toId === saved.id)) {
+                await saveEdge({
+                  fromId: target.id, fromType: target.type || 'task',
+                  toId: saved.id, toType: saved.type, relation: biRev,
+                }, getAccount()?.id).catch(() => {});
+              }
+            }
           } catch (edgeErr) {
             console.warn('[entity-form] Edge save failed:', edgeErr);
           }
@@ -2727,6 +2800,77 @@ async function _submitForm() {
     }
 
     // ── Callback & close ──────────────────────────────────── //
+    // [MAJOR] Bidirectional sync: blockedBy ↔ blocking
+    // When blockedBy edges change, mirror them as blocking edges on the target task.
+    // When blocking edges change, mirror them as blockedBy edges on the target task.
+    const BIDIR_PAIRS = { blockedBy: 'blocking', blocking: 'blockedBy' };
+    for (const field of config.fields) {
+      if (field.type !== 'relation' || !BIDIR_PAIRS[field.key]) continue;
+      const reverseKey = BIDIR_PAIRS[field.key];
+      const targets = _relationValues.get(field.key) || [];
+      const targetIds = new Set(targets.map(t => t.id));
+
+      try {
+        // Get existing forward edges for this field
+        const existingForward = await getEdgesFrom(saved.id, field.key);
+        const existingForwardIds = new Set(existingForward.map(e => e.toId));
+
+        // Newly added targets → create reverse edge on target
+        for (const target of targets) {
+          if (!existingForwardIds.has(target.id)) continue; // just saved above, so should exist
+          // Check if reverse edge already exists
+          const reverseEdges = await getEdgesFrom(target.id, reverseKey).catch(() => []);
+          const alreadyLinked = reverseEdges.some(e => e.toId === saved.id);
+          if (!alreadyLinked) {
+            try {
+              await saveEdge({
+                fromId:   target.id,
+                fromType: target.type || 'task',
+                toId:     saved.id,
+                toType:   saved.type,
+                relation: reverseKey,
+              }, getAccount()?.id);
+            } catch (re) { console.warn('[entity-form] reverse edge save failed:', re); }
+          }
+        }
+
+        // Reverse cleanup handled in second pass below
+      } catch (bidirErr) {
+        console.warn('[entity-form] bidir sync failed:', bidirErr);
+      }
+    }
+    // Second pass: clean up reverse edges for removed blockedBy/blocking
+    for (const field of config.fields) {
+      if (field.type !== 'relation' || !BIDIR_PAIRS[field.key]) continue;
+      const reverseKey = BIDIR_PAIRS[field.key];
+      const targets = _relationValues.get(field.key) || [];
+      const targetIds = new Set(targets.map(t => t.id));
+
+      if (_editEntity) {
+        try {
+          // Re-fetch to see what forward edges survived (some may have been deleted above)
+          const currentForward = await getEdgesFrom(saved.id, field.key).catch(() => []);
+          const currentForwardIds = new Set(currentForward.map(e => e.toId));
+          // Find entities that WERE linked but are no longer
+          // They had their forward edge deleted in the main loop above
+          // We need to delete their reverse edges too
+          // Strategy: check all entities that have a reverse edge pointing to saved.id
+          // and remove ones whose forward edge no longer exists
+          const reverseToUs = await getEdgesTo(saved.id, reverseKey).catch(() => []);
+          for (const revEdge of reverseToUs) {
+            // revEdge.fromId → saved.id with relation reverseKey
+            // This means revEdge.fromId has us in their `reverseKey` field
+            // If we DON'T have revEdge.fromId in our `field.key` targets, remove the reverse
+            if (!targetIds.has(revEdge.fromId)) {
+              try { await deleteEdge(revEdge.id); } catch {}
+            }
+          }
+        } catch (cleanErr) {
+          console.warn('[entity-form] bidir cleanup failed:', cleanErr);
+        }
+      }
+    }
+
     // Emit ENTITY_SAVED before the callback so listeners (panel, kanban, daily)
     // update state first. The callback then has fresh data if it queries anything.
     const cb = _onSave;

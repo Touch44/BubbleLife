@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — views/daily.js [minor v16]
+ * FamilyHub v4.2 — views/daily.js [minor v16]
  * Daily Review view — renders into #view-daily when view="daily"
  *
  * Sections (all collapsible):
@@ -1260,7 +1260,7 @@ function _openNoteModal(entity) {
   const panelBtn = document.createElement('button');
   panelBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:var(--color-text-muted);font-size:0.9rem;padding:var(--space-1);border-radius:var(--radius-sm);flex-shrink:0;';
   panelBtn.title = 'Open in panel';
-  panelBtn.textContent = '⊞';
+  panelBtn.textContent = '📁';
   panelBtn.addEventListener('click', () => {
     closeModal();
     emit(EVENTS.PANEL_OPENED, { entityType: entity.type, entityId: entity.id });

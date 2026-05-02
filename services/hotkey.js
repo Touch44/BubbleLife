@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/hotkey.js
+ * FamilyHub v4.2 — services/hotkey.js
  * HotkeyService — scoped, normalized keyboard shortcut management.
  *
  * Shortcut format: 'ctrl+k', 'cmd+z', 'escape', 'n', 'alt+1'

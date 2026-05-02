@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — components/command-palette.js
+ * FamilyHub v4.2 — components/command-palette.js
  * Command Palette UI — floating overlay, ⌘K trigger, fuzzy search, category groups.
  * Implements Prompt 06 spec exactly.
  *
@@ -181,7 +181,7 @@ function _render(query) {
         : '';
 
       li.innerHTML = `
-        <span class="cp-item-icon" aria-hidden="true">${cmd.icon || '◈'}</span>
+        <span class="cp-item-icon" aria-hidden="true">${cmd.icon || '📎'}</span>
         <span class="cp-item-text">
           <span class="cp-item-label">${_esc(cmd.label)}</span>
           ${cmd.description ? `<span class="cp-item-desc">${_esc(cmd.description)}</span>` : ''}

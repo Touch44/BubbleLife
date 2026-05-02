@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/theme.js
+ * FamilyHub v4.2 — services/theme.js
  * Runtime CSS Variable Theme Service.
  * Implements Prompt 26 spec exactly.
  *

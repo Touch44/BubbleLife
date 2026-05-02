@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — core/db.js
+ * FamilyHub v4.2 — core/db.js
  * Complete IndexedDB data layer using the idb library
  * Blueprint §2.1 (schema), §2.2 (settings keys), §10.1 (public API)
  *
@@ -728,7 +728,7 @@ export async function exportAll() {
 
     return {
       exportedAt: new Date().toISOString(),
-      appVersion: '2.0.0',
+      appVersion: '4.2.1',
       entities,
       edges,
       settings,

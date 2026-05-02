@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/toast.js
+ * FamilyHub v4.2 — core/toast.js
  * Global toast notification system.
  * Renders into #toast-container (already in index.html).
  *

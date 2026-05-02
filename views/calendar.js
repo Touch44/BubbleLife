@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — views/calendar.js
+ * FamilyHub v4.2 — views/calendar.js
  * Combined Month + Week + Agenda calendar view
  * Renders into #view-calendar when view="calendar"
  *

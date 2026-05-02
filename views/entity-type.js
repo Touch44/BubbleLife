@@ -336,7 +336,7 @@ function _renderList(items,config) {
     const tHtml=tags.map(t=>`<span class="etv-tag">${_esc(t)}</span>`).join('');
     const upd=e.updatedAt?`<span class="etv-list-date">${_fmtDate(e.updatedAt.toString().slice(0,10))}</span>`:'';
     return `<div class="etv-list-item" data-entity-id="${_esc(e.id)}">
-      <div class="etv-list-icon">${_esc(config.icon||'◇')}</div>
+      <div class="etv-list-icon">${_esc(config.icon||'📎')}</div>
       <div class="etv-list-content">
         <div class="etv-list-title">${title||'(Untitled)'}</div>
         ${(meta||tHtml)?`<div class="etv-list-meta">${meta}${tHtml}</div>`:''}
@@ -354,7 +354,7 @@ function _renderGrid(items,config) {
     const fHtml=fields.map(f=>`<div class="etv-grid-field"><span style="color:var(--color-text-muted)">${_esc(f.label)}:</span> ${_esc(f.value)}</div>`).join('');
     const tHtml=tags.length?`<div class="etv-grid-tags">${tags.map(t=>`<span class="etv-tag">${_esc(t)}</span>`).join('')}</div>`:'';
     return `<div class="etv-grid-card" data-entity-id="${_esc(e.id)}">
-      <div class="etv-grid-icon">${_esc(config.icon||'◇')}</div>
+      <div class="etv-grid-icon">${_esc(config.icon||'📎')}</div>
       <div class="etv-grid-title">${title||'(Untitled)'}</div>
       ${fHtml?`<div class="etv-grid-fields">${fHtml}</div>`:''}${tHtml}
     </div>`;
@@ -407,7 +407,7 @@ function _renderWall(items,config) {
     const tHtml=tags.length?`<div class="etv-wall-tags">${tags.map(t=>`<span class="etv-tag">${_esc(t)}</span>`).join('')}</div>`:'';
     return `<div class="etv-wall-card" data-entity-id="${_esc(e.id)}">
       <div class="etv-wall-hdr">
-        <div class="etv-wall-icon">${_esc(config.icon||'◇')}</div>
+        <div class="etv-wall-icon">${_esc(config.icon||'📎')}</div>
         <div class="etv-wall-title">${title||'(Untitled)'}</div>
       </div>
       ${preview?`<div class="etv-wall-preview">${preview}</div>`:''}
@@ -423,7 +423,7 @@ function _renderEmpty(config,entityType,isFiltered) {
     <div class="etv-empty-title">No results</div>
     <div class="etv-empty-sub">Try a different search term.</div>
   </div>`;
-  const label=config?.label||entityType, plural=config?.labelPlural||label+'s', icon=config?.icon||'◇';
+  const label=config?.label||entityType, plural=config?.labelPlural||label+'s', icon=config?.icon||'📎';
   return `<div class="etv-empty">
     <div class="etv-empty-icon">${_esc(icon)}</div>
     <div class="etv-empty-title">No ${_esc(plural)} yet</div>
@@ -491,14 +491,14 @@ async function renderEntityTypeView(params = {}) {
   if (!config) { try { config = getEntityTypeConfig(entityType); } catch { /* ok */ } }
   if (!config) {
     config = {
-      label:entityType, labelPlural:entityType+'s', icon:'◇', defaultSort:'-createdAt',
+      label:entityType, labelPlural:entityType+'s', icon:'📎', defaultSort:'-createdAt',
       fields:[{key:'title',label:'Title',type:'text',isTitle:true}],
     };
   }
 
   const label       = config.label       || entityType;
   const plural      = config.labelPlural || label+'s';
-  const icon        = config.icon        || '◇';
+  const icon        = config.icon        || '📎';
   const isCustom    = config.canDelete   === true;
   const description = config.description || '';
 

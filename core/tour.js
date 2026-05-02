@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/tour.js
+ * FamilyHub v4.2 — core/tour.js
  * Guided onboarding tour engine.
  * Implements Prompt 32 spec exactly.
  *
@@ -156,7 +156,7 @@ function _showStep(index) {
         border-radius:4px;" aria-label="Skip tour">Skip</button>
     </div>
     <h3 style="margin:0 0 8px;font-size:16px;font-weight:700;
-      font-family:var(--font-heading,Georgia,serif);
+      font-family:var(--font-heading,system-ui,sans-serif);
       color:var(--color-text,#0f172a);">${_esc(step.title)}</h3>
     <p style="margin:0 0 16px;font-size:13px;line-height:1.5;
       color:var(--color-text-muted,#64748b);">${_esc(step.content)}</p>
@@ -269,7 +269,7 @@ async function _complete() {
   card.innerHTML = `
     <div style="font-size:48px;margin-bottom:12px;">🎉</div>
     <h2 style="font-size:22px;font-weight:700;margin:0 0 8px;
-      font-family:var(--font-heading,Georgia,serif);
+      font-family:var(--font-heading,system-ui,sans-serif);
       color:var(--color-text,#0f172a);">You're ready!</h2>
     <p style="color:var(--color-text-muted,#64748b);margin:0 0 20px;font-size:14px;">
       You've completed the FamilyHub tour. Enjoy!

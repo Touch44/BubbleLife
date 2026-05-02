@@ -78,9 +78,9 @@ export const PROPERTY_CATEGORIES = [
 
 export const VIEW_MODES = [
   { key: 'list',  label: 'List',    icon: '☰', description: 'Compact row list' },
-  { key: 'grid',  label: 'Gallery', icon: '⊞', description: 'Card grid view' },
-  { key: 'table', label: 'Table',   icon: '⊟', description: 'Spreadsheet table' },
-  { key: 'wall',  label: 'Wall',    icon: '⊡', description: 'Masonry card wall' },
+  { key: 'grid',  label: 'Gallery', icon: '📊', description: 'Card grid view' },
+  { key: 'table', label: 'Table',   icon: '📋', description: 'Spreadsheet table' },
+  { key: 'wall',  label: 'Wall',    icon: '🧱', description: 'Masonry card wall' },
 ];
 
 // ── Dashboard Section Definitions ────────────────────────────────
@@ -88,7 +88,7 @@ export const VIEW_MODES = [
 export const DASHBOARD_SECTION_DEFS = [
   { key: 'recentlyOpened', label: 'Recently Opened',     icon: '🕐' },
   { key: 'recentlyAdded',  label: 'Recently Added',      icon: '✨' },
-  { key: 'allObjects',     label: 'All Objects',          icon: '◉' },
+  { key: 'allObjects',     label: 'All Objects',          icon: '📦' },
   { key: 'untagged',       label: 'Untagged Objects',    icon: '🏷' },
   { key: 'noCollection',   label: 'Not in a Collection', icon: '📁' },
   { key: 'noBacklinks',    label: 'No Backlinks',         icon: '🔗' },
@@ -221,7 +221,7 @@ export async function saveCustomObjectType(config) {
 
   const toSave = {
     // Defaults
-    icon:              '◇',
+    icon:              '📎',
     color:             '#6366f1',
     defaultView:       'list',
     graphVisible:      true,

@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — components/entity-panel.js
+ * FamilyHub v4.2 — components/entity-panel.js
  * Universal entity detail panel — slide-in from right (desktop) / drawer from bottom (mobile)
  * Blueprint §5.1 (entity panel), Phase 1-B
  *
@@ -728,7 +728,7 @@ function _renderHeader() {
   graphBtn.className = 'panel-icon-btn';
   graphBtn.title = 'Open Graph';
   graphBtn.setAttribute('aria-label', 'Open Graph');
-  graphBtn.textContent = '◎';
+  graphBtn.textContent = '🔮';
   graphBtn.style.cssText = 'color: var(--color-accent); font-size: 1rem;';
   graphBtn.addEventListener('click', () => {
     if (_entity?.id) _openGraphView(_entity.id);
@@ -782,7 +782,7 @@ function _renderHeader() {
   titleSpan.id = 'entity-panel-title';
   titleSpan.textContent = titleVal;
   titleSpan.title = 'Click to edit title';
-  titleSpan.style.cssText = 'font-family:var(--font-heading,Georgia,serif);font-size:var(--text-2xl,1.5rem);font-weight:700;color:var(--color-text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;line-height:1.25;';
+  titleSpan.style.cssText = 'font-family:var(--font-heading,system-ui,sans-serif);font-size:var(--text-xl,1.25rem);font-weight:700;color:var(--color-text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;line-height:1.25;';
   if (titleField) titleSpan.addEventListener('click', () => _makeTitleEditable(titleField));
   titleRow.appendChild(titleSpan);
   _panelTitle = titleSpan;
@@ -870,7 +870,7 @@ function _renderHeaderActions() {
   // ── PRIMARY: Archive / Unarchive ────────────────────────
   if (actions.includes('archive') || actions.includes('edit')) {
     const isArchived = _entity.status === 'Archived' || _entity.archived;
-    const btn = mkBtn(isArchived ? '↑' : '⊟', isArchived ? 'Unarchive' : 'Archive');
+    const btn = mkBtn(isArchived ? '↑' : '📦', isArchived ? 'Unarchive' : 'Archive');
     btn.addEventListener('click', async () => {
       if (_entity.status !== undefined) {
         _entity.status = isArchived ? 'Active' : 'Archived';
@@ -887,7 +887,7 @@ function _renderHeaderActions() {
 
   // ── PRIMARY: Delete ─────────────────────────────────────
   if (actions.includes('delete')) {
-    const btn = mkBtn('⊗', 'Delete', true);
+    const btn = mkBtn('🗑️', 'Delete', true);
     btn.addEventListener('click', () => _confirmDelete());
     _headerActions.appendChild(btn);
   }
@@ -1154,9 +1154,9 @@ const CONTENT_FIRST_TYPES = new Set([
 // 'graph' is NOT in this list — it gets its own direct-action button below
 const VIEW_DEFS = [
   { key: 'content',    icon: '≡',  title: 'Content' },
-  { key: 'properties', icon: '⊞',  title: 'Properties' },
-  { key: 'relations',  icon: '⌥',  title: 'Relations' },
-  { key: 'activity',   icon: '◷',  title: 'Activity' },
+  { key: 'properties', icon: '📝',  title: 'Properties' },
+  { key: 'relations',  icon: '🔗',  title: 'Relations' },
+  { key: 'activity',   icon: '📋',  title: 'Activity' },
 ];
 
 // ════════════════════════════════════════════════════════════

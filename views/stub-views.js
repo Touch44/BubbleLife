@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — views/stub-views.js
+ * FamilyHub v4.2 — views/stub-views.js
  * Placeholder renderers for views not yet implemented.
  * Prevents blank/broken screens when user navigates to these views.
  * Each stub shows a friendly "coming soon" state with the view name.
@@ -40,15 +40,15 @@ const VIEW_NAMES = {
 const VIEW_ICONS = {
   'family-matters': '⌂',
   'notes':          '≡',
-  'projects':       '⊞',
-  'graph':          '◎',
-  'budget':         '◷',
-  'recipes':        '⊛',
-  'documents':      '⊟',
-  'contacts':       '⊕',
-  'gallery':        '▣',
-  'settings':       '⊙',
-  'entity-type':    '◇',
+  'projects':       '📁',
+  'graph':          '🔮',
+  'budget':         '💰',
+  'recipes':        '🍽️',
+  'documents':      '📄',
+  'contacts':       '📇',
+  'gallery':        '🖼️',
+  'settings':       '⚙️',
+  'entity-type':    '📎',
 };
 
 /**
@@ -69,8 +69,8 @@ function _renderStub(viewKey, params = {}) {
     : (VIEW_NAMES[viewKey] || _cap(viewKey));
 
   const icon = viewKey === 'entity-type'
-    ? '◇'
-    : (VIEW_ICONS[viewKey] || '◈');
+    ? '📎'
+    : (VIEW_ICONS[viewKey] || '📎');
 
   el.innerHTML = `
     <div style="

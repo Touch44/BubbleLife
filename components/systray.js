@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — components/systray.js
+ * FamilyHub v4.2 — components/systray.js
  * Systray — right-side topbar ambient awareness zone.
  * Implements Prompt 28 spec exactly.
  *
@@ -168,7 +168,7 @@ function _buildPresenceItem() {
 
   const icon  = document.createElement('span');
   icon.className = 'st-icon';
-  icon.textContent = '◉';
+  icon.textContent = '🟢';
   const label = document.createElement('span');
   label.className = 'st-presence-count';
 

@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/dialog.js
+ * FamilyHub v4.2 — services/dialog.js
  * Dialog Service — stacked dialogs, focus trap, confirm() Promise API.
  * Implements Prompt 02 spec.
  *

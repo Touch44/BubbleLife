@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/history.js
+ * FamilyHub v4.2 — services/history.js
  * Undo/Redo History Service — command stack, Cmd+Z / Cmd+Shift+Z.
  * Implements Prompt 18 spec.
  *

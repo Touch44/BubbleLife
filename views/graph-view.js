@@ -493,7 +493,7 @@ async function renderGraph(params = {}) {
     emptyEl.className = 'gv-empty';
     emptyEl.id = 'gv-empty';
     emptyEl.innerHTML = `
-      <div class="gv-empty-icon">◎</div>
+      <div class="gv-empty-icon">🔮</div>
       <div>No entities to show in this context.</div>
       <div style="font-size:var(--text-xs);">Try switching context or adding entities first.</div>
     `;

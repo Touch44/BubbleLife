@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/effects.js
+ * FamilyHub v4.2 — services/effects.js
  * EffectsService — registered celebration/feedback animations.
  * Implements Prompt 21 spec exactly.
  *

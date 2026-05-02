@@ -273,7 +273,7 @@ let _wizardEl = null;
 
 function _openWizard(onCreated) {
   if (_wizardEl?.isConnected) return;
-  let selectedIcon = '◇';
+  let selectedIcon = '📎';
 
   _wizardEl = document.createElement('div');
   _wizardEl.className = 'os-wizard-overlay';
@@ -353,7 +353,7 @@ function _openWizard(onCreated) {
       const config = await saveCustomObjectType({
         label,
         labelPlural: plural,
-        icon:        selectedIcon || '◇',
+        icon:        selectedIcon || '📎',
         description: _wizardEl.querySelector('#ow-desc').value.trim(),
       });
       _closeWizard();
@@ -395,11 +395,11 @@ function _renderTypeCard(type, counts) {
          data-type-key="${_esc(type.key)}"
          style="--card-accent:${_esc(color)}">
       <div class="os-card-actions">${editBtn}</div>
-      <div class="os-card-icon">${_esc(type.icon || '◇')}</div>
+      <div class="os-card-icon">${_esc(type.icon || '📎')}</div>
       <div class="os-card-name">${_esc(type.labelPlural || type.label || type.key)}</div>
       ${desc}
       <div class="os-card-footer">
-        <div class="os-card-count">◉ ${count} object${count !== 1 ? 's' : ''}</div>
+        <div class="os-card-count">• ${count} object${count !== 1 ? 's' : ''}</div>
         <div>${badge}</div>
       </div>
     </div>

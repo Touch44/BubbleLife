@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — components/view-switcher.js
+ * FamilyHub v4.2 — components/view-switcher.js
  * View Mode Switcher — List / Kanban / Calendar buttons for entity-type views.
  * Implements Prompt 13 spec exactly.
  *
@@ -22,7 +22,7 @@ export const VIEW_MODES = [
   // 'list' and 'grid' both render in 'entity-type' view (generic entity list)
   // Kanban and Calendar removed — they show ALL entities, not filtered by type
   { key: 'list',  view: 'entity-type', icon: '☰', label: 'List view'   },
-  { key: 'grid',  view: 'entity-type', icon: '⊞', label: 'Grid view', params: { mode: 'grid' } },
+  { key: 'grid',  view: 'entity-type', icon: '📊', label: 'Grid view', params: { mode: 'grid' } },
 ];
 
 /**

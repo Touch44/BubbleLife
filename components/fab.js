@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — components/fab.js
+ * FamilyHub v4.2 — components/fab.js
  * Floating Action Button — radial menu, context-aware defaults, keyboard shortcuts.
  * Blueprint §5.3, Phase 1-D
  *

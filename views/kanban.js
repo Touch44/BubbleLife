@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — views/kanban.js
+ * FamilyHub v4.2 — views/kanban.js
  * 4-column Kanban board: Inbox · In Progress · Review · Done
  * Renders into #view-kanban when view="kanban"
  *

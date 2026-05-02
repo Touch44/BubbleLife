@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — tests/signals.test.js
+ * FamilyHub v4.2 — tests/signals.test.js
  * Tests for the reactive signal system (core/signals.js).
  */
 

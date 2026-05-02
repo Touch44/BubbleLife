@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/env.js
+ * FamilyHub v4.2 — core/env.js
  * Shared environment object passed to every service and view.
  * Inspired by Odoo's env pattern.
  *

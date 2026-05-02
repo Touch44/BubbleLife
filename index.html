@@ -976,11 +976,16 @@
 
         function _updateSwitcherUI(ctx) {
           const label = document.getElementById('ctx-label');
-          if (label) label.textContent = CTX_LABELS[ctx] || 'All Contexts';
+          const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+          const inactiveColor = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.35)';
+          const labelColor = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.30)';
+          if (label) { label.textContent = CTX_LABELS[ctx] || 'All Contexts'; label.style.color = labelColor; }
+          const ctxBg = document.getElementById('ctx-buttons');
+          if (ctxBg) ctxBg.style.background = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)';
           document.querySelectorAll('.ctx-btn').forEach(btn => {
             const isActive = btn.dataset.ctx === ctx;
             btn.style.background = isActive ? (CTX_COLORS[ctx] || CTX_COLORS.all) : 'transparent';
-            btn.style.color = isActive ? '#fff' : 'rgba(0,0,0,0.35)';
+            btn.style.color = isActive ? '#fff' : inactiveColor;
           });
         }
 
@@ -1287,10 +1292,10 @@
       document.body.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
                     min-height:100dvh;padding:2rem;text-align:center;font-family:system-ui,sans-serif;
-                    background:#0F172A;color:#F1F5F9;">
+                    background:#F8FAFC;color:#0F172A;">
           <div style="font-size:2rem;margin-bottom:1rem;">⚠️</div>
           <h1 style="font-size:1.25rem;font-weight:600;margin-bottom:0.5rem;">FamilyHub failed to start</h1>
-          <p style="color:#94A3B8;max-width:360px;margin-bottom:1.5rem;">
+          <p style="color:#64748B;max-width:360px;margin-bottom:1.5rem;">
             ${err?.message || 'An unexpected error occurred during startup.'}
           </p>
           <button onclick="window.location.reload()"

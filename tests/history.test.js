@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — tests/history.test.js
+ * FamilyHub v4.2 — tests/history.test.js
  * Tests for the history service (undo/redo).
  */
 

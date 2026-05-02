@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — tests/mock-env.js
+ * FamilyHub v4.2 — tests/mock-env.js
  * Build a complete mock env using in-memory implementations.
  * No IndexedDB, no DOM, no service worker.
  *

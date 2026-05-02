@@ -57,7 +57,7 @@ const EMOJI_CATALOG = [
 
 const COLORS = [
   '#6366f1','#8b5cf6','#ec4899','#ef4444','#f59e0b',
-  '#10b981','#06b6d4','#3b82f6','#64748b','#0a7b6c',
+  '#10b981','#06b6d4','#3b82f6','#64748b','#0ea5e9',
 ];
 
 // ── Styles ────────────────────────────────────────────────────────
@@ -412,7 +412,7 @@ function _renderGeneral(t) {
     <div class="te-field">
       <label class="te-lbl">Icon</label>
       <div class="te-icon-row">
-        <div class="te-icon-preview" id="te-icon-prev">${_esc(t.icon||'◇')}</div>
+        <div class="te-icon-preview" id="te-icon-prev">${_esc(t.icon||'📎')}</div>
         <button class="te-emoji-toggle" id="te-emoji-tog">Choose emoji…</button>
       </div>
       <div class="te-emoji-grid" id="te-emoji-grid" style="display:none">${emojiGrid}</div>
@@ -595,7 +595,7 @@ function _renderDrawer() {
     <div class="te-drawer" role="dialog" aria-modal="true" aria-label="Type settings">
       <div class="te-hdr">
         <div class="te-hdr-l">
-          <div class="te-hdr-icon">${_esc(t.icon||'◇')}</div>
+          <div class="te-hdr-icon">${_esc(t.icon||'📎')}</div>
           <div>
             <div class="te-hdr-name">${_esc(t.labelPlural||t.label||t.key)}</div>
             <div class="te-hdr-sub">Object Type Settings ${badge}</div>
@@ -918,7 +918,7 @@ export async function openTypeEditor(typeKey, onSaved) {
   if (!config) {
     config = {
       key:typeKey, label:typeKey, labelPlural:typeKey+'s',
-      icon:'◇', color:'#6366f1',
+      icon:'📎', color:'#6366f1',
       isBuiltIn:isBuiltInType(typeKey), canDelete:!isBuiltInType(typeKey),
       fields:[{key:'title',label:'Title',type:'text',isTitle:true,required:true}],
       defaultView:'list', dashboardSections:['recentlyOpened','allObjects'], description:'',

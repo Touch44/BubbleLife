@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/router.js
+ * FamilyHub v4.2 — core/router.js
  * View routing, navigation history, breadcrumbs, URL hash
  * Blueprint §4.1 — upgraded to use viewRegistry (P-01)
  * P-15 — action-based router: full action serialized to URL hash as query params

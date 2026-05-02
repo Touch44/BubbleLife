@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/signals.js
+ * FamilyHub v4.2 — core/signals.js
  * Reactive signal system — signal, computed, effect, batch, peek.
  * Inspired by Solid.js / Preact Signals. Zero dependencies.
  *

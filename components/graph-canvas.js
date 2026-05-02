@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — components/graph-canvas.js
+ * FamilyHub v4.2 — components/graph-canvas.js
  * Force-directed physics canvas — reusable in graph view AND entity panel mini-graph
  * Blueprint §9.2 (graph canvas), §6.5 (relation edge colors)
  *

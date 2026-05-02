@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/errors.js
+ * FamilyHub v4.2 — core/errors.js
  * Typed error taxonomy and result-tuple convention.
  *
  * Convention: all async service methods return [error|null, value|null] tuples.

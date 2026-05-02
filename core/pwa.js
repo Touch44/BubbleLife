@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/pwa.js
+ * FamilyHub v4.2 — core/pwa.js
  * PWA Install Prompt — engagement-gated install banner.
  * Implements Prompt 22 spec exactly.
  *

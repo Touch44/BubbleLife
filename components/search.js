@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — components/search.js
+ * FamilyHub v4.2 — components/search.js
  * Global search overlay + command palette.
  * Blueprint §5.4, Phase 1-D
  *
@@ -346,7 +346,7 @@ const COMMANDS = [
   {
     label:   'Dashboard',
     detail:  'Go to Dashboard',
-    icon:    '⊹',
+    icon:    '🏠',
     keys:    ['dashboard', 'home'],
     action:  () => { closeSearch(); navigate(VIEW_KEYS.DASHBOARD || 'dashboard'); },
   },
@@ -437,7 +437,8 @@ const COMMANDS = [
       const current = document.documentElement.getAttribute('data-theme') || 'light';
       const next    = current === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', next);
-      localStorage.setItem('fh_theme', next);
+      // Theme toggle handled by theme service
+        try { localStorage.setItem('fh_theme', next); } catch {}
       emit(EVENTS.THEME_CHANGED, { theme: next });
     },
   },
@@ -471,7 +472,7 @@ function _renderCommands(query) {
     // Use commandService.search() — returns [{cmd, score}] sorted by score
     const results = cmdService.search(query);
     matches = results.map(r => ({
-      icon:       r.cmd.icon || '◈',
+      icon:       r.cmd.icon || '⚡',
       label:      r.cmd.label,
       detail:     r.cmd.description || r.cmd.category,
       action:     () => cmdService.execute(r.cmd.id, window._fhEnv),

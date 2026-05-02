@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/registry.js
+ * FamilyHub v4.2 — core/registry.js
  * Typed key/value registry pattern (Odoo-inspired).
  * All registries are singletons exported from this module.
  *

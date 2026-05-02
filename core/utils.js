@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/utils.js
+ * FamilyHub v4.2 — core/utils.js
  * Pure utility functions. No dependencies on other FamilyHub modules.
  * Used by command palette, search, data service, and views.
  *

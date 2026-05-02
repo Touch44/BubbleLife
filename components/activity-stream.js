@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — components/activity-stream.js
+ * FamilyHub v4.2 — components/activity-stream.js
  * Reusable activity/chatter component for the entity panel.
  * Implements Prompt 15 spec exactly.
  *
@@ -177,7 +177,7 @@ export function mountActivityStream(container, entityId, entityType) {
       const row = document.createElement('div');
       row.className = 'activity-row';
 
-      const icon = TYPE_ICONS[act.type] || '◈';
+      const icon = TYPE_ICONS[act.type] || '📎';
       const when = _relativeTime(act.at);
 
       row.innerHTML = `

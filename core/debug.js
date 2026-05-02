@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/debug.js
+ * FamilyHub v4.2 — core/debug.js
  * Developer Debug Overlay — activated by ?debug=true in URL.
  * Implements Prompt 30 spec exactly.
  *

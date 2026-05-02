@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — tests/runner.js
+ * FamilyHub v4.2 — tests/runner.js
  * Minimal test runner — browser and Node compatible.
  */
 

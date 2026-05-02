@@ -242,9 +242,15 @@ function _injectStyles() {
   font-size: var(--text-xl);
   font-weight: var(--weight-bold);
   color: var(--color-accent);
-  line-height: 1.2;
+  line-height: 1.25;
   word-break: break-word;
   overflow-wrap: break-word;
+  max-height: 3.2em;
+  overflow: hidden;
+}
+.dash-card-stat.text-stat {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 .dash-card-stat.danger  { color: var(--color-danger); }
 .dash-card-stat.success { color: var(--color-success); }
@@ -845,6 +851,7 @@ function _populateCalendarCard(el, events, appointments) {
 
   const next3 = combined.slice(0, 3);
   const statText = combined.length > 0 ? `${combined.length} this week` : 'Nothing this week';
+  const statClass = combined.length > 0 ? '' : 'text-stat';
 
   let sub = '';
   if (next3.length === 0) {
@@ -859,7 +866,7 @@ function _populateCalendarCard(el, events, appointments) {
 
   card.querySelector('.dash-card-badge-el').className = `dash-card-badge ${combined.length > 0 ? 'ok' : 'neutral'} dash-card-badge-el`;
   card.querySelector('.dash-card-badge-el').textContent = combined.length > 0 ? `${combined.length} upcoming` : 'Empty';
-  card.querySelector('.dash-card-stat').className = 'dash-card-stat';
+  card.querySelector('.dash-card-stat').className = `dash-card-stat ${statClass}`;
   card.querySelector('.dash-card-stat').textContent = statText;
   card.querySelector('.dash-card-sub').innerHTML = sub;
 

@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — tests/router.test.js
+ * FamilyHub v4.2 — tests/router.test.js
  * Tests for action-based router: serialisation, deserialisation, history stack.
  */
 

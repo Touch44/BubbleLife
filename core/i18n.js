@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — core/i18n.js
+ * FamilyHub v4.2 — core/i18n.js
  * Minimal internationalisation scaffold.
  * Zero-cost: if no translation is loaded, t() returns the original string.
  * Designed to wrap strings now so full i18n can be added later without refactoring.

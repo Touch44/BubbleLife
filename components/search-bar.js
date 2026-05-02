@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — components/search-bar.js
+ * FamilyHub v4.2 — components/search-bar.js
  * Faceted Search Bar — chips inside input, filter suggestions, searchModel.
  * Implements Prompt 10 spec exactly.
  *
@@ -44,7 +44,7 @@ const FACET_COLORS = {
 const FACET_ICONS = {
   text:      '🔍',
   assignee:  '👤',
-  status:    '◉',
+  status:    '🟢',
   dateRange: '📅',
 };
 

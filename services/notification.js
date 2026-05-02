@@ -1,5 +1,5 @@
 /**
- * FamilyHub v3.0 — services/notification.js
+ * FamilyHub v4.2 — services/notification.js
  * Notification Service — typed toasts with action buttons, auto-dismiss.
  * Implements Prompt 01 spec exactly.
  *

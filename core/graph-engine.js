@@ -1,5 +1,5 @@
 /**
- * FamilyHub v2.0 — core/graph-engine.js
+ * FamilyHub v4.2 — core/graph-engine.js
  * Entity type registry and graph query layer
  * Blueprint §2.5 (entity type configs), §10.2 (public API)
  *
@@ -145,6 +145,7 @@ const BUILT_IN_ENTITY_TYPES = [
       field('details',    'richtext',   { label: 'Details', isTitle: false }),
       field('checklist',  'checklist',  { label: 'Checklist', isTitle: false }),
       field('blockedBy',  'relation',   { label: 'Blocked By', relatesTo: 'task' }),
+      field('blocking',   'relation',   { label: 'Blocking',   relatesTo: 'task' }),
       field('effort',     'select',   { label: 'Effort', options: ['XS', 'S', 'M', 'L', 'XL'] }),
       field('urgency',    'select',   { label: 'Urgency', options: ['Normal', 'Urgent', 'Overdue'], hidden: true }),
     ],

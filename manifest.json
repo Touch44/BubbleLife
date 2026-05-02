@@ -6,12 +6,15 @@
   "id": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "theme_color": "#0D1B2A",
-  "background_color": "#0D1B2A",
+  "theme_color": "#F6F8FC",
+  "background_color": "#FFFFFF",
   "scope": "./",
   "lang": "en",
   "dir": "ltr",
-  "categories": ["productivity", "lifestyle"],
+  "categories": [
+    "productivity",
+    "lifestyle"
+  ],
   "icons": [
     {
       "src": "./icons/icon-192.png",
@@ -60,14 +63,24 @@
       "short_name": "Daily",
       "description": "Open today's daily review",
       "url": "./#daily",
-      "icons": [{ "src": "./icons/shortcut-daily.png", "sizes": "96x96" }]
+      "icons": [
+        {
+          "src": "./icons/shortcut-daily.png",
+          "sizes": "96x96"
+        }
+      ]
     },
     {
       "name": "New Task",
       "short_name": "Task",
       "description": "Create a new task",
       "url": "./#kanban",
-      "icons": [{ "src": "./icons/shortcut-task.png", "sizes": "96x96" }]
+      "icons": [
+        {
+          "src": "./icons/shortcut-task.png",
+          "sizes": "96x96"
+        }
+      ]
     }
   ],
   "related_applications": [],
