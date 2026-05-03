@@ -791,7 +791,7 @@ export function wireNavItems() {
   function _dismissNavMenu() {
     const m = document.getElementById('_fh-nav-ctx-menu');
     if (m) { m._cleanup?.(); m.remove(); }
-  }}}
+  }
 
   // Inject into all current nav items
   nav.querySelectorAll('.nav-item[data-view]').forEach(_injectDotsButton);
