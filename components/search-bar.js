@@ -273,7 +273,7 @@ export function initSearchBar(containerId = 'topbar-search') {
     <div class="sb-wrap" role="search">
       <span class="sb-icon" aria-hidden="true">🔍</span>
       <div class="sb-chips" aria-label="Active filters"></div>
-      <input class="sb-input" type="text" placeholder="Search or filter…"
+      <input class="sb-input" type="text" placeholder="Search everything…  ⌘K"
              autocomplete="off" spellcheck="false" aria-label="Search">
       <button class="sb-clear" aria-label="Clear all filters" style="display:none">✕</button>
     </div>
@@ -318,7 +318,12 @@ export function initSearchBar(containerId = 'topbar-search') {
   });
 
   _inputEl.addEventListener('focus', () => {
-    if (_inputEl.value.trim()) _showDropdown(_inputEl.value.trim());
+    // [MAJOR] Unified search: clicking/focusing the topbar input opens the global
+    // search overlay (same as Cmd+K). Active filter chips stay visible in topbar.
+    _inputEl.blur();
+    import('./search.js')
+      .then(({ openSearch }) => openSearch?.())
+      .catch(() => { if (_inputEl.value.trim()) _showDropdown(_inputEl.value.trim()); });
   });
 
   _inputEl.addEventListener('blur', () => {

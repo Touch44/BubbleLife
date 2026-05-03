@@ -170,19 +170,9 @@
 
     <div id="topbar-spacer" aria-hidden="true"></div>
 
-    <!-- Global Search button — opens Cmd+K overlay -->
-    <button id="topbar-search-btn" aria-label="Search (Cmd+K)"
-            title="Search everything (Cmd+K)"
-            style="display:flex;align-items:center;gap:var(--space-1-5);padding:var(--space-1) var(--space-2-5);border-radius:var(--radius-sm);border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text-muted);font-size:var(--text-xs);cursor:pointer;transition:background var(--transition-fast),color var(--transition-fast);white-space:nowrap;">
-      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-        <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.5"/>
-        <path d="M10 10L13 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-      <span>Search</span>
-      <kbd style="font-size:10px;opacity:0.6;padding:1px 4px;border:1px solid currentColor;border-radius:3px;">⌘K</kbd>
-    </button>
-
-    <!-- Faceted Search Bar (P-17) — initSearchBar() populates this -->
+    <!-- Unified Search (P-17 + global overlay) — initSearchBar() populates this.
+         Clicking/focusing the input opens the global search overlay (Cmd+K).
+         Active filter chips remain visible below the input. -->
     <div id="topbar-search" role="search" aria-label="Search and filter"></div>
 
     <!-- Systray — ambient awareness bar (P-19) — initSystray() populates this -->

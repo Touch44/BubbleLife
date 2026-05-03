@@ -64,16 +64,8 @@ export function initSearch() {
     return;
   }
 
-  // Wire the 🔍 button in the topbar (may not exist; falls back to Cmd+K only)
+  // Wire Cmd+K button if present (optional — search-bar.js focus handler is the primary trigger)
   document.getElementById('topbar-search-btn')?.addEventListener('click', openSearch);
-
-  // Wire the topbar-search area click → open overlay (for discoverability)
-  // search-bar.js owns #topbar-search; wire the container so clicking anywhere opens global search
-  document.getElementById('topbar-search')?.addEventListener('click', (e) => {
-    // Only open if clicking the wrapper itself (not a chip's × button)
-    if (e.target.closest('.sb-chip-remove, .sb-chip, input')) return;
-    openSearch();
-  });
 
   // Click outside → close
   _overlay.addEventListener('click', (e) => {

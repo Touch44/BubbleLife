@@ -502,11 +502,11 @@ function _renderTabBar() {
 }
 
 function _buildTabEl(tab) {
-  const isActive  = tab.id === _activeTabId;
-  const canClose  = _tabs.length > 1;
+  const isActive = tab.id === _activeTabId;
+  const canClose = _tabs.length > 1;
 
   const el = document.createElement('div');
-  el.className  = `tab-item${isActive ? ' active' : ''}`;
+  el.className = `tab-item${isActive ? ' active' : ''}`;
   el.setAttribute('role', 'tab');
   el.setAttribute('aria-selected', String(isActive));
   el.dataset.tabId = tab.id;
@@ -515,9 +515,9 @@ function _buildTabEl(tab) {
 
   // Icon
   const iconSpan = document.createElement('span');
-  iconSpan.className        = 'tab-icon';
+  iconSpan.className   = 'tab-icon';
   iconSpan.setAttribute('aria-hidden', 'true');
-  iconSpan.textContent      = tab.icon || '📄';
+  iconSpan.textContent = tab.icon || '📄';
 
   // Label
   const labelSpan = document.createElement('span');
@@ -527,13 +527,27 @@ function _buildTabEl(tab) {
   el.appendChild(iconSpan);
   el.appendChild(labelSpan);
 
-  // Close button (hidden when only one tab)
+  // ⋯ Dots menu button — visible on hover, opens context menu
+  // More discoverable than right-click; always present for accessibility
+  const dotsBtn = document.createElement('button');
+  dotsBtn.className   = 'tab-dots';
+  dotsBtn.textContent = '⋯';
+  dotsBtn.setAttribute('aria-label', `Tab options for ${tab.label}`);
+  dotsBtn.title = 'Tab options';
+  dotsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const rect = dotsBtn.getBoundingClientRect();
+    _showTabContextMenu(tab, rect.left, rect.bottom + 2);
+  });
+  el.appendChild(dotsBtn);
+
+  // Close button (hidden when only one tab remains)
   if (canClose) {
     const closeBtn = document.createElement('button');
-    closeBtn.className   = 'tab-close';
+    closeBtn.className = 'tab-close';
     closeBtn.textContent = '✕';
     closeBtn.setAttribute('aria-label', `Close ${tab.label}`);
-    closeBtn.title       = 'Close tab';
+    closeBtn.title = 'Close tab  (Ctrl+W or middle-click)';
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       closeTab(tab.id);
@@ -541,21 +555,18 @@ function _buildTabEl(tab) {
     el.appendChild(closeBtn);
   }
 
-  // Left-click → switch tab
+  // Left-click → switch tab (skip button clicks)
   el.addEventListener('click', (e) => {
-    if (e.target.closest('.tab-close')) return;
+    if (e.target.closest('.tab-close, .tab-dots')) return;
     if (tab.id !== _activeTabId) switchTab(tab.id);
   });
 
   // Middle-click → close tab
   el.addEventListener('mousedown', (e) => {
-    if (e.button === 1) {
-      e.preventDefault();
-      closeTab(tab.id);
-    }
+    if (e.button === 1) { e.preventDefault(); closeTab(tab.id); }
   });
 
-  // Right-click → context menu
+  // Right-click → same context menu
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -585,19 +596,15 @@ function _buildTabEl(tab) {
     }
   });
 
-  el.addEventListener('dragleave', () => {
-    el.classList.remove('tab-drag-over');
-  });
+  el.addEventListener('dragleave', () => { el.classList.remove('tab-drag-over'); });
 
   el.addEventListener('drop', (e) => {
     e.preventDefault();
     el.classList.remove('tab-drag-over');
     if (!_dragTabId || _dragTabId === tab.id) return;
-
     const fromIdx = _tabs.findIndex(t => t.id === _dragTabId);
     const toIdx   = _tabs.findIndex(t => t.id === tab.id);
     if (fromIdx === -1 || toIdx === -1) return;
-
     const [moved] = _tabs.splice(fromIdx, 1);
     _tabs.splice(toIdx, 0, moved);
     _renderTabBar();
