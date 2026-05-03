@@ -1138,6 +1138,7 @@ kbd {
   max-width: 480px;
 }
 
+/* Unified search bar — acts as Cmd+K trigger; chips show active filters */
 .sb-wrap {
   position: relative;
   display: flex;
@@ -1149,8 +1150,15 @@ kbd {
   border-radius: var(--radius-full);
   min-height: 36px;
   flex-wrap: wrap;
-  cursor: text;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
+              background var(--transition-fast);
 }
+.sb-wrap:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface-2);
+}
+/* focus-within shouldn't linger since input immediately blurs to open overlay */
 .sb-wrap:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 2px var(--color-accent-muted);
@@ -1181,16 +1189,20 @@ kbd {
 }
 .sb-chip-remove:hover { opacity: 1; color: var(--color-danger); }
 
+/* Input is read-only visually — it immediately hands off to the overlay */
 .sb-input {
   flex: 1;
-  min-width: 100px;
+  min-width: 80px;
   border: none;
   outline: none;
   background: transparent;
   font-size: var(--text-sm);
-  color: var(--color-text);
+  color: var(--color-text-muted);
   padding: 0;
+  cursor: pointer;
+  caret-color: transparent; /* no cursor flash before overlay opens */
 }
+.sb-input::placeholder { color: var(--color-text-muted); }
 
 .sb-clear {
   background: none; border: none; cursor: pointer;

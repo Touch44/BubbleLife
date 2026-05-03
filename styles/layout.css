@@ -594,7 +594,46 @@ body {
   border-radius: 0 3px 3px 0;
 }
 
-/* ── Nav Icon — Colorful rounded-square backgrounds ──────── */
+/* ── Sidebar nav item ⋮ dots — open in new tab ───────────── */
+.nav-item-dots {
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--color-sidebar-text);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 22px;
+  text-align: center;
+  /* Hidden and non-interactive by default */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+/* Reveal when parent nav-item is hovered */
+.nav-item:hover .nav-item-dots {
+  opacity: 0.5;
+  pointer-events: auto;
+}
+
+/* Full brightness on direct hover — no box */
+.nav-item-dots:hover,
+.nav-item-dots:focus-visible {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--color-sidebar-text-active);
+  outline: none;
+}
+
+
 .nav-item-icon {
   width: 22px;
   height: 22px;
