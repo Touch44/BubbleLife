@@ -527,20 +527,6 @@ function _buildTabEl(tab) {
   el.appendChild(iconSpan);
   el.appendChild(labelSpan);
 
-  // ⋯ Dots menu button — visible on hover, opens context menu
-  // More discoverable than right-click; always present for accessibility
-  const dotsBtn = document.createElement('button');
-  dotsBtn.className   = 'tab-dots';
-  dotsBtn.textContent = '⋯';
-  dotsBtn.setAttribute('aria-label', `Tab options for ${tab.label}`);
-  dotsBtn.title = 'Tab options';
-  dotsBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const rect = dotsBtn.getBoundingClientRect();
-    _showTabContextMenu(tab, rect.left, rect.bottom + 2);
-  });
-  el.appendChild(dotsBtn);
-
   // Close button (hidden when only one tab remains)
   if (canClose) {
     const closeBtn = document.createElement('button');
@@ -557,7 +543,7 @@ function _buildTabEl(tab) {
 
   // Left-click → switch tab (skip button clicks)
   el.addEventListener('click', (e) => {
-    if (e.target.closest('.tab-close, .tab-dots')) return;
+    if (e.target.closest('.tab-close')) return;
     if (tab.id !== _activeTabId) switchTab(tab.id);
   });
 
@@ -566,7 +552,7 @@ function _buildTabEl(tab) {
     if (e.button === 1) { e.preventDefault(); closeTab(tab.id); }
   });
 
-  // Right-click → same context menu
+  // Right-click → context menu (power user shortcut — primary is sidebar nav ⋮)
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();

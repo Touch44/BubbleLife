@@ -671,8 +671,49 @@ export function wireNavItems() {
     return { view, params, label };
   }
 
+  // ── Inject ⋮ dots button into every sidebar nav item ─────────
+  // Shows on hover; click opens the item in a new tab.
+  // Works for static items and dynamically-added custom type items.
+  function _injectDotsButton(navItemEl) {
+    if (navItemEl._dotsInjected) return; // idempotent
+    navItemEl._dotsInjected = true;
+
+    const btn = document.createElement('button');
+    btn.className = 'nav-item-dots';
+    btn.textContent = '⋮';
+    btn.setAttribute('aria-label', `Open in new tab`);
+    btn.title = 'Open in new tab';
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't trigger the nav-item click handler
+      const { view, params, label } = _navItemData(navItemEl);
+      _openTabFn(view, params, label || _resolveLabel(view, params));
+    });
+
+    navItemEl.appendChild(btn);
+  }
+
+  // Inject into all current nav items
+  nav.querySelectorAll('.nav-item[data-view]').forEach(_injectDotsButton);
+
+  // Watch for dynamically added nav items (custom types added after init)
+  const _observer = new MutationObserver((mutations) => {
+    for (const mut of mutations) {
+      for (const node of mut.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        // Node itself might be a nav-item
+        if (node.matches?.('.nav-item[data-view]')) _injectDotsButton(node);
+        // Or it might be a container with nav-items inside (e.g. <li> wrapping a button)
+        node.querySelectorAll?.('.nav-item[data-view]').forEach(_injectDotsButton);
+      }
+    }
+  });
+  _observer.observe(nav, { childList: true, subtree: true });
+
   // ── Left-click: navigate (or Ctrl/Cmd+click: new tab) ──
   nav.addEventListener('click', (e) => {
+    // Dots button handled by its own listener — skip here
+    if (e.target.closest('.nav-item-dots')) return;
     const el = e.target.closest('.nav-item[data-view]');
     if (!el) return;
 
@@ -713,7 +754,11 @@ export function wireNavItems() {
   if (footer && !footer._delegated) {
     footer._delegated = true;
 
+    // Inject dots into footer items too
+    footer.querySelectorAll('.nav-item[data-view]').forEach(_injectDotsButton);
+
     footer.addEventListener('click', (e) => {
+      if (e.target.closest('.nav-item-dots')) return;
       const el = e.target.closest('.nav-item[data-view]');
       if (!el) return;
       const { view, params, label } = _navItemData(el);
@@ -741,13 +786,7 @@ export function wireNavItems() {
     });
   }
 
-  // Back button
-  const backBtn = document.getElementById('breadcrumb-back-btn');
-  if (backBtn) {
-    backBtn.addEventListener('click', () => back());
-  }
-  const fwdBtn = document.getElementById('breadcrumb-fwd-btn');
-  if (fwdBtn) {
-    fwdBtn.addEventListener('click', () => forward());
-  }
+  // Back / Forward breadcrumb buttons
+  document.getElementById('breadcrumb-back-btn')?.addEventListener('click', () => back());
+  document.getElementById('breadcrumb-fwd-btn')?.addEventListener('click', () => forward());
 }
