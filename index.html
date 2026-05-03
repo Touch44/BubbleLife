@@ -170,6 +170,18 @@
 
     <div id="topbar-spacer" aria-hidden="true"></div>
 
+    <!-- Global Search button — opens Cmd+K overlay -->
+    <button id="topbar-search-btn" aria-label="Search (Cmd+K)"
+            title="Search everything (Cmd+K)"
+            style="display:flex;align-items:center;gap:var(--space-1-5);padding:var(--space-1) var(--space-2-5);border-radius:var(--radius-sm);border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text-muted);font-size:var(--text-xs);cursor:pointer;transition:background var(--transition-fast),color var(--transition-fast);white-space:nowrap;">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M10 10L13 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>Search</span>
+      <kbd style="font-size:10px;opacity:0.6;padding:1px 4px;border:1px solid currentColor;border-radius:3px;">⌘K</kbd>
+    </button>
+
     <!-- Faceted Search Bar (P-17) — initSearchBar() populates this -->
     <div id="topbar-search" role="search" aria-label="Search and filter"></div>
 
@@ -727,7 +739,7 @@
   import './views/object-studio.js';                         // 2-B: Capacities-style Object Studio
   import './views/stub-views.js';                             // registers placeholder views
   import { on, emit, EVENTS }        from './core/events.js';
-  import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS, openInNewTab }
+  import { navigate, wireNavItems, handleInitialHash, VIEW_KEYS, openInNewTab, getCurrentView }
                                      from './core/router.js';
   import { initDB }                  from './core/db.js';
   import { initGraphEngine }         from './core/graph-engine.js';
@@ -968,11 +980,13 @@
       initCommandPalette(env);            // P-18: command palette
       initSystray(env);                   // P-19: systray awareness bar
       await initAuth();
-      // [MAJOR] Init tab system — restores persisted tabs and renders tab bar.
-      // Must run AFTER initAuth() so the app shell is visible and router is wired.
-      import('./core/router.js').then(({ getCurrentView }) => {
+      // [MAJOR] Init tab system — renders tab bar using already-imported navigate + getCurrentView.
+      // Called synchronously (no dynamic import) so errors surface immediately.
+      try {
         initTabs({ navigate, getCurrentView });
-      });
+      } catch (tabErr) {
+        console.error('[tabs] initTabs failed:', tabErr);
+      }
       initContext();                       // CS-01: restore active context from localStorage
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities

@@ -23,7 +23,7 @@
  *   restoreScrollPos()                             ← called by router after view switch
  */
 
-import { on, emit } from './events.js';
+import { on, emit, EVENTS } from './events.js';
 
 // ── Tab Events ─────────────────────────────────────────── //
 /** @readonly */
@@ -221,13 +221,20 @@ export function closeTab(tabId, silent = false) {
   if (!silent) emit(TAB_EVENTS.TAB_CLOSED, { tabId });
 }
 
+/** Pending update queued before initTabs() runs — applied on first render */
+let _pendingUpdate = null;
+
 /**
  * Called by router.js on every navigate() to keep active tab in sync.
  * This is the single source of truth update — no re-navigate triggered.
  */
 export function updateActiveTab(viewKey, params, label) {
   const tab = getActiveTab();
-  if (!tab) return; // tabs not yet initialised
+  if (!tab) {
+    // Queue: tabs not yet initialised (auth navigate fires before initTabs)
+    _pendingUpdate = { viewKey, params: { ...(params || {}) }, label: label || viewKey };
+    return;
+  }
   tab.viewKey   = viewKey;
   tab.params    = { ...(params || {}) };
   tab.label     = label || viewKey;
@@ -275,6 +282,22 @@ export function initTabs({ navigate, getCurrentView }) {
   }
 
   _renderTabBar();
+  console.log('[tabs] Initialised —', _tabs.length, 'tab(s) restored.');
+
+  // Apply any pending updateActiveTab() call that arrived before initTabs ran
+  // (auth calls navigate() → updateActiveTab() fires before initTabs is ready)
+  if (_pendingUpdate) {
+    const tab = getActiveTab();
+    if (tab) {
+      tab.viewKey = _pendingUpdate.viewKey;
+      tab.params  = _pendingUpdate.params;
+      tab.label   = _pendingUpdate.label;
+      tab.icon    = _getIcon(_pendingUpdate.viewKey, _pendingUpdate.params?.entityType);
+      _renderTabBar();
+      _save();
+    }
+    _pendingUpdate = null;
+  }
 
   // ── Init sync: intercept the first VIEW_CHANGED fired by auth._showApp() ──
   // auth.js calls navigate() asynchronously, so we can't rely on getCurrentView()
@@ -282,7 +305,7 @@ export function initTabs({ navigate, getCurrentView }) {
   //   a) Restore stored tab view (if stored & no hash override), OR
   //   b) Sync the placeholder tab to whatever auth navigated to.
   let _syncDone = false;
-  const _unsub  = on('view:changed', ({ viewKey, params, label }) => {
+  const _unsub  = on(EVENTS.VIEW_CHANGED, ({ viewKey, params, label }) => {
     if (_syncDone) {
       // Subsequent navigates: just keep active tab in sync (done by router calling updateActiveTab)
       return;

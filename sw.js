@@ -96,21 +96,6 @@ self.addEventListener('fetch', event => {
   event.respondWith(_networkFirst(req, 4000));
 });
 
-async function _cacheFirst(req) {
-  const hit = await caches.match(req);
-  if (hit) return hit;
-  try {
-    const res = await fetch(req);
-    if (res.ok) (await caches.open(CACHE_SHELL)).put(req, res.clone());
-    return res;
-  } catch {
-    if (req.mode === 'navigate') {
-      const fb = await caches.match('./index.html') || await caches.match('./');
-      if (fb) return fb;
-    }
-    return _offline();
-  }
-}
 
 async function _networkFirst(req, ms) {
   const timeout = new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms));
