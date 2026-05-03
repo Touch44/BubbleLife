@@ -103,7 +103,8 @@ export async function initAuth() {
   // 1. BroadcastChannel for cross-tab logout
   _setupBroadcastChannel();
 
-  // 2. Try to resume session
+  // 2. Try to resume session — check sessionStorage first, then fall back to IDB
+  //    (Bug-56 fix: new tabs have empty sessionStorage but valid IDB session)
   const savedSession = _getSessionStorageSession();
   if (savedSession) {
     const dbSession = await getSetting('session');
@@ -115,6 +116,24 @@ export async function initAuth() {
       if (account) {
         _account = account;
         _session = savedSession;
+        _startIdleTimer();
+        _showApp(auth);
+        return;
+      }
+    }
+  }
+
+  // 2b. sessionStorage was empty (new tab) — try restoring from IDB session alone
+  {
+    const dbSession = await getSetting('session');
+    const auth      = await getSetting('auth');
+    if (dbSession && _isSessionValid(null, dbSession, auth)) {
+      const account = _findAccount(auth, dbSession.accountId);
+      if (account) {
+        _account  = account;
+        _session  = dbSession;
+        // Re-write to sessionStorage so this tab now has it too
+        try { sessionStorage.setItem('fh_session', JSON.stringify(dbSession)); } catch {}
         _startIdleTimer();
         _showApp(auth);
         return;
@@ -885,23 +904,27 @@ async function _createSession(account) {
  * @returns {boolean}
  */
 function _isSessionValid(ssSession, dbSession, auth) {
-  // Basic structure check
+  // When called from IDB-only path (new tab), ssSession is null — validate IDB alone
+  if (ssSession === null) {
+    if (!dbSession?.sid || !dbSession?.accountId || !dbSession?.expiresAt) return false;
+    if (Date.now() > dbSession.expiresAt) return false;
+    if (!_findAccount(auth, dbSession.accountId)) return false;
+    return true;
+  }
+
+  // Standard dual-check path
   if (!ssSession?.sid || !ssSession?.accountId || !ssSession?.expiresAt) return false;
   if (!dbSession?.sid || !dbSession?.accountId) return false;
 
   // SID must match between sessionStorage and IndexedDB
   if (ssSession.sid !== dbSession.sid) return false;
-
-  // Account IDs must match
   if (ssSession.accountId !== dbSession.accountId) return false;
 
   // Not expired (use the more recent expiresAt between the two)
   const expiresAt = Math.max(ssSession.expiresAt || 0, dbSession.expiresAt || 0);
   if (Date.now() > expiresAt) return false;
 
-  // Account must still exist in auth
   if (!_findAccount(auth, ssSession.accountId)) return false;
-
   return true;
 }
 

@@ -360,6 +360,84 @@ function _wireKeyboardShortcuts() {
 
 // ── Tab Bar DOM Rendering ──────────────────────────────── //
 
+
+// ── Tab Context Menu ──────────────────────────────────────── //
+
+/** Active context menu element */
+let _ctxMenu = null;
+
+/** Dismiss the tab context menu */
+function _dismissContextMenu() {
+  if (_ctxMenu) { _ctxMenu._cleanup?.(); _ctxMenu.remove(); _ctxMenu = null; }
+}
+
+function _showTabContextMenu(tab, x, y) {
+  _dismissContextMenu();
+  const menu = document.createElement('div');
+  _ctxMenu = menu;
+  menu.className = 'tab-ctx-menu';
+  menu.style.cssText = [
+    'position:fixed;z-index:var(--z-modal);',
+    `left:${x}px;top:${y}px;`,
+    'background:var(--color-bg);border:1px solid var(--color-border);',
+    'border-radius:var(--radius-md);box-shadow:var(--shadow-lg);',
+    'padding:var(--space-1) 0;min-width:190px;',
+  ].join('');
+
+  const canClose = _tabs.length > 1;
+  const tabIdx   = _tabs.findIndex(t => t.id === tab.id);
+  const others   = _tabs.filter(t => t.id !== tab.id);
+  const toRight  = _tabs.slice(tabIdx + 1);
+
+  const menuDef = [
+    { label: '🔗 Duplicate tab',
+      handler: () => openTab(tab.viewKey, { ...tab.params }, tab.label, true) },
+    { divider: true },
+    { label: '✕ Close tab',          disabled: !canClose,          handler: () => closeTab(tab.id) },
+    { label: '✕ Close other tabs',   disabled: others.length === 0,
+      handler: () => { if (tab.id !== _activeTabId) switchTab(tab.id); [...others].forEach(t => closeTab(t.id, true)); _renderTabBar(); _save(); } },
+    { label: '✕ Close tabs to right',disabled: toRight.length === 0,
+      handler: () => { [...toRight].forEach(t => closeTab(t.id, true)); _renderTabBar(); _save(); } },
+  ];
+
+  for (const item of menuDef) {
+    if (item.divider) {
+      const hr = document.createElement('div');
+      hr.style.cssText = 'height:1px;background:var(--color-border);margin:var(--space-1) 0;';
+      menu.appendChild(hr); continue;
+    }
+    const btn = document.createElement('button');
+    btn.textContent = item.label;
+    btn.style.cssText = [
+      'display:block;width:100%;text-align:left;',
+      'padding:var(--space-1-5) var(--space-3);background:none;border:none;',
+      `color:${item.disabled ? 'var(--color-text-muted)' : 'var(--color-text)'};`,
+      `cursor:${item.disabled ? 'default' : 'pointer'};opacity:${item.disabled ? '0.45' : '1'};`,
+      'font-size:var(--text-sm);font-family:var(--font-body);transition:background var(--transition-fast);',
+    ].join('');
+    if (!item.disabled) {
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--color-surface)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'none'; });
+      btn.addEventListener('click', () => { _dismissContextMenu(); item.handler(); });
+    }
+    menu.appendChild(btn);
+  }
+
+  document.body.appendChild(menu);
+  requestAnimationFrame(() => {
+    const r = menu.getBoundingClientRect();
+    if (r.right  > window.innerWidth)  menu.style.left = `${window.innerWidth  - r.width  - 8}px`;
+    if (r.bottom > window.innerHeight) menu.style.top  = `${window.innerHeight - r.height - 8}px`;
+  });
+  const onDown = (e) => { if (!menu.contains(e.target)) _dismissContextMenu(); };
+  const onKey  = (e) => { if (e.key === 'Escape') _dismissContextMenu(); };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown',   onKey, { once: true });
+    menu._cleanup = () => { document.removeEventListener('mousedown', onDown); };
+  }, 0);
+}
+
 /** Drag state */
 let _dragTabId = null;
 
@@ -452,6 +530,13 @@ function _buildTabEl(tab) {
       e.preventDefault();
       closeTab(tab.id);
     }
+  });
+
+  // Right-click → context menu
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    _showTabContextMenu(tab, e.clientX, e.clientY);
   });
 
   // ── Drag to reorder ──

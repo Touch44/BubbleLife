@@ -2264,7 +2264,7 @@ async function _showRelationPicker(wrap, field) {
               fromType: _entity.type,
               toId:     newEnt.id,
               toType:   newEnt.type,
-              relation: field.key,
+              relation: _fieldKeyToRelLabel(field.key, field),
             }, getAccount()?.id);
             _renderRelationChips(wrap, field);
           });
@@ -2277,7 +2277,7 @@ async function _showRelationPicker(wrap, field) {
               fromType: _entity.type,
               toId:     newEnt.id,
               toType:   newEnt.type,
-              relation: field.key,
+              relation: _fieldKeyToRelLabel(field.key, field),
             }, getAccount()?.id);
             _renderRelationChips(wrap, field);
           });
@@ -2318,7 +2318,7 @@ async function _showRelationPicker(wrap, field) {
           fromType: _entity.type,
           toId:     candidate.id,
           toType:   candidate.type,
-          relation: field.key,
+          relation: _fieldKeyToRelLabel(field.key, field),
         }, getAccount()?.id);
         _renderRelationChips(wrap, field);
       });
@@ -2432,16 +2432,16 @@ async function _updateDailyReviewEdgesForDateChange(entity, dateFieldKey, oldDat
       const newDR = await _getOrCreateDailyReview(newDateStr);
       if (newDR) {
         // Check if edge already exists before creating
-        const existing = await getEdgesFrom(entity.id, 'in daily review')
-          .then(edges => edges.find(e => e.toId === newDR.id))
+        const existingContains = await getEdgesFrom(newDR.id, 'contains')
+          .then(edges => edges.find(e => e.toId === entity.id))
           .catch(() => null);
-        if (!existing) {
+        if (!existingContains) {
           await saveEdge({
-            fromId:   entity.id,
-            fromType: entity.type,
-            toId:     newDR.id,
-            toType:   'dailyReview',
-            relation: 'daily review',
+            fromId:   newDR.id,
+            fromType: 'dailyReview',
+            toId:     entity.id,
+            toType:   entity.type,
+            relation: 'contains',
           }, getAccount()?.id);
         }
         console.log('[entity-panel] linked', entity.id, '→ DR', newDateStr);
@@ -2518,8 +2518,14 @@ async function _ensureDailyLinks(entity) {
 
   if (datesToLink.size === 0) return;
 
-  const existingEdges = await getEdgesFrom(entity.id, 'in daily review');
-  const linkedIds = new Set(existingEdges.map(e => e.toId));
+  // Look up 'contains' edges from DR → entity (canonical direction)
+  // Also check old 'in daily review' edges for backward compat during migration
+  const _allDREdges = await (async () => {
+    const byOld = await getEdgesFrom(entity.id, 'in daily review').catch(() => []);
+    return byOld; // backward compat lookup; new edges go DR→entity
+  })();
+  // New canonical: check contains edges per DR below
+  const linkedIds = new Set(_allDREdges.map(e => e.toId));
 
   for (const dateStr of datesToLink) {
     // Skip if already ensured this entity+date pair in this session
@@ -2531,12 +2537,16 @@ async function _ensureDailyLinks(entity) {
         _dailyLinksEnsured.add(cacheKey); // mark even if already linked
         continue;
       }
+      // Check canonical 'contains' from DR→entity before creating
+      const drContainsAlready = await getEdgesFrom(dr.id, 'contains')
+        .then(es => es.some(e => e.toId === entity.id)).catch(() => false);
+      if (drContainsAlready) { _dailyLinksEnsured.add(cacheKey); continue; }
       await saveEdge({
-        fromId:   entity.id,
-        fromType: entity.type,
-        toId:     dr.id,
-        toType:   'dailyReview',
-        relation: 'daily review',
+        fromId:   dr.id,
+        fromType: 'dailyReview',
+        toId:     entity.id,
+        toType:   entity.type,
+        relation: 'contains',
       }, getAccount()?.id);
       _dailyLinksEnsured.add(cacheKey);
     } catch (err) {
@@ -2913,14 +2923,14 @@ async function _renderConnectionsList(container) {
     for (const item of items) {
       const relation = _humanRel(item.edge.relation);
       const dir      = item.direction === 'out' ? '→' : '←';
-      // Normalize direction+relation so same relation from both directions
-      // doesn't create two separate groups unnecessarily
-      const key      = `${dir} ${relation}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(item);
+      // Bug-30 fix: group by relation only, not direction+relation, so old 'assignedTo'
+      // and new 'assigned to' edges merge into the same group; direction shown per row.
+      const key      = relation;
+      if (!groups.has(key)) groups.set(key, { dir, items: [] });
+      groups.get(key).items.push(item);
     }
 
-    for (const [groupLabel, groupItems] of groups) {
+    for (const [groupLabel, { dir: groupDir, items: groupItems }] of groups) {
       const section = document.createElement('div');
       section.style.cssText = 'margin-bottom: var(--space-3);';
 
@@ -2933,7 +2943,7 @@ async function _renderConnectionsList(container) {
         display: flex; align-items: center; justify-content: space-between;
       `;
       header.innerHTML = `
-        <span>${_escHtml(groupLabel)}</span>
+        <span>${groupDir} ${_escHtml(groupLabel)}</span>
         <span style="font-weight:400; text-transform:none; letter-spacing:0;">${groupItems.length} item${groupItems.length !== 1 ? 's' : ''}</span>
       `;
       section.appendChild(header);
@@ -2988,9 +2998,10 @@ async function _renderConnectionsList(container) {
         });
 
         // Remove button
-        row.querySelector('.rel-remove-btn').addEventListener('click', async (e) => {
+        const removeBtn = row.querySelector('.rel-remove-btn');
+        removeBtn?.addEventListener('click', async (e) => {
           e.stopPropagation();
-          row.querySelector('.rel-remove-btn').style.color = 'var(--color-danger)';
+          if (removeBtn) removeBtn.style.color = 'var(--color-danger)';
           try {
             await deleteEdge(edge.id);
             row.style.opacity = '0';

@@ -72,7 +72,8 @@ export function emit(event, data) {
   const set = _listeners.get(event);
   if (!set || set.size === 0) return;
 
-  for (const handler of set) {
+  // Snapshot the set before iterating so handlers that unsubscribe don't corrupt iteration
+  for (const handler of [...set]) {
     try {
       handler(data);
     } catch (err) {

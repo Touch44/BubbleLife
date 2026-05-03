@@ -612,6 +612,7 @@ function _buildTopBar(container, dateStr) {
       <button class="btn-icon daily-next-btn" title="Next day" aria-label="Next day">›</button>
       <button class="btn btn-ghost btn-sm daily-today-btn" title="Go to today" aria-label="Go to today">Today</button>
       <div class="daily-quick-btns">
+        <button class="btn btn-ghost btn-sm daily-graph-btn" title="Open today's Daily Review in Knowledge Graph" aria-label="Open in graph">🕸️ Graph</button>
         <div class="daily-add-wrapper" style="position:relative;">
           <button class="btn btn-primary btn-sm daily-add-btn" aria-haspopup="true" aria-expanded="false">+ Add</button>
           <div class="daily-add-menu" role="menu" aria-label="Add entity to this day" hidden></div>
@@ -636,6 +637,19 @@ function _buildTopBar(container, dateStr) {
   bar.querySelector('.daily-today-btn').addEventListener('click', () => {
     _currentDate = _todayLocal();
     renderDaily({ _internal: true });
+  });
+
+  // [MAJOR] Graph button — opens Knowledge Graph focused on today's Daily Review entity
+  bar.querySelector('.daily-graph-btn').addEventListener('click', async () => {
+    const dateStr = _toDateStr(_currentDate);
+    const dr = await _getOrCreateDailyReview(dateStr);
+    if (dr?.id) {
+      // Navigate to graph view with this daily review as the focus entity
+      import('../core/router.js').then(({ navigate, VIEW_KEYS }) => {
+        navigate(VIEW_KEYS.GRAPH || 'graph', { focusEntityId: dr.id },
+          `Graph — Daily Review ${dateStr}`);
+      });
+    }
   });
 
   // Dim "Today" button when already viewing today
@@ -1375,8 +1389,8 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
     const assigneeName = resolvedAssigneeId ? (personMap.get(resolvedAssigneeId) || null) : null;
 
     // Checklist progress — visual bar matching kanban K-02 style
-    const cl = Array.isArray(task.checklist) ? task.checklist : [];
-    const clDone = Array.isArray(cl) ? cl.filter(i => i.done) : [].length;
+    const cl     = Array.isArray(task.checklist) ? task.checklist : [];
+    const clDone = cl.filter(i => i.done).length;
     const clPct  = cl.length ? Math.round((clDone / cl.length) * 100) : 0;
     const clComplete = cl.length > 0 && clDone === cl.length;
     const clHtml = cl.length
@@ -2384,6 +2398,9 @@ async function renderDaily(params = {}) {
   const viewEl = document.getElementById('view-daily');
   if (!viewEl) return;
 
+  // Bug-91 fix: generation guard — rapid navigation cancels stale in-flight renders
+  const myGen = ++_renderGeneration;
+
   _injectStyles();
 
   // Compute date string for the current date
@@ -2402,6 +2419,9 @@ async function renderDaily(params = {}) {
             personMap, projectMap, accountMap, allComments,
             taskProjectEdgeMap, taskAssigneeEdgeMap } =
       await _loadData(dateStr);
+
+    // Bug-91: bail if a newer render was started while we were loading
+    if (myGen !== _renderGeneration) return;
 
     // ── Sync Daily Review entity + bidirectional links (non-blocking) ─
     // Run in background — don't let link errors break the render

@@ -83,19 +83,17 @@ self.addEventListener('activate', event => {
   );
 });
 
-// FETCH: Cache-First for shell, Network-First(3s) for dynamic
-// NOTE: shell CSS is cache-first — bust cache by bumping APP_VERSION on every deploy
+// FETCH: Network-First for ALL assets.
+// Shell files go through network-first too so deploys take effect without waiting for SW update.
+// Falls back to cache on network failure (offline support preserved).
 self.addEventListener('fetch', event => {
   const req = event.request;
   if (req.method !== 'GET') return;
   if (NETWORK_ONLY.some(p => p.test(req.url))) { event.respondWith(fetch(req)); return; }
   if (!req.url.startsWith(self.location.origin)) return;
 
-  if (_isShellFile(req.url) || req.mode === 'navigate') {
-    event.respondWith(_cacheFirst(req));
-  } else {
-    event.respondWith(_networkFirst(req, 3000));
-  }
+  // Network-first for everything — navigate, JS, CSS, images
+  event.respondWith(_networkFirst(req, 4000));
 });
 
 async function _cacheFirst(req) {

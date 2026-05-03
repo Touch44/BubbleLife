@@ -678,6 +678,7 @@ function _buildCard(task) {
 
   // ── Drag start ──
   card.addEventListener('dragstart', (e) => {
+    if (!task.id) { e.preventDefault(); return; } // Bug-70: guard missing id
     _dragTaskId = task.id;
     _dragEl     = card;
     card.classList.add('kanban-card-dragging');

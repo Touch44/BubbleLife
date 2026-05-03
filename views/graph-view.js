@@ -468,7 +468,6 @@ async function renderGraph(params = {}) {
   _graphEl = document.getElementById('view-graph');
   if (!_graphEl) return;
 
-  // Determine initial active types — restore user's previous selection if any
   const allVisibleTypes = _savedTypeSet || getAllGraphVisibleTypes();
 
   // On first mount build the full UI; on subsequent calls just refresh the graph
@@ -476,10 +475,8 @@ async function renderGraph(params = {}) {
     _graphEl.innerHTML = '';
     _mounted = false;
 
-    // Toolbar
     _buildToolbar(_graphEl, allVisibleTypes);
 
-    // Canvas wrap
     const canvasWrap = document.createElement('div');
     canvasWrap.className = 'gv-canvas-wrap';
     canvasWrap.id = 'gv-canvas-wrap';
@@ -488,7 +485,6 @@ async function renderGraph(params = {}) {
     _canvasEl.id = 'gv-canvas';
     canvasWrap.appendChild(_canvasEl);
 
-    // Empty state (shown by graph-canvas when no nodes)
     const emptyEl = document.createElement('div');
     emptyEl.className = 'gv-empty';
     emptyEl.id = 'gv-empty';
@@ -498,19 +494,32 @@ async function renderGraph(params = {}) {
       <div style="font-size:var(--text-xs);">Try switching context or adding entities first.</div>
     `;
     canvasWrap.appendChild(emptyEl);
-
     _graphEl.appendChild(canvasWrap);
 
     try {
-      await initGraph(_canvasEl, { activeTypes: allVisibleTypes });
+      await initGraph(_canvasEl, {
+        activeTypes:    allVisibleTypes,
+        // [MAJOR] Pass focusEntityId so graph opens in focus mode on this entity
+        focusEntityId:  params.focusEntityId || null,
+      });
       _mounted = true;
-      // Hide empty state if nodes loaded
       _updateEmptyState();
+
+      // [MAJOR] If launched from Daily Review, set focus after graph is ready
+      if (params.focusEntityId) {
+        try {
+          await setFocusId(params.focusEntityId);
+          // Update toolbar title to reflect the focused entity
+          const titleEl = _graphEl.querySelector('.gv-focus-label');
+          if (titleEl) titleEl.textContent = params.focusLabel || 'Focus Mode';
+        } catch (err) {
+          console.warn('[graph-view] setFocusId from params failed:', err);
+        }
+      }
     } catch (err) {
       console.error('[graph-view] initGraph failed:', err);
     }
   } else {
-    // Internal re-render (context change) — just rebuild the graph data
     try {
       await refreshGraph();
       _updateEmptyState();

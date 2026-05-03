@@ -205,7 +205,13 @@ function _renderDetail() {
   if (_rawBody) {
     const _dp = new DOMParser();
     const _doc = _dp.parseFromString(_rawBody, 'text/html');
-    _doc.querySelectorAll('script,iframe,object,embed').forEach(el => el.remove());
+    _doc.querySelectorAll('script,iframe,object,embed,link[rel="import"]').forEach(el => el.remove());
+    // Strip inline event handlers from all elements to prevent XSS
+    _doc.querySelectorAll('*').forEach(el => {
+      for (const attr of [...el.attributes]) {
+        if (attr.name.startsWith('on')) el.removeAttribute(attr.name);
+      }
+    });
     // bodyEditor renders stored HTML — users own their content
     bodyEditor.innerHTML = _doc.body ? _doc.body.innerHTML : '';
   } else {
