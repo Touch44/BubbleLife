@@ -679,15 +679,21 @@ export function wireNavItems() {
     navItemEl._dotsInjected = true;
 
     const btn = document.createElement('button');
+    btn.type      = 'button';
     btn.className = 'nav-item-dots';
     btn.textContent = '⋮';
-    btn.setAttribute('aria-label', `Open in new tab`);
+    btn.setAttribute('aria-label', 'Open in new tab');
     btn.title = 'Open in new tab';
 
     btn.addEventListener('click', (e) => {
-      e.stopPropagation(); // don't trigger the nav-item click handler
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
       const { view, params, label } = _navItemData(navItemEl);
-      _openTabFn(view, params, label || _resolveLabel(view, params));
+      if (!view) return;
+      const resolvedLabel = label || _resolveLabel(view, params);
+      console.log('[nav-dots] Opening in new tab:', view, params, resolvedLabel);
+      _openTabFn(view, params, resolvedLabel);
     });
 
     navItemEl.appendChild(btn);
