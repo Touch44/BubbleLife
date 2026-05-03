@@ -675,29 +675,123 @@ export function wireNavItems() {
   // Shows on hover; click opens the item in a new tab.
   // Works for static items and dynamically-added custom type items.
   function _injectDotsButton(navItemEl) {
-    if (navItemEl._dotsInjected) return; // idempotent
+    if (navItemEl._dotsInjected) return;
     navItemEl._dotsInjected = true;
 
     const btn = document.createElement('button');
-    btn.type      = 'button';
-    btn.className = 'nav-item-dots';
+    btn.type        = 'button';
+    btn.className   = 'nav-item-dots';
     btn.textContent = '⋮';
-    btn.setAttribute('aria-label', 'Open in new tab');
-    btn.title = 'Open in new tab';
+    btn.setAttribute('aria-label', 'View options');
+    btn.title = 'Options';
 
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const { view, params, label } = _navItemData(navItemEl);
-      if (!view) return;
-      const resolvedLabel = label || _resolveLabel(view, params);
-      console.log('[nav-dots] Opening in new tab:', view, params, resolvedLabel);
-      _openTabFn(view, params, resolvedLabel);
+      const rect = btn.getBoundingClientRect();
+      _showNavContextMenu(navItemEl, rect.left, rect.bottom + 2);
     });
 
     navItemEl.appendChild(btn);
   }
+
+  /** Context menu shown when a sidebar nav item's ⋮ is clicked. */
+  function _showNavContextMenu(navItemEl, x, y) {
+    // Dismiss any existing menu
+    const old = document.getElementById('_fh-nav-ctx-menu');
+    if (old) { old._cleanup?.(); old.remove(); }
+
+    const { view, params, label } = _navItemData(navItemEl);
+    if (!view) return;
+
+    const resolvedLabel = label || _resolveLabel(view, params);
+
+    const menu = document.createElement('div');
+    menu.id        = '_fh-nav-ctx-menu';
+    menu.className = 'tab-ctx-menu';  // reuse same styles as tab context menu
+    menu.style.cssText = [
+      'position:fixed;z-index:var(--z-modal);',
+      `left:${x}px;top:${y}px;`,
+      'background:var(--color-bg);border:1px solid var(--color-border);',
+      'border-radius:var(--radius-md);box-shadow:var(--shadow-lg);',
+      'padding:var(--space-1) 0;min-width:200px;',
+    ].join('');
+
+    // Menu header — shows which item this is for
+    const header = document.createElement('div');
+    header.style.cssText = [
+      'padding:var(--space-1) var(--space-3) var(--space-1-5);',
+      'font-size:var(--text-xs);font-weight:var(--weight-semibold);',
+      'color:var(--color-text-muted);border-bottom:1px solid var(--color-border);',
+      'margin-bottom:var(--space-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+    ].join('');
+    header.textContent = resolvedLabel;
+    menu.appendChild(header);
+
+    const menuItems = [
+      {
+        label: '🗂️ Open in new tab',
+        detail: 'Focus existing tab if already open',
+        handler: () => {
+          // forceNew=false: dedup — focus existing tab with same view, else open new
+          _openTabFn(view, params, resolvedLabel, false);
+        },
+      },
+    ];
+
+    for (const item of menuItems) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.style.cssText = [
+        'display:flex;flex-direction:column;align-items:flex-start;',
+        'width:100%;text-align:left;padding:var(--space-2) var(--space-3);',
+        'background:none;border:none;cursor:pointer;',
+        'color:var(--color-text);font-family:var(--font-body);',
+        'transition:background var(--transition-fast);',
+      ].join('');
+
+      const labelEl = document.createElement('span');
+      labelEl.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-medium);';
+      labelEl.textContent = item.label;
+      btn.appendChild(labelEl);
+
+      if (item.detail) {
+        const detailEl = document.createElement('span');
+        detailEl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);margin-top:1px;';
+        detailEl.textContent = item.detail;
+        btn.appendChild(detailEl);
+      }
+
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--color-surface)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'none'; });
+      btn.addEventListener('click', () => { _dismissNavMenu(); item.handler(); });
+      menu.appendChild(btn);
+    }
+
+    document.body.appendChild(menu);
+
+    // Clamp to viewport
+    requestAnimationFrame(() => {
+      const r = menu.getBoundingClientRect();
+      if (r.right  > window.innerWidth)  menu.style.left = `${window.innerWidth  - r.width  - 8}px`;
+      if (r.bottom > window.innerHeight) menu.style.top  = `${window.innerHeight - r.height - 8}px`;
+    });
+
+    // Dismiss on outside click or Escape
+    const onDown = (e) => { if (!menu.contains(e.target)) _dismissNavMenu(); };
+    const onKey  = (e) => { if (e.key === 'Escape') _dismissNavMenu(); };
+    setTimeout(() => {
+      document.addEventListener('mousedown', onDown);
+      document.addEventListener('keydown',   onKey, { once: true });
+      menu._cleanup = () => { document.removeEventListener('mousedown', onDown); };
+    }, 0);
+  }
+
+  function _dismissNavMenu() {
+    const m = document.getElementById('_fh-nav-ctx-menu');
+    if (m) { m._cleanup?.(); m.remove(); }
+  }}}
 
   // Inject into all current nav items
   nav.querySelectorAll('.nav-item[data-view]').forEach(_injectDotsButton);
