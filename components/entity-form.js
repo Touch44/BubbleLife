@@ -1696,7 +1696,7 @@ function _buildRelationControl(field, config) {
         padding: var(--space-2) var(--space-3); cursor: pointer;
         font-size: var(--text-sm); transition: background var(--transition-fast);
       `;
-      item.innerHTML = `<span>${cfg?.icon || '📎'}</span><span>${title}</span>`;
+      item.innerHTML = `<span>${cfg?.icon || '📎'}</span><span>${_esc(title)}</span>`;
       item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
       item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
       item.addEventListener('mousedown', (e) => {

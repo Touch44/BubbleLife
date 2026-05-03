@@ -723,7 +723,7 @@ function _showStateDotPopover(dotEl, task) {
     const btn = document.createElement('button');
     btn.className = `kanban-state-option ${state.key === task.kanban_state ? 'kanban-state-option--active' : ''}`;
     btn.setAttribute('role', 'menuitem');
-    btn.innerHTML = `<span class="kanban-state-option-dot" style="background:${state.color}"></span>${state.label}`;
+    btn.innerHTML = `<span class="kanban-state-option-dot" style="background:${state.color}"></span>${_esc(state.label)}`;
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       popover.remove();
