@@ -188,14 +188,18 @@ export function navigate(viewKeyOrAction, params = {}, label, replace = false) {
       _paramsKey(cur.params) === _paramsKey(entry.params);
 
     if (isSameView) {
-      // Replace in-place — update label in case it changed (e.g. date-enriched label)
+      // Replace in-place — update label only; view already rendered with these params
       _history[_cursor] = entry;
+      // _skipApplyView already false — keep it false so _applyView runs on param changes.
+      // When params are identical the view is idempotent so a re-render is harmless.
     } else {
       // Truncate forward history, then push
       _history = _history.slice(0, _cursor + 1);
       _history.push(entry);
-    // Cap history to prevent memory leak on long sessions
-    if (_history.length > 100) _history.shift();
+      // Cap history to prevent memory leak on long sessions
+      // [minor] Bug 2 fix: shift() removes element at index 0 — cursor must be decremented
+      // to keep pointing at the same entry (now at index cursor-1 after shift).
+      if (_history.length > 100) { _history.shift(); _cursor = Math.max(0, _cursor - 1); }
       _cursor = _history.length - 1;
     }
   }
@@ -504,8 +508,12 @@ function _parseHash(hash) {
   if (hash.startsWith('view=')) {
     const params = {};
     for (const part of hash.split('&')) {
-      const [k, v] = part.split('=').map(decodeURIComponent);
-      if (k) params[k] = v ?? '';
+      // [minor] Bug 19 fix: split only on the FIRST '=' so values containing '=' are preserved
+      const eqIdx = part.indexOf('=');
+      if (eqIdx === -1) continue;
+      const k = decodeURIComponent(part.slice(0, eqIdx));
+      const v = decodeURIComponent(part.slice(eqIdx + 1));
+      if (k) params[k] = v;
     }
     const { view, ...rest } = params;
     return view ? { viewKey: view, params: rest } : null;
@@ -608,10 +616,11 @@ function _capitalise(str) {
  */
 function _paramsKey(params) {
   if (!params) return '';
-  // Include date (daily), entityType (entity-type) — the fields that make
-  // two navigations to the same viewKey genuinely distinct.
-  const { date, entityType } = params;
-  return JSON.stringify({ date: date || null, entityType: entityType || null });
+  // [minor] Bug 5 fix: include all non-ephemeral params so that two navigations
+  // to the same viewKey with different params (e.g. highlightId, focusEntityId)
+  // are correctly treated as distinct history entries.
+  const { _internal, ...rest } = params;
+  return JSON.stringify(rest, Object.keys(rest).sort());
 }
 
 // ── Hash-Based Deep Linking ───────────────────────────────── //
@@ -675,122 +684,28 @@ export function wireNavItems() {
   // Shows on hover; click opens the item in a new tab.
   // Works for static items and dynamically-added custom type items.
   function _injectDotsButton(navItemEl) {
-    if (navItemEl._dotsInjected) return;
+    if (navItemEl._dotsInjected) return; // idempotent
     navItemEl._dotsInjected = true;
 
     const btn = document.createElement('button');
-    btn.type        = 'button';
-    btn.className   = 'nav-item-dots';
+    btn.type      = 'button';
+    btn.className = 'nav-item-dots';
     btn.textContent = '⋮';
-    btn.setAttribute('aria-label', 'View options');
-    btn.title = 'Options';
+    btn.setAttribute('aria-label', 'Open in new tab');
+    btn.title = 'Open in new tab';
 
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const rect = btn.getBoundingClientRect();
-      _showNavContextMenu(navItemEl, rect.left, rect.bottom + 2);
+      const { view, params, label } = _navItemData(navItemEl);
+      if (!view) return;
+      const resolvedLabel = label || _resolveLabel(view, params);
+      console.log('[nav-dots] Opening in new tab:', view, params, resolvedLabel);
+      _openTabFn(view, params, resolvedLabel);
     });
 
     navItemEl.appendChild(btn);
-  }
-
-  /** Context menu shown when a sidebar nav item's ⋮ is clicked. */
-  function _showNavContextMenu(navItemEl, x, y) {
-    // Dismiss any existing menu
-    const old = document.getElementById('_fh-nav-ctx-menu');
-    if (old) { old._cleanup?.(); old.remove(); }
-
-    const { view, params, label } = _navItemData(navItemEl);
-    if (!view) return;
-
-    const resolvedLabel = label || _resolveLabel(view, params);
-
-    const menu = document.createElement('div');
-    menu.id        = '_fh-nav-ctx-menu';
-    menu.className = 'tab-ctx-menu';  // reuse same styles as tab context menu
-    menu.style.cssText = [
-      'position:fixed;z-index:var(--z-modal);',
-      `left:${x}px;top:${y}px;`,
-      'background:var(--color-bg);border:1px solid var(--color-border);',
-      'border-radius:var(--radius-md);box-shadow:var(--shadow-lg);',
-      'padding:var(--space-1) 0;min-width:200px;',
-    ].join('');
-
-    // Menu header — shows which item this is for
-    const header = document.createElement('div');
-    header.style.cssText = [
-      'padding:var(--space-1) var(--space-3) var(--space-1-5);',
-      'font-size:var(--text-xs);font-weight:var(--weight-semibold);',
-      'color:var(--color-text-muted);border-bottom:1px solid var(--color-border);',
-      'margin-bottom:var(--space-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
-    ].join('');
-    header.textContent = resolvedLabel;
-    menu.appendChild(header);
-
-    const menuItems = [
-      {
-        label: '🗂️ Open in new tab',
-        detail: 'Focus existing tab if already open',
-        handler: () => {
-          // forceNew=false: dedup — focus existing tab with same view, else open new
-          _openTabFn(view, params, resolvedLabel, false);
-        },
-      },
-    ];
-
-    for (const item of menuItems) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.style.cssText = [
-        'display:flex;flex-direction:column;align-items:flex-start;',
-        'width:100%;text-align:left;padding:var(--space-2) var(--space-3);',
-        'background:none;border:none;cursor:pointer;',
-        'color:var(--color-text);font-family:var(--font-body);',
-        'transition:background var(--transition-fast);',
-      ].join('');
-
-      const labelEl = document.createElement('span');
-      labelEl.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-medium);';
-      labelEl.textContent = item.label;
-      btn.appendChild(labelEl);
-
-      if (item.detail) {
-        const detailEl = document.createElement('span');
-        detailEl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);margin-top:1px;';
-        detailEl.textContent = item.detail;
-        btn.appendChild(detailEl);
-      }
-
-      btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--color-surface)'; });
-      btn.addEventListener('mouseleave', () => { btn.style.background = 'none'; });
-      btn.addEventListener('click', () => { _dismissNavMenu(); item.handler(); });
-      menu.appendChild(btn);
-    }
-
-    document.body.appendChild(menu);
-
-    // Clamp to viewport
-    requestAnimationFrame(() => {
-      const r = menu.getBoundingClientRect();
-      if (r.right  > window.innerWidth)  menu.style.left = `${window.innerWidth  - r.width  - 8}px`;
-      if (r.bottom > window.innerHeight) menu.style.top  = `${window.innerHeight - r.height - 8}px`;
-    });
-
-    // Dismiss on outside click or Escape
-    const onDown = (e) => { if (!menu.contains(e.target)) _dismissNavMenu(); };
-    const onKey  = (e) => { if (e.key === 'Escape') _dismissNavMenu(); };
-    setTimeout(() => {
-      document.addEventListener('mousedown', onDown);
-      document.addEventListener('keydown',   onKey, { once: true });
-      menu._cleanup = () => { document.removeEventListener('mousedown', onDown); };
-    }, 0);
-  }
-
-  function _dismissNavMenu() {
-    const m = document.getElementById('_fh-nav-ctx-menu');
-    if (m) { m._cleanup?.(); m.remove(); }
   }
 
   // Inject into all current nav items
@@ -851,8 +766,8 @@ export function wireNavItems() {
 
   // Also wire sidebar-footer nav items (Settings) via delegation on the footer
   const footer = document.querySelector('.sidebar-footer');
-  if (footer && !footer._delegated) {
-    footer._delegated = true;
+  if (footer && !footer._fhFooterDelegated) {
+    footer._fhFooterDelegated = true;
 
     // Inject dots into footer items too
     footer.querySelectorAll('.nav-item[data-view]').forEach(_injectDotsButton);

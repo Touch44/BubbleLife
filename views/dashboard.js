@@ -29,10 +29,9 @@
 
 import { registerView, navigate, VIEW_KEYS } from '../core/router.js';
 import { getEntitiesByType, saveEntity }      from '../core/db.js';
-import { on, EVENTS }                         from '../core/events.js';
-import { getAccount }                         from '../core/auth.js';
+import { on, emit, EVENTS }                   from '../core/events.js';
 import { getActiveContext, filterByContext }  from '../core/context.js';
-import { openPanel }                          from '../components/entity-panel.js';
+import { getAccount }                         from '../core/auth.js';
 import { openForm }                           from '../components/entity-form.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -1030,7 +1029,7 @@ function _populateMembersWidget(el, persons) {
   }).join('');
 
   strip.querySelectorAll('.dash-avatar-chip').forEach(chip => {
-    chip.addEventListener('click', () => openPanel(chip.dataset.personId));
+    chip.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityId: chip.dataset.personId }));
   });
 }
 
@@ -1114,7 +1113,7 @@ function _populateProjectsWidget(el, projects) {
   }).join('');
 
   list.querySelectorAll('.dash-widget-row').forEach(row => {
-    row.addEventListener('click', () => openPanel(row.dataset.projId));
+    row.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityId: row.dataset.projId }));
   });
 }
 
@@ -1185,7 +1184,7 @@ function _populateNotesWidget(el, notes) {
   }).join('');
 
   list.querySelectorAll('.dash-widget-row').forEach(row => {
-    row.addEventListener('click', () => openPanel(row.dataset.noteId));
+    row.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityId: row.dataset.noteId }));
   });
 }
 

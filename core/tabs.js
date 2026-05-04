@@ -1,5 +1,5 @@
 /**
- * FamilyHub v4.3 — core/tabs.js
+ * FamilyHub v4.4 — core/tabs.js
  * [MAJOR] Tab system — multi-view tab bar with persistence, drag-to-reorder,
  * and deep router integration.
  *
@@ -84,8 +84,9 @@ function _getIcon(viewKey, entityType) {
 
 function _paramsKey(params) {
   if (!params) return '';
-  const { date, entityType } = params;
-  return JSON.stringify({ date: date || null, entityType: entityType || null });
+  // [minor] Include all non-ephemeral params for correct tab deduplication
+  const { _internal, ...rest } = params;
+  return JSON.stringify(rest, Object.keys(rest).sort());
 }
 
 function _makeTab(viewKey, params = {}, label = '') {
@@ -281,11 +282,10 @@ export function initTabs({ navigate, getCurrentView }) {
     _activeTabId = tab.id;
   }
 
-  _renderTabBar();
-  console.log('[tabs] Initialised —', _tabs.length, 'tab(s) restored.');
-
-  // Apply any pending updateActiveTab() call that arrived before initTabs ran
-  // (auth calls navigate() → updateActiveTab() fires before initTabs is ready)
+  // Apply any pending updateActiveTab() call that arrived before initTabs ran.
+  // Done BEFORE the first _renderTabBar() so the first DOM paint already shows the
+  // correct label/icon — no double-render or flash.
+  // (auth.js calls navigate() → router calls updateActiveTab() before initTabs is ready)
   if (_pendingUpdate) {
     const tab = getActiveTab();
     if (tab) {
@@ -293,21 +293,23 @@ export function initTabs({ navigate, getCurrentView }) {
       tab.params  = _pendingUpdate.params;
       tab.label   = _pendingUpdate.label;
       tab.icon    = _getIcon(_pendingUpdate.viewKey, _pendingUpdate.params?.entityType);
-      _renderTabBar();
-      _save();
     }
     _pendingUpdate = null;
   }
+
+  _renderTabBar(); // [minor] first render — pending update already applied above
+  _save();
+  console.log('[tabs] Initialised —', _tabs.length, 'tab(s) restored.');
 
   // ── Init sync: intercept the first VIEW_CHANGED fired by auth._showApp() ──
   // auth.js calls navigate() asynchronously, so we can't rely on getCurrentView()
   // being populated when initTabs runs. We listen for the first VIEW_CHANGED to:
   //   a) Restore stored tab view (if stored & no hash override), OR
   //   b) Sync the placeholder tab to whatever auth navigated to.
+  const _hadStoredTabs = !!(saved?.tabs?.length); // [minor] Bug 17 fix: capture at init time
   let _syncDone = false;
   const _unsub  = on(EVENTS.VIEW_CHANGED, ({ viewKey, params, label }) => {
     if (_syncDone) {
-      // Subsequent navigates: just keep active tab in sync (done by router calling updateActiveTab)
       return;
     }
     _syncDone = true;
@@ -316,7 +318,7 @@ export function initTabs({ navigate, getCurrentView }) {
     const hasHash = !!window.location.hash.slice(1);
     const active  = getActiveTab();
 
-    if (saved?.tabs?.length && !hasHash && active) {
+    if (_hadStoredTabs && !hasHash && active) {
       // Stored state exists and no URL hash override — restore stored view
       if (active.viewKey !== viewKey ||
           _paramsKey(active.params) !== _paramsKey(params || {})) {
@@ -363,16 +365,16 @@ function _wireKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl/Cmd+[ — previous tab
-    if (mod && (e.key === '[' || e.key === 'ArrowLeft') && e.altKey) {
+    // Alt+[ — previous tab
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === '[' || e.key === 'ArrowLeft')) {
       e.preventDefault();
       const idx = _tabs.findIndex(t => t.id === _activeTabId);
       if (idx > 0) switchTab(_tabs[idx - 1].id);
       return;
     }
 
-    // Ctrl/Cmd+] — next tab
-    if (mod && (e.key === ']' || e.key === 'ArrowRight') && e.altKey) {
+    // Alt+] — next tab
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === ']' || e.key === 'ArrowRight')) {
       e.preventDefault();
       const idx = _tabs.findIndex(t => t.id === _activeTabId);
       if (idx < _tabs.length - 1) switchTab(_tabs[idx + 1].id);

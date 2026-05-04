@@ -261,10 +261,20 @@ function _sortTasks(tasks, dateStr) {
 }
 
 /**
- * Filter events: date field (ISO datetime) falls on the given dateStr.
+ * Filter events: today falls within the event's date range.
+ * Checks start date ≤ today ≤ endDate (or just start = today for single-day events).
+ * [minor] Bug 12 fix: multi-day events now appear on every day they span.
  */
 function _filterEvents(events, dateStr) {
-  return events.filter(e => _isoToLocalDate(e.date) === dateStr);
+  return events.filter(e => {
+    const start = _isoToLocalDate(e.date);
+    if (!start) return false;
+    if (start === dateStr) return true;
+    // Multi-day: check if dateStr falls within [start, endDate]
+    const end = _isoToLocalDate(e.endDate);
+    if (!end) return false;
+    return start <= dateStr && dateStr <= end;
+  });
 }
 
 /**
@@ -442,6 +452,10 @@ async function _syncDailyReviewLinks(dateStr, data) {
     for (const c of (data.allComments || []).filter(c =>
       _isoToLocalDate(c.createdAt) === dateStr
     )) {
+      // [minor] Bug 6 fix: use actual entity type for toType.
+      // For legacy note-comments (type:'note', category:'Comment'), toType must be 'note'
+      // to match what getEdgesFrom returns, but _loadDRLinkedNotes filters category=Comment
+      // so they correctly appear only in Comments section, not Notes section.
       await _linkToDailyReview(dr.id, c.id, c.type || 'note', linkedSet);
       linkedSet.add(c.id);
     }
@@ -568,10 +582,13 @@ async function _createAndLink(entityType, dateStr, prefill = {}) {
   }, 5 * 60 * 1000);
 
   const unsub = on(EVENTS.ENTITY_SAVED, async ({ entity }) => {
-    // Must match type AND be newly created (createdAt after we opened the form)
+    // Must match type AND be newly created (createdAt strictly after we opened the form)
     if (entity?.type !== entityType) return;
     const entityTime = entity.createdAt ? new Date(entity.createdAt).getTime() : 0;
-    if (entityTime < listenFrom - 1000) return; // not the one we're waiting for
+    // [minor] Bug 15 fix: removed the 1-second backward tolerance that caused wrong
+    // entity linking when the user had a same-type entity save in-flight.
+    // Only accept entities created at or after listenFrom.
+    if (entityTime < listenFrom) return;
 
     // It's ours — detach and cancel timer
     unsub();
@@ -1536,7 +1553,24 @@ function _renderEvents(container, dateStr, events) {
  * Rows are clickable to open the referenced entity.
  */
 async function _renderActivityLog(container, dateStr, auditLog, accountMap) {
-  const filtered = _filterAuditLog(auditLog, dateStr)
+  // [minor] Merge db auditLog (entity CRUD, field: .at) with auth.auditLog
+  // (auth events, field: .timestamp). Normalise all entries to use .at.
+  let merged = [...(auditLog || [])];
+  try {
+    const authData = await import('../core/db.js').then(m => m.getSetting('auth'));
+    const authLog  = authData?.auditLog || [];
+    // Normalise auth entries: .timestamp → .at
+    for (const entry of authLog) {
+      if (!entry.at && entry.timestamp) {
+        merged.push({ ...entry, at: entry.timestamp });
+      } else if (entry.at) {
+        merged.push(entry);
+      }
+    }
+  } catch { /* auth log unavailable — use entity log only */ }
+
+  const filtered = merged
+    .filter(entry => _isoToLocalDate(entry.at) === dateStr)
     .slice(-50)
     .reverse();
   const { wrapper, body } = _buildSection('activity', '📋', 'Activity Log', filtered.length);
@@ -1671,6 +1705,9 @@ function _renderBirthdays(container, dateEntities) {
     // Calculate age/year if date has year info
     const yearStr = de.date ? de.date.slice(0, 4) : null;
     const year    = yearStr ? parseInt(yearStr, 10) : null;
+    // [minor] Bug 16 fix: only count this year's birthday if it has already occurred
+    // (month+day ≤ today). Since we're showing exactly today's month+day, the birthday
+    // IS today, so the age is simply currentYear - birthYear.
     const age     = year ? _currentDate.getFullYear() - year : null;
 
     const row = document.createElement('div');
@@ -1756,7 +1793,7 @@ function _renderWallPosts(container, dateStr, posts, personMap, accountMap) {
     const postType = post.postType || 'Text';
     const typeIcons = { Text: '💬', Photo: '📷', File: '📎', Link: '🔗', Milestone: '🏆' };
     const icon = typeIcons[postType] || '💬';
-    const snippet = (post.body || '').slice(0, 80) + ((post.body || '').length > 80 ? '…' : '');
+    const snippet = _stripHtml(post.body || '').slice(0, 80) + (_stripHtml(post.body || '').length > 80 ? '…' : '');
 
     const row = document.createElement('div');
     row.className = 'daily-wall-row';
@@ -1807,7 +1844,7 @@ function _renderComments(container, dateStr, notes, personMap, accountMap) {
     const authorName = authorId
       ? (personMap.get(authorId) || accountMap.get(authorId) || comment._authorName || 'Unknown')
       : (comment._authorName || 'Unknown');
-    const text = comment.body || comment.title || '';
+    const text = _stripHtml(comment.body || comment.title || '');
     const snippet = text.slice(0, 100) + (text.length > 100 ? '…' : '');
 
     const row = document.createElement('div');
@@ -1855,10 +1892,18 @@ function _firstInitial(name) {
   return (name || '').charAt(0).toUpperCase();
 }
 
-/** Human-readable action label */
+/** Human-readable action label — keys match db.js _appendAuditLog action strings */
 function _formatAction(action) {
-  const map = { create: 'Created', update: 'Updated', delete: 'Deleted',
-                link: 'Linked', unlink: 'Unlinked', LOGIN: 'Login', LOGOUT: 'Logout' };
+  const map = {
+    // db.js entity/edge audit actions (lowercase)
+    create: 'Created', update: 'Updated', delete: 'Deleted',
+    link:   'Linked',  unlink: 'Unlinked',
+    // auth.js audit actions (UPPERCASE)
+    LOGIN: 'Login', LOGOUT: 'Logout', FIRST_RUN: 'First Run',
+    DEFAULT_ADMIN_SEEDED: 'Setup', INVITE_CREATED: 'Invite Created',
+    INVITE_REDEEMED: 'Invite Redeemed', INVITE_REVOKED: 'Invite Revoked',
+    ACCOUNT_UPDATED: 'Account Updated', ACCOUNT_LOCKED: 'Account Locked',
+  };
   return map[action] || action || '?';
 }
 
@@ -2423,12 +2468,12 @@ async function renderDaily(params = {}) {
     // Bug-91: bail if a newer render was started while we were loading
     if (myGen !== _renderGeneration) return;
 
-    // ── Sync Daily Review entity + bidirectional links (non-blocking) ─
-    // Run in background — don't let link errors break the render
-    _syncDailyReviewLinks(dateStr, {
+    // ── Sync Daily Review entity + bidirectional links ────────
+    // [minor] Bug 13 fix: await sync so _loadDRLinkedNotes() in _renderDailyNotes
+    // sees freshly-linked edges. Errors are caught and non-fatal.
+    await _syncDailyReviewLinks(dateStr, {
       tasks, events, notes, posts, appointments, dateEntities, mealPlans, allComments,
     }).catch(err => console.warn('[daily] Daily Review sync error (non-fatal):', err));
-    // Edge maps are local to renderDaily — not passed to sync (sync only uses entity IDs)
 
     // Clear and rebuild
     viewEl.innerHTML = '';

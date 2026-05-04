@@ -2014,7 +2014,7 @@ async function _renderRelationChips(wrap, field) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
     chip.style.cssText = 'cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-1);';
-    chip.innerHTML = `<span>${linkedConfig?.icon || '📎'}</span> <span>${_escHtml(_getDisplayTitle(linked))}</span>`;
+    chip.innerHTML = `<span>${linkedConfig?.icon || '📎'}</span> <span>${_getDisplayTitle(linked)}</span>`;
 
     // Click to navigate — smart: dailyReview → exact date, task → kanban+panel
     chip.addEventListener('click', () => {
@@ -2193,7 +2193,7 @@ async function _showRelationPicker(wrap, field) {
       chip.className = 'tag-chip';
       chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
       const cfg = getEntityTypeConfig(linked.type);
-      chip.innerHTML = `<span>${cfg?.icon || '📎'}</span><span>${_escHtml(_getDisplayTitle(linked))}</span>`;
+      chip.innerHTML = `<span>${cfg?.icon || '📎'}</span><span>${_getDisplayTitle(linked)}</span>`;
       const rm = document.createElement('span');
       rm.textContent = '×';
       rm.style.cssText = 'cursor:pointer;font-weight:bold;color:var(--color-text-muted);margin-left:2px;';
@@ -2306,7 +2306,7 @@ async function _showRelationPicker(wrap, field) {
         cursor: pointer; font-size: var(--text-sm);
         transition: background var(--transition-fast);
       `;
-      item.innerHTML = `<span>${cfg?.icon || '📎'}</span> <span>${_escHtml(_getDisplayTitle(candidate))}</span>`;
+      item.innerHTML = `<span>${cfg?.icon || '📎'}</span> <span>${_getDisplayTitle(candidate)}</span>`;
 
       item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
       item.addEventListener('mouseleave', () => { item.style.background = 'transparent'; });

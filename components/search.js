@@ -1,5 +1,5 @@
 /**
- * FamilyHub v4.4 — components/search.js
+ * FamilyHub v4.4 — components/search.js [minor: render-race fix + relation UUID skip]
  * [MAJOR] True Global Deep Search — searches ALL entities, ALL fields, ALL content.
  *
  * Architecture:
@@ -36,6 +36,11 @@ let _overlay, _input, _results;
 let _selectedIndex = -1;
 let _currentItems  = [];
 let _searchTimeout = null;
+/** Render generation counter — incremented on every _render() call.
+ *  Each async render captures its own seq at start and bails out before
+ *  writing to the DOM if a newer render has already started.
+ *  Prevents stale cold-cache renders overwriting fresh warm-cache results. */
+let _renderSeq = 0;
 
 // ── Entity cache ─────────────────────────────────────────────── //
 /** @type {object[]|null} */
@@ -127,6 +132,7 @@ export function openSearch() {
   _overlay.removeAttribute('inert');
   _input.value   = '';
   _selectedIndex = -1;
+  ++_renderSeq;  // [minor] cancel any in-flight render from a previous open session
   _render();
   setTimeout(() => _input.focus(), 30);
 }
@@ -200,6 +206,11 @@ function _buildIndex(entity) {
 
     const fieldCfg = fields.find(f => f.key === k);
     const label    = fieldCfg?.label || k;
+
+    // [minor] Skip relation fields — they store entity IDs (UUIDs), not readable text.
+    // Searching by relation name requires an edge traversal which _buildIndex doesn't do.
+    // Including UUIDs pollutes the blob and causes false substring matches.
+    if (fieldCfg?.type === 'relation') continue;
 
     if (typeof v === 'string') {
       // Strip HTML for richtext fields
@@ -284,13 +295,14 @@ function _score(entity, cfg, titleLower, lq, titleMatch) {
 // ════════════════════════════════════════════════════════════════
 
 async function _render() {
+  const seq   = ++_renderSeq; // [minor] capture generation before any await
   const query = _input.value.trim();
   if (_input.value.trimStart().startsWith('>')) {
-    _renderCommands(query.replace(/^>/, '').trim());
+    _renderCommands(query.replace(/^>/, '').trim()); // sync — no guard needed
   } else if (query.length === 0) {
-    await _renderRecents();
+    await _renderRecents(seq);
   } else {
-    await _renderSearchResults(query);
+    await _renderSearchResults(query, seq);
   }
 }
 
@@ -298,13 +310,17 @@ async function _render() {
 // ENTITY SEARCH
 // ════════════════════════════════════════════════════════════════
 
-async function _renderSearchResults(query) {
+async function _renderSearchResults(query, seq) {
   _results.innerHTML = `<div style="padding:var(--space-3) var(--space-5);color:var(--color-text-muted);font-size:var(--text-xs);">Searching…</div>`;
   _currentItems  = [];
   _selectedIndex = -1;
 
   const lq       = query.toLowerCase();
   const entities = await _getEntities();
+
+  // [minor] Bail if a newer render started while we were awaiting the DB.
+  // Prevents a slow cold-cache render overwriting a faster warm-cache result.
+  if (seq !== _renderSeq) return;
 
   const matches = [];
 
@@ -360,13 +376,16 @@ async function _renderSearchResults(query) {
 // RECENT ENTITIES
 // ════════════════════════════════════════════════════════════════
 
-async function _renderRecents() {
+async function _renderRecents(seq) {
   _results.innerHTML = '';
   _currentItems  = [];
   _selectedIndex = -1;
 
   let recents = [];
   try { recents = (await getSetting(RECENT_KEY)) || []; } catch { recents = []; }
+
+  // [minor] Bail if a newer render started while awaiting getSetting
+  if (seq !== _renderSeq) return;
 
   if (recents.length === 0) {
     _results.innerHTML = `<div style="padding:var(--space-4) var(--space-5);color:var(--color-text-muted);font-size:var(--text-sm);text-align:center;">Start typing to search all ${_getTotalEntityCount()} entities<br><span style="font-size:var(--text-xs);opacity:0.7;">or type <kbd>&gt;</kbd> for commands</span></div>`;
