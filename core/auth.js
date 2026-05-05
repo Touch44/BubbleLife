@@ -604,6 +604,8 @@ export function resetIdle() {
     if (!_session) return;
     _session.expiresAt = Date.now() + SESSION_TTL_MS;
     sessionStorage.setItem('fh_session', JSON.stringify(_session));
+    // [minor] BUG-39 fix: also persist extended expiresAt to IDB so that
+    // new-tab session validation (which reads IDB) doesn't incorrectly expire.
     setSetting('session', _session).catch(() => {});
   }, IDLE_DEBOUNCE_MS);
 }

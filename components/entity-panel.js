@@ -533,6 +533,7 @@ export async function openPanel(entityId, entityTypeHint) {
     // rather than the slide panel. The panel is reserved for graph-view entity browsing.
     // Exception: skipFormFirst flag allows internal navigation (graph button, close-graph restore).
     if (!_graphViewActive && !openPanel._skipFormFirst) {
+      // [minor] BUG-35 fix: do NOT set module state before early-return to avoid leakage
       openEditForm(entity);
       return;
     }
@@ -2574,8 +2575,10 @@ async function _renderRelationsTab(container) {
 
   container.innerHTML = '';
 
-  // Run daily linking silently in background
-  _ensureDailyLinks(_entity).catch(() => {});
+  // [minor] BUG-72 fix: skip _ensureDailyLinks in graph mode — graph browsing is read-only
+  if (!_graphViewActive) {
+    _ensureDailyLinks(_entity).catch(() => {});
+  }
 
   // ── Section: Add New Connection ────────────────────────────
   const addSection = document.createElement('div');

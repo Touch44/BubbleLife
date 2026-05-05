@@ -338,6 +338,8 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
     map.get(dateStr).push({
       entity,
       entityType,
+      // [minor] BUG-24 fix: store computed dateTimeISO in map entry, not on entity
+      _dateTimeISO: extra._dateTimeISO || null,
       sortTime: entity.date || entity.dueDate || entity.createdAt || '',
       isOverdue: extra.isOverdue || false,
     });
@@ -353,9 +355,12 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       if (reg.filterFn && !reg.filterFn(entity)) continue;
 
       // For tasks: synthesize a datetime ISO from dueDate + dueTime (default 06:00)
+      // [minor] BUG-24/44/74 fix: do NOT mutate entity directly — store computed ISO
+      // as a local variable passed via the dateMap entry (avoids polluting IDB objects).
+      let _taskDateTimeISO = null;
       if (typeKey === 'task' && entity.dueDate) {
         const tRaw = (entity.dueTime || '06:00').slice(0, 5);
-        entity._dateTimeISO = `${entity.dueDate}T${tRaw}:00`;
+        _taskDateTimeISO = `${entity.dueDate}T${tRaw}:00`;
       }
 
       const rawDate = entity[reg.dateField];
@@ -376,7 +381,7 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
           const maxDay = _daysInMonth(y, mm - 1);
           if (dd > maxDay) continue;
           const ds = `${y}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
-          _add(ds, entity, typeKey);
+          _add(ds, entity, typeKey, { _dateTimeISO: _taskDateTimeISO });
         }
         continue;
       }
@@ -390,7 +395,7 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
           const endDate = new Date(endDs + 'T00:00:00');
           let safety = 0;
           while (cursor <= endDate && safety < 60) {
-            _add(_toDateStr(cursor), entity, typeKey);
+            _add(_toDateStr(cursor), entity, typeKey, { _dateTimeISO: _taskDateTimeISO });
             cursor.setDate(cursor.getDate() + 1);
             safety++;
           }
@@ -401,7 +406,7 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       // ── Standard single-day ──
       const ds = _isoToLocalDate(rawDate);
       const isOverdue = typeKey === 'task' && ds && ds < todayStr;
-      _add(ds, entity, typeKey, { isOverdue });
+      _add(ds, entity, typeKey, { isOverdue, _dateTimeISO: _taskDateTimeISO });
     }
   }
 
@@ -1320,7 +1325,7 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap) {
       const reg = ENTITY_REGISTRY[it.entityType];
       if (!reg || !reg.hasTime) return false;
       const dateISO = it.entityType === 'task'
-        ? (it.entity._dateTimeISO || null)
+        ? (it._dateTimeISO || null)
         : it.entity.date;
       if (!dateISO) return false;
       // For multi-day events: always include (we compute per-day slice below)
@@ -1342,7 +1347,7 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap) {
     // Sort by start time, then find groups of overlapping events
     const sorted = timedItems.map(it => {
       const dateISO = it.entityType === 'task'
-        ? (it.entity._dateTimeISO || it.entity.dueDate)
+        ? (it._dateTimeISO || it.entity.dueDate)
         : it.entity.date;
 
       let startH, endH;
@@ -1677,6 +1682,7 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
       if (entityType === 'task') {
         entity.dueDate = newDateStr;
         entity.dueTime = `${hourStr}:${minStr}`;
+        // Temporary mutation for drag-drop UX (entity is re-fetched on next load)
         entity._dateTimeISO = `${newDateStr}T${hourStr}:${minStr}:00`;
       } else {
         entity[dateField] = new Date(`${newDateStr}T${hourStr}:${minStr}:00`).toISOString();

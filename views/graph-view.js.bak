@@ -16,7 +16,7 @@
  * Registration: registerView('graph', renderGraph)
  */
 
-import { registerView, back as routerBack, navigate } from '../core/router.js';
+import { registerView }         from '../core/router.js';
 import { on, emit, EVENTS }     from '../core/events.js';
 import { getAllEntityTypes, getEntityTypeConfig } from '../core/graph-engine.js';
 import {
@@ -187,25 +187,6 @@ const CONTEXT_CHIPS = [
       cursor: pointer;
     }
     .gv-focus-option:hover { background: var(--color-surface-2, rgba(255,255,255,0.05)); }
-
-    /* ── Close graph button ────────────────────────── */
-    .gv-close-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 4px 12px;
-      border-radius: var(--radius-sm);
-      border: 1.5px solid var(--color-danger, #ef4444);
-      background: var(--color-danger, #ef4444);
-      color: #fff;
-      font-size: var(--text-xs);
-      font-weight: var(--weight-semibold);
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: opacity 0.15s;
-      white-space: nowrap;
-    }
-    .gv-close-btn:hover { opacity: 0.85; }
 
     /* ── Zoom buttons ──────────────────────────────── */
     .gv-zoom-btns {
@@ -478,26 +459,6 @@ function _buildToolbar(container, activeTypeSet) {
     try { await refreshGraph(); } catch { /* ignore */ }
   });
 
-  // ── Divider
-  const div4 = document.createElement('div');
-  div4.className = 'gv-divider';
-  toolbar.appendChild(div4);
-
-  // ── Close Graph button — always visible, lets user leave graph view
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'gv-close-btn';
-  closeBtn.title = 'Close Knowledge Graph and return to previous view';
-  closeBtn.innerHTML = '✕ Close Graph';
-  closeBtn.addEventListener('click', () => {
-    // [minor] BUG-31/67 fix: do NOT call destroyGraph() here — VIEW_CHANGED handler
-    // will call it when navigate/back fires. Double-destroy caused console errors.
-    _mounted = false;
-    if (!routerBack()) {
-      navigate('dashboard');
-    }
-  });
-  toolbar.appendChild(closeBtn);
-
   container.appendChild(toolbar);
 }
 
@@ -507,8 +468,7 @@ async function renderGraph(params = {}) {
   _graphEl = document.getElementById('view-graph');
   if (!_graphEl) return;
 
-  // [minor] BUG-14 fix: check size > 0 — empty Set is truthy, would pass no types to initGraph
-  const allVisibleTypes = (_savedTypeSet && _savedTypeSet.size > 0) ? _savedTypeSet : getAllGraphVisibleTypes();
+  const allVisibleTypes = _savedTypeSet || getAllGraphVisibleTypes();
 
   // On first mount build the full UI; on subsequent calls just refresh the graph
   if (!params._internal || !_mounted) {

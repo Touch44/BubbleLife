@@ -1,5 +1,5 @@
 /**
- * FamilyHub v4.4.5 — views/daily.js [minor v16]
+ * FamilyHub v4.2 — views/daily.js [minor v16]
  * Daily Review view — renders into #view-daily when view="daily"
  *
  * Sections (all collapsible):
@@ -439,30 +439,8 @@ async function _syncDailyReviewLinks(dateStr, data) {
       linkedSet.add(n.id);
     }
 
-    // ── Tasks due today OR overdue (graph edge linking for knowledge graph) ──
-    // Tasks appear in their own UI section, but we ALSO create graph edges so
-    // the Daily Review node in the Knowledge Graph shows connected task nodes.
-    // [minor] BUG-41 fix: include overdue tasks — they appear in today's UI section
-    // so they should also appear as graph neighbors of today's DR node.
-    for (const t of data.tasks.filter(t => {
-      const due = _isoToLocalDate(t.dueDate);
-      if (!due) return false;
-      return due === dateStr || (due < dateStr && t.status !== 'Done');
-    })) {
-      await _linkToDailyReview(dr.id, t.id, 'task', linkedSet);
-      linkedSet.add(t.id);
-    }
-
-    // ── Events spanning today (graph edge linking for knowledge graph) ─
-    for (const ev of data.events.filter(ev => {
-      const start = _isoToLocalDate(ev.date);
-      const end   = _isoToLocalDate(ev.endDate || ev.date);
-      if (!start) return false;
-      return start <= dateStr && dateStr <= (end || start);
-    })) {
-      await _linkToDailyReview(dr.id, ev.id, 'event', linkedSet);
-      linkedSet.add(ev.id);
-    }
+    // Tasks and events are shown in their own dedicated sections —
+    // they are NOT auto-linked to the DR to avoid polluting the Notes section.
 
     // ── Wall posts created today ──────────────────────────
     for (const p of data.posts.filter(p => _isoToLocalDate(p.createdAt) === dateStr)) {
@@ -899,7 +877,7 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
     try {
       const account = getAccount();
       // [minor] Use local ISO to avoid UTC midnight shift
-      const now     = new Date().toISOString(); // [minor] BUG-63 fix: use toISOString() — sv-SE locale trick is fragile
+      const now     = new Date().toLocaleString('sv-SE').replace(' ', 'T');
 
       // D-04: use daily-local context override for entity creation
       const captureCtx = _getDailyContext();
@@ -2648,11 +2626,8 @@ export { renderDaily };
   const now = new Date();
   const msToMidnight = (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1) - now) + 1000;
   setTimeout(() => {
-    // [minor] BUG-46/71 fix: only re-render if daily view is active AND user is logged in
-    const viewEl = document.getElementById('view-daily');
-    if (viewEl && viewEl.classList.contains('active')) {
-      renderDaily({ _internal: true });
-    }
+    // Re-render week strip and today indicator without changing current date
+    renderDaily({ _internal: true });
     _scheduleMidnightRefresh();
   }, msToMidnight);
 })();

@@ -202,7 +202,7 @@ function _applyFilters(tasks) {
     if (_filterPriority && t.priority !== _filterPriority) return false;
     if (_filterOverdue) {
       const today = _todayStr();
-      const due = t.dueDate ? t.dueDate.slice(0, 10) : null;
+      const due = _isoToLocalDate(t.dueDate);  // [minor] BUG-69 fix: use local date
       if (!due || due >= today) return false;
     }
     return true;
@@ -214,8 +214,9 @@ function _sortTasks(tasks, colKey) {
   return [...tasks].sort((a, b) => {
     switch (sortKey) {
       case 'deadline': {
-        const aDue = a.dueDate || '9999-99-99';
-        const bDue = b.dueDate || '9999-99-99';
+        // [minor] BUG-50 fix: use local date string for consistent comparison
+        const aDue = _isoToLocalDate(a.dueDate) || '9999-99-99';
+        const bDue = _isoToLocalDate(b.dueDate) || '9999-99-99';
         return aDue.localeCompare(bDue);
       }
       case 'priority': {
@@ -233,6 +234,15 @@ function _sortTasks(tasks, colKey) {
 
 function _todayStr() {
   const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+/** [minor] BUG-49/50 fix: parse any ISO date/datetime to local YYYY-MM-DD safely */
+function _isoToLocalDate(isoStr) {
+  if (!isoStr) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoStr)) return isoStr.slice(0, 10);
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return null;
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
@@ -261,8 +271,8 @@ function _applyFilterTab(tasks) {
   const today = _todayStr();
   switch (_filterTab) {
     case 'inbox':     return tasks.filter(t => t.status === 'Inbox' || !t.status);
-    case 'scheduled': return tasks.filter(t => t.dueDate);
-    case 'today':     return tasks.filter(t => t.dueDate && t.dueDate.slice(0,10) === today);
+    case 'scheduled': return tasks.filter(t => !!_isoToLocalDate(t.dueDate));
+    case 'today':     return tasks.filter(t => _isoToLocalDate(t.dueDate) === today);
     case 'open':      return tasks.filter(t => t.status !== 'Done');
     case 'completed': return tasks.filter(t => t.status === 'Done');
     case 'status': case 'context': case 'all': default:
@@ -526,7 +536,7 @@ function _buildCard(task) {
   card.setAttribute('draggable', 'true');
 
   const today = _todayStr();
-  const due   = task.dueDate ? task.dueDate.slice(0, 10) : null;
+  const due   = _isoToLocalDate(task.dueDate); // [minor] BUG-49 fix: local date
   const dueCls = !due ? '' : due < today ? 'due-overdue' : due === today ? 'due-today' : 'due-future';
 
   // Project chip — resolve from direct field first, then from edge map
@@ -827,15 +837,17 @@ function _buildQuickAdd(statusKey) {
         context:  ctx === 'all' ? 'family' : ctx,
       }, account?.id);
       input.value = '';
-      await _loadData();
-      _rerenderColumns();
+      // [minor] BUG-65 fix: removed manual _loadData()/_rerenderColumns() here.
+      // ENTITY_SAVED listener handles refresh. Manual call caused double-render flash.
       // Animate the new card (last card in column gets slide-in class)
-      const col = wrap.closest('.kanban-col');
-      const newCard = col?.querySelector('.kanban-card:last-child');
-      if (newCard) {
-        newCard.classList.add('kanban-card-new');
-        setTimeout(() => newCard.classList.remove('kanban-card-new'), 400);
-      }
+      setTimeout(() => {
+        const col = wrap.closest('.kanban-col');
+        const newCard = col?.querySelector('.kanban-card:last-child');
+        if (newCard) {
+          newCard.classList.add('kanban-card-new');
+          setTimeout(() => newCard.classList.remove('kanban-card-new'), 400);
+        }
+      }, 250); // allow ENTITY_SAVED re-render to complete first
     } catch (err) {
       console.error('[kanban] Quick add failed:', err);
     }
@@ -1018,8 +1030,9 @@ async function _moveTask(taskId, newStatus) {
     status: newStatus,
     previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
   }, account?.id);
-    await _loadData();
-    _rerenderColumns();
+    // [minor] BUG-64 fix: removed manual _loadData()/_rerenderColumns() here.
+    // saveEntity triggers ENTITY_SAVED → the on(EVENTS.ENTITY_SAVED) listener
+    // already calls _loadData().then(_rerenderColumns). Manual call caused double-render.
 
     // P-12: play confetti when task moves to Done column
     if (newStatus === 'Done' || newStatus === 'done') {
@@ -1027,6 +1040,9 @@ async function _moveTask(taskId, newStatus) {
     }
   } catch (err) {
     console.error('[kanban] Move task failed:', err);
+    // Re-render to restore correct state after failure
+    await _loadData();
+    _rerenderColumns();
   }
 }
 
@@ -1570,7 +1586,12 @@ async function renderKanban(params = {}) {
       vmDd.querySelectorAll('.kanban-vm-item').forEach(el => { el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none'; });
     });
     vmBtn.addEventListener('click', (e) => { e.stopPropagation(); vmDd.style.display = vmDd.style.display === 'none' ? '' : 'none'; });
-    // Store named ref on element so VIEW_CHANGED can clean it up (prevents listener accumulation)
+    // [minor] BUG-21 fix: clean up ALL previous click-away listeners before adding new one
+    // Without this, each renderKanban (filter tab switch) stacks a new listener.
+    if (viewEl._vmListeners) {
+      viewEl._vmListeners.forEach(fn => document.removeEventListener('click', fn));
+      viewEl._vmListeners = [];
+    }
     const _vmClickAway = (ev) => { if (!vmWrap.contains(ev.target)) vmDd.style.display = 'none'; };
     document.addEventListener('click', _vmClickAway);
     if (!viewEl._vmListeners) viewEl._vmListeners = [];

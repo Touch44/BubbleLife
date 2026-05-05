@@ -863,9 +863,14 @@ function _buildFieldControl(field, config) {
         hintEl.textContent = field.helpText || '10-min steps';
         hintEl.style.color = 'var(--color-text-muted)';
       });
-      // Init draft only if dueDate exists
-      if (!existing && _draft.dueDate) _draft[field.key] = '06:00';
-      else if (!existing) _draft[field.key] = null; // no date = no time
+      // [minor] BUG-18 fix: init draft only if dueDate exists; clear displayed value
+      // when no dueDate so the input doesn't misleadingly show '06:00'
+      if (!existing && _draft.dueDate) {
+        _draft[field.key] = '06:00';
+      } else if (!existing) {
+        _draft[field.key] = null; // no date = no time
+        input.value = '';          // clear displayed '06:00' placeholder
+      }
 
       const hintEl = document.createElement('span');
       hintEl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);white-space:nowrap;';
@@ -1887,9 +1892,9 @@ async function _buildRelationsTab(container) {
           return t.includes(q) || (e.type || '').toLowerCase().includes(q);
         })
       : _allEntities;
-    const results = candidates.slice(0, 30);
+    const matchedResults = candidates.slice(0, 30); // [minor] BUG-70 fix: renamed from 'results' to avoid shadowing DOM node
 
-    if (results.length === 0) {
+    if (matchedResults.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding:10px 12px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
       empty.textContent = q ? `No entities matching "${q}"` : 'No entities found';
@@ -1943,7 +1948,7 @@ async function _buildRelationsTab(container) {
       return;
     }
 
-    for (const ent of results) {
+    for (const ent of matchedResults) {
       const cfg = getEntityTypeConfig(ent.type);
       const title = _dispTitle(ent);
       const isLinked = _linkedIds.has(ent.id);
@@ -2257,7 +2262,10 @@ function _buildDetailsTab(container, config) {
     const btn = _mkBtn(isArchived ? '↑' : '📦', isArchived ? 'Unarchive' : 'Archive');
     btn.addEventListener('click', () => _guardedAction(async () => {
       let updated;
-      if (_editEntity.status !== undefined) {
+      // [minor] BUG-29 fix: check config fields for a 'status' field — not entity.status
+      // (entity.status may be undefined for brand-new entities even if the type uses status)
+      const hasStatusField = config?.fields?.some(f => f.key === 'status');
+      if (hasStatusField) {
         updated = { ..._editEntity, status: isArchived ? 'Active' : 'Archived' };
       } else {
         updated = { ..._editEntity, archived: !isArchived };
@@ -2688,10 +2696,21 @@ function _efFmtShort(iso) {
  * @param {object} [fieldConfig] - optional field config with .label
  * @returns {string} human label e.g. 'blocked by', 'assigned to'
  */
+/**
+ * Return the relation string to store on an edge.
+ * We use the field KEY directly (camelCase) so that every reader
+ * (kanban _buildBlockerMap, daily _buildRelationEdgeMaps, calendar,
+ *  entity-form _loadExistingEdges) can query with the same key without
+ * any label-to-key translation step.
+ * e.g. field.key='assignedTo' → relation='assignedTo'
+ *       field.key='blockedBy'  → relation='blockedBy'
+ *       field.key='project'    → relation='project'
+ * [minor] BUG-01 fix: was converting to human label ('assigned to') causing
+ * all relation edge queries to silently return empty results.
+ */
 function _fieldKeyToRelLabel(key, fieldConfig) {
-  if (fieldConfig?.label) return fieldConfig.label.toLowerCase();
-  // CamelCase → "camel case" → lowercase
-  return key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+  // Always return the field key — consistent with how all readers query edges
+  return key;
 }
 
 async function _submitForm() {
@@ -2755,6 +2774,12 @@ async function _submitForm() {
         entityData[field.key] = _tagValues.get(field.key) || [];
       } else if (field.type === 'relation') {
         // Relations handled via edges — don't store on entity
+      } else if (field.type === 'checklist') {
+        // [minor] BUG-66 fix: checklist is already in _draft via _syncDraft() —
+        // don't double-serialize by reading _draft again here. Read directly from _draft.
+        if (_draft[field.key] !== undefined) {
+          entityData[field.key] = _draft[field.key];
+        }
       } else if (field.type === 'rating') {
         // Rating stored in DOM dataset
         const ratingWrap = _overlay?.querySelector(`.ef-rating-row[data-field-key="${field.key}"]`);

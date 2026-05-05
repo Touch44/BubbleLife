@@ -1,10 +1,10 @@
 /**
- * FamilyHub v4.1 — Service Worker (sw.js)
+ * FamilyHub v4.5.0 — Service Worker (sw.js)
  * Implements Prompt 05 spec: Cache-First shell, Network-First 3s timeout, update detection, offline fallback.
  */
 'use strict';
 
-const APP_VERSION   = '4.4.4';
+const APP_VERSION   = '4.5.0'; // [minor] BUG-60 fix: bump to match release
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];

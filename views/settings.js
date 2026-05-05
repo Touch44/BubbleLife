@@ -120,7 +120,7 @@ async function renderSettings() {
         <hr style="margin:var(--space-3) 0;border:none;border-top:1px solid var(--color-border);">
         <div style="display:flex;flex-direction:column;gap:var(--space-2);">
           <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;">Update Profile</div>
-          <input id="settings-display-name" type="text" class="input" placeholder="Display name" value="${_esc(account?.memberId ? '' : account?.username || '')}" style="font-size:var(--text-sm);">
+          <input id="settings-display-name" type="text" class="input" placeholder="Display name" value="${_esc(account?.username || '')}" style="font-size:var(--text-sm);">
           <input id="settings-email" type="email" class="input" placeholder="Email (optional)" value="${_esc(account?.email || '')}" style="font-size:var(--text-sm);">
           <hr style="margin:var(--space-1) 0;border:none;border-top:1px solid var(--color-border);">
           <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;">Change Password</div>
@@ -167,7 +167,7 @@ async function renderSettings() {
       ${_section('Data Management', '💾', `
         <div style="display:flex;flex-direction:column;gap:var(--space-3);">
           <div style="font-size:var(--text-sm);color:var(--color-text-muted);">
-            Storage used: <strong style="color:var(--color-text);">${usedMB} MB</strong>
+            Storage used: <strong style="color:var(--color-text);">${usedMB} MB</strong> ${storageInfo?.quota ? `of ${((storageInfo.quota||0)/(1024*1024)).toFixed(0)} MB quota` : ''}
           </div>
           <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
             <button id="settings-export-btn" style="
@@ -190,7 +190,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v3.9.0</div>
+          <div><strong>FamilyHub</strong> v4.5.0</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -219,7 +219,8 @@ async function renderSettings() {
         html.setAttribute('data-theme', mode);
       }
       try {
-              localStorage.setItem('fh_theme', mode);
+              // [minor] BUG-57 fix: use themeService key 'settings:theme' for consistency
+              localStorage.setItem('settings:theme', JSON.stringify({ mode }));
               // Apply CSS immediately via data-theme attribute (same as theme service)
               document.documentElement.setAttribute('data-theme', mode === 'auto'
                 ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
@@ -228,8 +229,6 @@ async function renderSettings() {
       renderSettings();
     }
   };
-  el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyTheme('light'));
-
   // ── Account update form ──────────────────────────────────
   // Pre-fill display name from person entity
   (async () => {
@@ -274,6 +273,8 @@ async function renderSettings() {
       if (el.querySelector('#settings-new-pass'))     el.querySelector('#settings-new-pass').value = '';
     }
   });
+  // [minor] BUG-09 fix: all three theme buttons wired together after _applyTheme is defined
+  el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyTheme('light'));
   el.querySelector('#settings-theme-dark')?.addEventListener('click',  () => _applyTheme('dark'));
   el.querySelector('#settings-theme-auto')?.addEventListener('click',  () => _applyTheme('auto'));
 
@@ -291,8 +292,31 @@ async function renderSettings() {
           <div style="margin-bottom:var(--space-2);font-size:var(--text-xs);color:var(--color-text-muted);">Invite code (click to copy):</div>
           <div id="settings-invite-code" style="cursor:pointer;padding:var(--space-2);background:var(--color-bg);border-radius:var(--radius-sm);user-select:all;">${_esc(result.code)}</div>
         `;
-        el.querySelector('#settings-invite-code')?.addEventListener('click', () => {
-          navigator.clipboard.writeText(result.code).catch(() => {});
+        el.querySelector('#settings-invite-code')?.addEventListener('click', async () => {
+          // [minor] BUG-78 fix: clipboard requires HTTPS — add visible fallback
+          try {
+            await navigator.clipboard.writeText(result.code);
+            const codeEl = el.querySelector('#settings-invite-code');
+            if (codeEl) {
+              const original = codeEl.textContent;
+              codeEl.textContent = '✓ Copied!';
+              codeEl.style.color = 'var(--color-accent)';
+              setTimeout(() => {
+                codeEl.textContent = original;
+                codeEl.style.color = '';
+              }, 1500);
+            }
+          } catch {
+            // HTTP fallback: select text so user can Ctrl+C
+            const codeEl = el.querySelector('#settings-invite-code');
+            if (codeEl) {
+              const range = document.createRange();
+              range.selectNodeContents(codeEl);
+              const sel = window.getSelection();
+              sel?.removeAllRanges();
+              sel?.addRange(range);
+            }
+          }
         });
       } else {
         resultDiv.style.display = 'block';
@@ -342,6 +366,11 @@ async function renderSettings() {
   el.querySelector('#settings-import-file')?.addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // [minor] BUG-37 fix: confirm before importing to prevent accidental overwrite
+    if (!window.confirm(`Import "${file.name}"? This will merge data into your existing FamilyHub — existing records with matching IDs will be overwritten. Continue?`)) {
+      e.target.value = '';
+      return;
+    }
     const statusDiv = el.querySelector('#settings-data-status');
     try {
       const text = await file.text();

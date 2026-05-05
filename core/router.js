@@ -619,8 +619,11 @@ function _paramsKey(params) {
   // [minor] Bug 5 fix: include all non-ephemeral params so that two navigations
   // to the same viewKey with different params (e.g. highlightId, focusEntityId)
   // are correctly treated as distinct history entries.
+  // [minor] BUG-55/68 fix: JSON.stringify replacer array only includes top-level keys —
+  // use a sort-then-stringify approach instead to handle nested objects correctly.
   const { _internal, ...rest } = params;
-  return JSON.stringify(rest, Object.keys(rest).sort());
+  const sorted = Object.fromEntries(Object.keys(rest).sort().map(k => [k, rest[k]]));
+  return JSON.stringify(sorted);
 }
 
 // ── Hash-Based Deep Linking ───────────────────────────────── //
