@@ -42,7 +42,7 @@ const VIEW_LABELS = {
   'daily':           'Daily Review',
   'kanban':          'Tasks',
   'calendar':        'Calendar',
-  'activity-center': 'Activity Center',
+  'activity-center': 'Activity Wall',
   'family-matters':  'Family Matters',
   'notes':           'Notes',
   'projects':        'Projects',

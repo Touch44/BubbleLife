@@ -160,7 +160,7 @@ function _seedBuiltins(env, add) {
     { id: 'nav.daily',    label: 'Go to Daily Review',    shortcut: 'D', icon: '☀️', category: 'Navigate', view: 'daily'    },
     { id: 'nav.kanban',   label: 'Go to Tasks / Kanban',  shortcut: 'K', icon: '✅', category: 'Navigate', view: 'kanban'   },
     { id: 'nav.calendar', label: 'Go to Calendar',        shortcut: 'C', icon: '📅', category: 'Navigate', view: 'calendar' },
-    { id: 'nav.wall',     label: 'Go to Activity Center',           icon: '⬡', category: 'Navigate', view: 'activity-center' },
+    { id: 'nav.wall',     label: 'Go to Activity Wall',           icon: '⬡', category: 'Navigate', view: 'activity-center' },
     { id: 'nav.graph',    label: 'Go to Knowledge Graph', shortcut: 'G', icon: '🔮', category: 'Navigate', view: 'graph'    },
     { id: 'nav.notes',    label: 'Go to Notes',                     icon: '≡', category: 'Navigate', view: 'notes'    },
     { id: 'nav.budget',   label: 'Go to Budget',                    icon: '💰', category: 'Navigate', view: 'budget'   },

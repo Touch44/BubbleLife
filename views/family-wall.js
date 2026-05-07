@@ -1,6 +1,6 @@
 /**
  * FamilyHub v4.2 — views/family-wall.js
- * Family Wall — Feed + Timeline, photos, files, lightbox, links
+ * Activity Wall — Feed + Timeline, photos, files, lightbox, links
  *
  * Features:
  *   Feed view: all posts, pinned first, newest after
@@ -51,6 +51,8 @@ let _filterMemberId   = null;
 let _filterPostType   = 'All';
 let _filterPinnedOnly = false;
 let _filterTag        = null;
+let _filterDateRange  = 'all'; // 'all' | '7d' | '30d'
+let _filterToday      = false;
 let _viewMode         = 'feed';      // 'feed' | 'timeline'
 let _timelinePerson   = null;
 
@@ -148,6 +150,24 @@ function _filterFeed(feed) {
   });
   if (_filterPinnedOnly) f = f.filter(p => p.type === 'activity' || p.pinned);
   if (_filterTag) f = f.filter(p => p.type === 'activity' || (p.tags||[]).includes(_filterTag));
+  // Date-range filter — Date.now() arithmetic, never toISOString (UTC-safe for UTC-negative zones)
+  if (_filterDateRange !== 'all') {
+    const cutoff = Date.now() - (_filterDateRange === '7d' ? 7 : 30) * 86400000;
+    f = f.filter(i => {
+      const ts = i.createdAt ? new Date(i.createdAt).getTime() : 0;
+      return ts >= cutoff;
+    });
+  }
+  // Today quick-filter — local calendar date only (NOT toISOString — UTC-safe)
+  if (_filterToday) {
+    const _now = new Date();
+    const todayStr = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
+    f = f.filter(i => {
+      if (!i.createdAt) return false;
+      const d = new Date(i.createdAt);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` === todayStr;
+    });
+  }
   return f;
 }
 
@@ -441,6 +461,21 @@ function _buildFilterBar(el, persons, feed) {
     pb.textContent = '📌 Pinned';
     pb.addEventListener('click', () => { _filterPinnedOnly=!_filterPinnedOnly; renderWall({_internal:true}); });
     tr.appendChild(pb);
+
+    // Today quick-filter button
+    const todayBtn = document.createElement('button');
+    todayBtn.className = 'fw-type-btn fw-today-btn' + (_filterToday ? ' active' : '');
+    todayBtn.textContent = '📅 Today';
+    todayBtn.title = "Show only today's posts";
+    todayBtn.setAttribute('aria-pressed', String(_filterToday));
+    todayBtn.addEventListener('click', () => {
+      _filterToday = !_filterToday;
+      todayBtn.classList.toggle('active', _filterToday);
+      todayBtn.setAttribute('aria-pressed', String(_filterToday));
+      renderWall({_internal:true});
+    });
+    tr.appendChild(todayBtn);
+
     bar.appendChild(tr);
 
     const tags = new Set(feed.filter(i => i.type !== 'activity').flatMap(p => p.tags||[]));
@@ -456,6 +491,33 @@ function _buildFilterBar(el, persons, feed) {
       }
       bar.appendChild(tagRow);
     }
+
+    // ── Date-range filter row (feed mode only) ──────────
+    const drRow = document.createElement('div');
+    drRow.className = 'fw-filter-daterange';
+    drRow.setAttribute('aria-label', 'Filter by date range');
+    const _drOptions = [
+      { key: 'all', label: 'All time' },
+      { key: '7d',  label: 'Last 7 days' },
+      { key: '30d', label: 'Last 30 days' },
+    ];
+    for (const opt of _drOptions) {
+      const b = document.createElement('button');
+      b.className = 'fw-type-btn' + (_filterDateRange === opt.key ? ' active' : '');
+      b.textContent = opt.label;
+      b.setAttribute('aria-pressed', String(_filterDateRange === opt.key));
+      b.addEventListener('click', () => {
+        _filterDateRange = opt.key;
+        drRow.querySelectorAll('.fw-type-btn').forEach(x => {
+          const active = x === b;
+          x.classList.toggle('active', active);
+          x.setAttribute('aria-pressed', String(active));
+        });
+        renderWall({_internal:true});
+      });
+      drRow.appendChild(b);
+    }
+    bar.appendChild(drRow);
   }
   el.appendChild(bar);
 }
@@ -1152,6 +1214,9 @@ function _injectStyles() {
     .fw-filter-tags { display:flex; gap:var(--space-1); flex-wrap:wrap; }
     .fw-tag-chip { padding:2px 8px; font-size:var(--text-xs); font-family:var(--font-body); color:var(--color-text-muted); background:var(--color-surface-2); border:1px solid var(--color-border); border-radius:var(--radius-full); cursor:pointer; transition:all var(--transition-fast); }
     .fw-tag-chip.active { background:var(--color-info-bg); color:var(--color-info-text); border-color:var(--color-info); }
+    .fw-filter-daterange { display:flex; gap:var(--space-1); flex-wrap:wrap; align-items:center; }
+    .fw-filter-daterange::before { content:'🗓️'; margin-right:var(--space-1); font-size:var(--text-sm); }
+    .fw-today-btn.active { background:var(--color-accent); color:var(--color-on-accent, #fff); border-color:var(--color-accent); }
 
     .fw-compose { display:flex; flex-direction:column; gap:var(--space-3); padding:var(--space-4); background:var(--color-bg); border:1px solid var(--color-border); border-radius:var(--radius-md); box-shadow:var(--shadow-xs); }
     .fw-compose-hdr { display:flex; align-items:center; gap:var(--space-2-5); }
@@ -1306,10 +1371,10 @@ async function renderWall(params={}) {
 
   if (!params?._internal) {
     _filterMemberId=null; _filterPostType='All'; _filterPinnedOnly=false;
-    _filterTag=null; _viewMode='feed'; _timelinePerson=null;
+    _filterTag=null; _filterDateRange='all'; _filterToday=false; _viewMode='feed'; _timelinePerson=null;
   }
 
-  el.innerHTML='<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading Activity Center…</div>';
+  el.innerHTML='<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading Activity Wall…</div>';
 
   const highlightId = params?.highlightId || null;
 

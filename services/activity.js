@@ -2,7 +2,7 @@
  * FamilyHub v3 — services/activity.js
  * [MAJOR] System activity feed service
  * Listens to app events and writes activity entities to IDB.
- * These are displayed in the Activity Center (views/family-wall.js).
+ * These are displayed in the Activity Wall (views/family-wall.js).
  */
 
 import { on, EVENTS }                  from '../core/events.js';
@@ -21,7 +21,7 @@ const TRACK_TYPES = new Set([
   'expense', 'workout', 'journalEntry', 'wish',
 ]);
 
-// Milestone activityTypes shown with special card styling in Activity Center
+// Milestone activityTypes shown with special card styling in Activity Wall
 // Exported so views (e.g. family-wall.js) can import for consistent milestone detection
 export const MILESTONE_TYPES = new Set([
   'task:completed', 'project:completed', 'goal:achieved',
@@ -209,7 +209,7 @@ export function initActivityService() {
 }
 
 /**
- * Seed the activity feed from existing entities so the Activity Center
+ * Seed the activity feed from existing entities so the Activity Wall
  * is not empty on first visit. Writes at most one :created activity per
  * entity; dedup map prevents duplication if called again.
  * Called once after initActivityService() and IDB is ready.

@@ -430,7 +430,7 @@ const COMMANDS = [
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.CALENDAR); } },
   { label:'Knowledge Graph',detail:'Go to Knowledge Graph',  icon:'🕸️', keys:['graph','knowledge'],
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.GRAPH); } },
-  { label:'Family Wall',    detail:'Go to Family Wall',      icon:'🏡',  keys:['family','wall','post'],
+  { label:'Activity Wall',  detail:'Go to Activity Wall',    icon:'🏡',  keys:['family','wall','activity','post'],
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.ACTIVITY_CENTER); } },
   { label:'Settings',       detail:'Open Settings',          icon:'⚙️', keys:['settings','prefs'],
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.SETTINGS); } },

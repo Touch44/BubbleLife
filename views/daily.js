@@ -5,13 +5,13 @@
  * Sections (all collapsible):
  *   1. Tasks            — due today or overdue (status != Done/done), sorted overdue-first then priority; open by default
  *   2. Events           — events whose date falls on today
- *   3. Daily Notes      — notes connected to this date's Daily Review entity; open by default
- *   4. Wall Posts       — post entities created today
- *   5. Reminders        — appointment entities with reminder=true and date = today
+ *   3. Reminders        — appointment entities with reminder=true and date = today (always third)
+ *   4. Today's Highlights — post entities created today (auto-opens when non-empty)
+ *   5. Today's Highlights — post entities created today (auto-opens when non-empty)
  *   6. Birthdays/Dates  — dateEntity records whose month+day = today
  *   7. Meals Today      — mealPlan entities for today grouped by mealType
  *   8. Comments         — comment note entities created today
- *   9. Activity Log     — auditLog entries for today
+ *   9. Day's Changes    — auditLog entries for today
  *
  * Top bar:
  *   - Date display "Monday, April 21" with prev/next arrows
@@ -1570,7 +1570,7 @@ function _renderEvents(container, dateStr, events) {
 }
 
 /**
- * Section 5: Activity Log — audit log entries for today.
+ * Section 5: Day's Changes — audit log entries for today.
  * accountMap resolves byAccountId to display name.
  * Rows are clickable to open the referenced entity.
  */
@@ -1595,11 +1595,11 @@ async function _renderActivityLog(container, dateStr, auditLog, accountMap) {
     .filter(entry => _isoToLocalDate(entry.at) === dateStr)
     .slice(-50)
     .reverse();
-  const { wrapper, body } = _buildSection('activity', '📋', 'Activity Log', filtered.length);
+  const { wrapper, body } = _buildSection('activity', '📋', "Day's Changes", filtered.length);
   container.appendChild(wrapper);
 
   if (!filtered.length) {
-    _renderEmpty(body, 'No activity recorded today.');
+    _renderEmpty(body, 'No changes recorded today.');
     return;
   }
 
@@ -1676,7 +1676,7 @@ async function _renderActivityLog(container, dateStr, auditLog, accountMap) {
 }
 
 /**
- * Section 6: Reminders — appointments with reminder=true and date = today.
+ * Section 3: Reminders — appointments with reminder=true and date = today.
  */
 function _renderReminders(container, dateStr, appointments) {
   const filtered = _filterReminders(appointments, dateStr)
@@ -1792,17 +1792,36 @@ function _renderMeals(container, dateStr, mealPlans) {
 }
 
 /**
- * Section 9: Wall Posts — post entities created today.
+ * Section 9: Today's Highlights — post entities created today.
  * Shows author, post type, body snippet and optional photo thumbnail.
+ * Auto-opens when count > 0; count badge uses accent colour.
  */
 function _renderWallPosts(container, dateStr, posts, personMap, accountMap) {
   const filtered = _filterWallPosts(posts, dateStr)
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  const { wrapper, body } = _buildSection('wall-posts', '🖼️', 'Wall Posts', filtered.length);
+  const { wrapper, body } = _buildSection('wall-posts', '✨', "Today's Highlights", filtered.length);
   container.appendChild(wrapper);
+  // Auto-open Today's Highlights when there are posts
+  if (filtered.length > 0) _setSectionOpen('wall-posts', true);
+
+  // "Open Family Wall" shortcut button in the section header
+  {
+    const hdr = wrapper.querySelector('.collapsible-header');
+    const btn = document.createElement('button');
+    btn.className = 'daily-wall-open-btn';
+    btn.title = 'Open Activity Wall';
+    btn.textContent = '📸 Open Family Wall';
+    btn.addEventListener('click', e => {
+      e.stopPropagation(); // prevent header collapse toggle
+      navigate(VIEW_KEYS.ACTIVITY_CENTER);
+    });
+    // Insert before chevron (lastElementChild).
+    // Layout: [icon][title][count]...[btn][chevron→ margin-left:auto]
+    hdr.insertBefore(btn, hdr.lastElementChild);
+  }
 
   if (!filtered.length) {
-    _renderEmpty(body, 'No wall posts on this day.');
+    _renderEmpty(body, 'No highlights yet — post something on the Family Wall!');
     return;
   }
 
@@ -2307,7 +2326,7 @@ function _injectStyles() {
       .daily-capture-input   { flex: 1 1 120px; }
     }
 
-    /* ── Activity Log ────────────────────────────────── */
+    /* ── Day's Changes ──────────────────────────────── */
     .daily-activity-list { display: flex; flex-direction: column; gap: var(--space-1-5); }
     .daily-activity-row {
       display: flex;
@@ -2418,6 +2437,30 @@ function _injectStyles() {
     .daily-wall-snippet { font-size: var(--text-sm); color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .daily-wall-meta { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
     .daily-wall-thumb { width: 52px; height: 52px; object-fit: cover; border-radius: var(--radius-sm); flex-shrink: 0; }
+    /* Highlight count badge uses accent colour */
+    [data-section-key="wall-posts"] .daily-section-count {
+      background: var(--color-accent);
+      color: var(--color-on-accent, #fff);
+      font-weight: var(--weight-bold);
+      border-radius: 9999px;
+      padding: 1px 7px;
+    }
+    .daily-wall-open-btn {
+      font-size: var(--text-xs);
+      padding: 2px 8px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      background: var(--color-surface);
+      color: var(--color-accent);
+      cursor: pointer;
+      white-space: nowrap;
+      font-weight: var(--weight-medium);
+      flex-shrink: 0;
+    }
+    .daily-wall-open-btn:hover {
+      background: var(--color-accent);
+      color: var(--color-on-accent, #fff);
+    }
 
     /* ── Comments ─────────────────────────────────────────── */
     .daily-comment-list { display: flex; flex-direction: column; gap: var(--space-2); }
@@ -2522,17 +2565,20 @@ async function renderDaily(params = {}) {
     await _renderTasks(sections, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap, taskAssigneeEdgeMap);
     sectionRefs.tasksBody = sections.querySelector('#daily-section-body-tasks');
 
-    // ── Section 2: Events (always second) ───────────────────
+    // ── Section 2: Events (always second) ─────────────────────
     _renderEvents(sections, dateStr, events);
 
-    // ── Section 3: Notes (always third) ─────────────────────
+    // ── Section 3: Reminders (always third — before Notes) ──
+    _renderReminders(sections, dateStr, appointments);
+
+    // ── Section 4: Notes (always fourth) ──────────────────────
     await _renderDailyNotes(sections, dateStr);
     sectionRefs.notesBody = sections.querySelector('#daily-section-body-notes');
 
-    // ── Sections 4–N: dynamic order — non-empty before empty ─
+    // ── Sections 5–N: dynamic order — non-empty before empty ─
     // Pre-compute filtered data for each section to determine emptiness.
     const filteredPosts       = _filterWallPosts(posts, dateStr);
-    const filteredReminders   = _filterReminders(appointments, dateStr);
+
     const filteredBirthdays   = _filterDateEntities(dateEntities, _currentDate);
     const filteredMeals       = _filterMeals(mealPlans, dateStr);
     const filteredComments    = _filterComments(allComments, dateStr);
@@ -2547,10 +2593,6 @@ async function renderDaily(params = {}) {
       {
         isEmpty: filteredPosts.length === 0,
         render:  () => _renderWallPosts(sections, dateStr, posts, personMap, accountMap),
-      },
-      {
-        isEmpty: filteredReminders.length === 0,
-        render:  () => _renderReminders(sections, dateStr, appointments),
       },
       {
         isEmpty: filteredBirthdays.length === 0,
@@ -2576,7 +2618,7 @@ async function renderDaily(params = {}) {
       section.render();
     }
 
-    // ── Activity Log (always last) ───────────────────────────
+    // ── Day's Changes (always last) ───────────────────────────
     await _renderActivityLog(sections, dateStr, auditLog, accountMap);
 
   } catch (err) {

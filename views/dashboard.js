@@ -632,7 +632,7 @@ async function renderDashboard() {
         ${_cardSkeleton('tasks',    'Tasks',       '✅')}
         ${_cardSkeleton('calendar', 'This Week',   '📅')}
         ${_cardSkeleton('budget',   'Budget',      '💰')}
-        ${_cardSkeleton('wall',     'Family Wall', '🏠')}
+        ${_cardSkeleton('wall',     'Activity Wall', '🏠')}
         ${_cardSkeleton('recipes',  'Recipes',     '🍳')}
         ${_cardSkeleton('documents','Documents',   '📄')}
       </div>
@@ -929,7 +929,7 @@ function _populateWallCard(el, posts) {
     sub = `<span style="display:block;font-style:italic;">"${_esc(_trunc(body || '(no content)', 60))}"</span>`;
     sub += `<span style="display:block;margin-top:4px;color:var(--color-text-muted);">${_esc(_timeAgo(latest.createdAt))}</span>`;
   } else {
-    sub = 'No posts yet. Be the first!';
+    sub = 'No posts yet — open the Activity Wall to get started!';
   }
 
   card.querySelector('.dash-card-badge-el').className = `dash-card-badge ${weekPosts.length > 0 ? 'ok' : 'neutral'} dash-card-badge-el`;
@@ -940,7 +940,7 @@ function _populateWallCard(el, posts) {
 
   const btn = card.querySelector('.dash-card-cta');
   btn.disabled = false;
-  btn.textContent = 'See Wall';
+  btn.textContent = 'Open Activity Wall';
   btn.onclick = () => navigate(VIEW_KEYS.ACTIVITY_CENTER);
 }
 
@@ -1229,9 +1229,9 @@ function _populateBanner(el, tasks, documents, posts) {
     ctaView  = VIEW_KEYS.DOCUMENTS;
   } else if (recentPosts.length > 0) {
     icon     = '💬';
-    title    = `${recentPosts.length} new post${recentPosts.length !== 1 ? 's' : ''} on the Family Wall this week`;
+    title    = `${recentPosts.length} new post${recentPosts.length !== 1 ? 's' : ''} on the Activity Wall this week`;
     msg      = 'See what\'s been shared recently.';
-    ctaLabel = 'See Wall';
+    ctaLabel = 'Open Activity Wall';
     ctaView  = VIEW_KEYS.ACTIVITY_CENTER;
   } else {
     wrap.innerHTML = '';
