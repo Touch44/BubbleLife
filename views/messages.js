@@ -22,7 +22,7 @@ import { toast }                                 from '../core/toast.js';
 
 // ── Module state ──────────────────────────────────────────────
 
-let _activeConvoId = null;
+let _activeConvoId = (() => { try { return sessionStorage.getItem('fh_last_convo') || null; } catch(_) { return null; } })();
 let _persons       = [];
 let _personMap     = new Map();
 let _markingRead   = false;   // guard: prevents ENTITY_SAVED re-render cascade during markRead
@@ -463,6 +463,7 @@ async function _renderThread(threadEl, convoId, acct) {
   backBtn.addEventListener('click', () => {
     document.getElementById('view-messages')?.classList.remove('msg-thread-open');
     _activeConvoId = null;
+    try { sessionStorage.removeItem('fh_last_convo'); } catch(_) {}
   });
   const av = document.createElement('div');
   av.className = 'msg-avatar';
@@ -638,6 +639,7 @@ function _buildComposeBar(convoId, acct) {
 
 async function _openConversation(convoId) {
   _activeConvoId   = convoId;
+  try { sessionStorage.setItem('fh_last_convo', convoId); } catch(_) {}
   const acct       = getAccount();
   const viewEl     = document.getElementById('view-messages');
   const threadEl   = viewEl?.querySelector('.msg-thread');

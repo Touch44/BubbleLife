@@ -1,5 +1,5 @@
 /**
- * FamilyHub v4.2 — views/kanban.js
+ * FamilyHub v4.8.0 — views/kanban.js
  * 4-column Kanban board: Inbox · In Progress · Review · Done
  * Renders into #view-kanban when view="kanban"
  *
@@ -79,7 +79,7 @@ let _filterOverdue   = false;
 
 // ── Capacities-style view modes + filter tabs ─────────────── //
 let _viewMode   = 'kanban';
-let _filterTab  = 'status';
+let _filterTab  = 'inbox'; // [minor] Spec: inbox is the primary entry point
 
 const _VIEW_MODES = [
   { key: 'list',    label: 'List',    icon: '\uD83D\uDCCB' },
@@ -92,14 +92,14 @@ const _VIEW_MODES = [
 
 const _FILTER_TABS = [
   { key: 'inbox',     label: 'Inbox',     icon: '\uD83D\uDCEC' },
-  { key: 'scheduled', label: 'Scheduled', icon: '\uD83D\uDCC5' },
   { key: 'today',     label: 'Today',     icon: '\u2600\uFE0F' },
+  { key: 'scheduled', label: 'Scheduled', icon: '\uD83D\uDCC5' },
   { key: 'status',    label: 'Status',    icon: '\uD83D\uDD04' },
   { key: 'context',   label: 'Context',   icon: '\uD83C\uDFF7\uFE0F' },
   { key: 'open',      label: 'Open',      icon: '\u25CB' },
   { key: 'completed', label: 'Completed', icon: '\u2705' },
   { key: 'all',       label: 'All',       icon: '\uD83D\uDDC2\uFE0F' },
-];
+]; // [minor] Reordered to match spec: Inbox → Today → Scheduled → Status → Context → Open → Completed → All
 
 // Sort state per column key
 let _sortBy = {};  // { 'Inbox': 'deadline', ... }
@@ -202,8 +202,8 @@ function _applyFilters(tasks) {
     if (_filterPriority && t.priority !== _filterPriority) return false;
     if (_filterOverdue) {
       const today = _todayStr();
-      const due = _isoToLocalDate(t.dueDate);  // [minor] BUG-69 fix: use local date
-      if (!due || due >= today) return false;
+      const due = _isoToLocalDate(t.dueDate);
+      if (!due || due > today) return false; // BUG-46 fix: include today (due === today is overdue)
     }
     return true;
   });
@@ -214,15 +214,21 @@ function _sortTasks(tasks, colKey) {
   return [...tasks].sort((a, b) => {
     switch (sortKey) {
       case 'deadline': {
-        // [minor] BUG-50 fix: use local date string for consistent comparison
+        // Spec: tasks WITH deadlines rank above tasks WITHOUT; earlier deadlines first
+        // Used as tie-breaker after priority + scheduled date
+        const ap = PRIORITY_ORDER[a.priority] ?? 99;
+        const bp = PRIORITY_ORDER[b.priority] ?? 99;
+        if (ap !== bp) return ap - bp;
         const aDue = _isoToLocalDate(a.dueDate) || '9999-99-99';
         const bDue = _isoToLocalDate(b.dueDate) || '9999-99-99';
-        return aDue.localeCompare(bDue);
+        if (aDue !== bDue) return aDue.localeCompare(bDue);
+        return _deadlineSort(a, b);
       }
       case 'priority': {
         const ap = PRIORITY_ORDER[a.priority] ?? 99;
         const bp = PRIORITY_ORDER[b.priority] ?? 99;
-        return ap - bp;
+        if (ap !== bp) return ap - bp;
+        return _deadlineSort(a, b);
       }
       case 'created':
         return (b.createdAt || '').localeCompare(a.createdAt || '');
@@ -267,21 +273,200 @@ function _collectAssignees() {
 
 // ── Filter tab logic ──────────────────────────────────────── //
 
+/**
+ * Spec-compliant filter tab logic (per design doc):
+ *
+ * Inbox     — tasks without a scheduled date OR without a status.
+ *             Grouped by creation date (day bucket). Clear by assigning date/deadline/status.
+ * Today     — tasks scheduled for today + tasks with overdue or due-today deadlines.
+ *             Grouped by status, ordered by priority.
+ * Scheduled — tasks that have a scheduled/due date assigned.
+ *             Grouped by date property. Overdue tasks shown first for rescheduling.
+ * Status    — all tasks grouped by status (original kanban grouping).
+ * Context   — all tasks grouped by context tag, ordered by priority then status.
+ * Open      — all undone tasks, ordered by priority then status.
+ * Completed — tasks where status === 'Done', ordered by completedAt descending.
+ * All       — all tasks; user filter/sort choices apply.
+ *
+ * Deadline ranking (global tie-breaker):
+ *   Tasks WITH deadlines rank above tasks WITHOUT.
+ *   Among deadline tasks: earlier deadline first.
+ *   Applied after priority and scheduled date.
+ */
+
+/** Returns the set of tasks that belong to the active filter tab */
 function _applyFilterTab(tasks) {
   const today = _todayStr();
   switch (_filterTab) {
-    case 'inbox':     return tasks.filter(t => t.status === 'Inbox' || !t.status);
-    case 'scheduled': return tasks.filter(t => !!_isoToLocalDate(t.dueDate));
-    case 'today':     return tasks.filter(t => _isoToLocalDate(t.dueDate) === today);
-    case 'open':      return tasks.filter(t => t.status !== 'Done');
-    case 'completed': return tasks.filter(t => t.status === 'Done');
-    case 'status': case 'context': case 'all': default:
+    case 'inbox':
+      // Spec: "All tasks without a scheduled date OR without a status."
+      // A task appears in inbox if it is missing a dueDate OR missing a meaningful status.
+      // It leaves inbox once BOTH a dueDate AND a meaningful status have been assigned.
+      return tasks.filter(t => {
+        const hasDate   = !!_isoToLocalDate(t.dueDate);
+        const hasStatus = !!(t.status && t.status !== 'Inbox');
+        return !hasDate || !hasStatus; // BUG-1 fix: OR not AND
+      });
+
+    case 'today': {
+      // Spec: tasks scheduled for today PLUS tasks with overdue or due-today deadlines.
+      // On the task entity, dueDate serves as both the scheduled date and the deadline.
+      return tasks.filter(t => {
+        if (t.status === 'Done' || t.status === 'done') return false; // BUG-3 fix: also exclude lowercase 'done'
+        const due = _isoToLocalDate(t.dueDate); // dueDate = both schedule and deadline
+        if (!due) return false;
+        return due <= today; // today's tasks + all overdue tasks
+      });
+    }
+
+    case 'scheduled':
+      // All tasks with a scheduled date, excluding Done (completed tasks don't need rescheduling)
+      return tasks.filter(t => !!_isoToLocalDate(t.dueDate) && t.status !== 'Done' && t.status !== 'done'); // BUG-4 fix
+
+    case 'open':
+      // All undone tasks
+      return tasks.filter(t => t.status !== 'Done' && t.status !== 'done');
+
+    case 'completed':
+      // Tasks marked Done, most recently completed first
+      return tasks
+        .filter(t => t.status === 'Done' || t.status === 'done')
+        .sort((a, b) => (b.completedAt || b.updatedAt || '').localeCompare(a.completedAt || a.updatedAt || ''));
+
+    case 'status':
+    case 'context':
+    case 'all':
+    default:
       return tasks;
   }
 }
 
+/** Deadline-aware sort comparator (global tie-breaker per spec).
+ *  On task entity, dueDate IS the deadline — used as tie-breaker after priority + scheduled date.
+ *  Tasks WITH a dueDate rank above tasks WITHOUT. Earlier dates come first.
+ */
+function _deadlineSort(a, b) {
+  const aDl = _isoToLocalDate(a.dueDate); // dueDate serves as the task deadline
+  const bDl = _isoToLocalDate(b.dueDate);
+  // Tasks WITH deadline rank above tasks WITHOUT
+  if (aDl && !bDl) return -1;
+  if (!aDl && bDl) return 1;
+  if (aDl && bDl) return aDl.localeCompare(bDl);
+  return 0;
+}
+
+/** Priority + status + deadline composite sort (used by Today, Open, Context tabs).
+ *  Order: priority → status (In Progress first) → dueDate → title (stable)
+ */
+const STATUS_SORT_ORDER = { 'In Progress': 0, 'Review': 1, 'Inbox': 2, 'Done': 3 }; // BUG-9 fix
+function _priorityStatusDeadlineSort(a, b) {
+  // 1. Priority
+  const ap = PRIORITY_ORDER[a.priority] ?? 99;
+  const bp = PRIORITY_ORDER[b.priority] ?? 99;
+  if (ap !== bp) return ap - bp;
+  // 2. Status order (spec: "priority and status")
+  const as_ = STATUS_SORT_ORDER[a.status] ?? 2;
+  const bs_ = STATUS_SORT_ORDER[b.status] ?? 2;
+  if (as_ !== bs_) return as_ - bs_;
+  // 3. Scheduled date (earlier first)
+  const aDate = _isoToLocalDate(a.dueDate) || '9999-99-99';
+  const bDate = _isoToLocalDate(b.dueDate) || '9999-99-99';
+  if (aDate !== bDate) return aDate.localeCompare(bDate);
+  // 4. Stable title tie-break
+  return (a.title || '').localeCompare(b.title || '');
+}
+
+/** Group tasks for Inbox tab: buckets by creation date */
+function _groupByCreatedDate(tasks) {
+  const today = _todayStr();
+  const yesterday = (() => {
+    const d = new Date(today + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  })();
+
+  const groups = new Map();
+  // Sort by createdAt desc; tasks with no createdAt go last ('' sorts before real dates when desc)
+  const sorted = [...tasks].sort((a, b) => {
+    if (!a.createdAt && !b.createdAt) return 0;
+    if (!a.createdAt) return 1;  // no date → sort last
+    if (!b.createdAt) return -1;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+  for (const t of sorted) {
+    const raw = t.createdAt ? t.createdAt.slice(0, 10) : 'Unknown';
+    let label;
+    if (raw === today)     label = 'Today';
+    else if (raw === yesterday) label = 'Yesterday';
+    else if (raw !== 'Unknown') {
+      const d = new Date(raw + 'T00:00:00');
+      label = d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    } else {
+      label = 'Unknown date';
+    }
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(t);
+  }
+  return groups;
+}
+
+/** Group tasks for Scheduled tab: buckets by scheduled date, overdue first */
+function _groupByScheduledDate(tasks) {
+  const today = _todayStr();
+  const overdue = [];
+  const dateMap = new Map();
+  for (const t of tasks) {
+    const dateStr = _isoToLocalDate(t.dueDate);
+    if (!dateStr) continue;
+    if (dateStr < today) {
+      overdue.push(t);
+    } else {
+      if (!dateMap.has(dateStr)) dateMap.set(dateStr, []);
+      dateMap.get(dateStr).push(t);
+    }
+  }
+  const result = new Map();
+  if (overdue.length) {
+    // Sort overdue by date ascending (earliest overdue first)
+    overdue.sort((a, b) => (_isoToLocalDate(a.dueDate) || '').localeCompare(_isoToLocalDate(b.dueDate) || ''));
+    result.set('⚠ Overdue', overdue);
+  }
+  // Add future dates in order
+  const futureDates = [...dateMap.keys()].sort();
+  for (const d of futureDates) {
+    const dd = new Date(d + 'T00:00:00');
+    let label;
+    if (d === today) label = '📅 Today';
+    else {
+      const tomorrow = (() => {
+        const dx = new Date(today + 'T00:00:00');
+        dx.setDate(dx.getDate() + 1);
+        return dx.getFullYear() + '-' + String(dx.getMonth()+1).padStart(2,'0') + '-' + String(dx.getDate()).padStart(2,'0');
+      })();
+      if (d === tomorrow) label = '📅 Tomorrow';
+      else label = '📅 ' + dd.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    result.set(label, dateMap.get(d));
+  }
+  return result;
+}
+
+/** Group for Today tab: by status, ordered by priority within each group */
+function _groupTodayByStatus(tasks) {
+  const statusOrder = ['Inbox', 'In Progress', 'Review', 'Done'];
+  const groups = new Map();
+  for (const t of [...tasks].sort(_priorityStatusDeadlineSort)) {
+    const s = t.status || 'Inbox';
+    if (!groups.has(s)) groups.set(s, []);
+    groups.get(s).push(t);
+  }
+  const sorted = new Map();
+  for (const key of statusOrder) { if (groups.has(key)) sorted.set(key, groups.get(key)); }
+  for (const [k, v] of groups) { if (!sorted.has(k)) sorted.set(k, v); }
+  return sorted;
+}
+
 function _groupByStatus(tasks) {
-  // Only include statuses that actually have tasks (no empty group clutter)
   const order = ['Inbox', 'In Progress', 'Review', 'Done'];
   const groups = new Map();
   for (const t of tasks) {
@@ -289,7 +474,6 @@ function _groupByStatus(tasks) {
     if (!groups.has(s)) groups.set(s, []);
     groups.get(s).push(t);
   }
-  // Sort by known order first, then alphabetical for custom statuses
   const sorted = new Map();
   for (const key of order) { if (groups.has(key)) sorted.set(key, groups.get(key)); }
   for (const [k, v] of groups) { if (!sorted.has(k)) sorted.set(k, v); }
@@ -298,8 +482,10 @@ function _groupByStatus(tasks) {
 
 function _groupByContext(tasks) {
   const groups = new Map();
-  for (const t of tasks) {
-    const ctx = t.context || 'none';
+  // Sort tasks by priority+deadline within each context group
+  const sortedTasks = [...tasks].sort(_priorityStatusDeadlineSort);
+  for (const t of sortedTasks) {
+    const ctx = (!t.context || t.context === 'all') ? 'All Contexts' : t.context; // BUG-40 fix: friendly label for 'all'
     if (!groups.has(ctx)) groups.set(ctx, []);
     groups.get(ctx).push(t);
   }
@@ -457,7 +643,7 @@ function _rerenderColumns() {
 
   for (const col of COLUMNS) {
     const colTasks = _sortTasks(
-      filtered.filter(t => t.status === col.key),
+      filtered.filter(t => col.key === 'Inbox' ? (!t.status || t.status === 'Inbox') : t.status === col.key),
       col.key
     );
     _buildColumn(_boardEl, col, colTasks);
@@ -562,10 +748,15 @@ function _buildCard(task) {
     ? `<span class="kanban-card-prio-dot" style="background:${PRIORITY_COLORS[task.priority] || 'var(--color-text-muted)'}" title="${_esc(task.priority)}"></span>`
     : '';
 
-  // Due date
-  const dueEl = due
-    ? `<span class="kanban-card-due ${dueCls}">${_formatDue(due, today)}</span>`
-    : '';
+  // Due date — task entity uses dueDate as both scheduled date and deadline
+  // Show with calendar icon for upcoming, clock icon when overdue/today (urgency signal)
+  let dueEl = '';
+  if (due) {
+    const isUrgent = due <= today; // overdue OR due today
+    const dateIcon = isUrgent ? '⏰' : '📅';
+    dueEl = `<span class="kanban-card-due ${dueCls}" title="${isUrgent ? 'Deadline' : 'Scheduled'}">${dateIcon} ${_formatDue(due, today)}</span>`;
+  }
+  const deadlineEl = ''; // task entity has no separate deadline field; dueDate IS the deadline
 
   // Tags (first 2 + "+N")
   const tags = Array.isArray(task.tags) ? task.tags : [];
@@ -599,8 +790,9 @@ function _buildCard(task) {
 
   // Kanban state dot (P-23)
   const kState    = task.kanban_state || 'normal';
-  const kStateDot = `<button class="kanban-state-dot kanban-state-dot--${kState}"
-    title="State: ${kState}" aria-label="Kanban state: ${kState}" data-state="${kState}"></button>`;
+  const kStateEsc = _esc(kState); // BUG-5 fix: escape kanban_state before embedding in HTML attrs
+  const kStateDot = `<button class="kanban-state-dot kanban-state-dot--${kStateEsc}"
+    title="State: ${kStateEsc}" aria-label="Kanban state: ${kStateEsc}" data-state="${kStateEsc}"></button>`;
 
   card.innerHTML = `
     <div class="kanban-card-top">
@@ -618,6 +810,7 @@ function _buildCard(task) {
       <div class="kanban-card-tags">${tagHtml}</div>
       <div class="kanban-card-meta">
         ${dueEl}
+        ${deadlineEl}
         ${assigneeEl}
       </div>
     </div>
@@ -766,8 +959,9 @@ function _showStateDotPopover(dotEl, task) {
   // Position below the dot
   document.body.appendChild(popover);
   const rect = dotEl.getBoundingClientRect();
-  popover.style.top  = `${rect.bottom + window.scrollY + 4}px`;
-  popover.style.left = `${Math.min(rect.left + window.scrollX, window.innerWidth - 140)}px`;
+  // BUG-12 fix: position:fixed uses viewport coords — no scrollY/scrollX offset needed
+  popover.style.top  = `${rect.bottom + 4}px`;
+  popover.style.left = `${Math.min(rect.left, window.innerWidth - 140)}px`;
 
   _activeDotPopover = popover;
 
@@ -834,7 +1028,9 @@ function _buildQuickAdd(statusKey) {
         title,
         status:   statusKey,
         priority: 'Medium',
-        context:  ctx === 'all' ? 'family' : ctx,
+        context:  (!ctx || ctx === 'all') ? 'family' : ctx,
+        // BUG-10 fix: auto-set dueDate=today when quick-adding on the Today tab
+        ...((_filterTab === 'today') ? { dueDate: _todayStr() } : {}),
       }, account?.id);
       input.value = '';
       // [minor] BUG-65 fix: removed manual _loadData()/_rerenderColumns() here.
@@ -865,9 +1061,11 @@ function _buildQuickAdd(statusKey) {
   });
 
   input.addEventListener('blur', () => {
-    // Small delay so Enter fires first
+    // BUG-15 fix: save on blur if there is content, don't silently discard
     setTimeout(() => {
-      if (!input.value.trim()) {
+      if (input.value.trim()) {
+        doAdd(); // save typed title on focus-away
+      } else {
         inputWrap.style.display = 'none';
         addBtn.style.display = '';
       }
@@ -1025,11 +1223,15 @@ async function _moveTask(taskId, newStatus) {
 
   const account = getAccount();
   try {
+    // BUG-47 fix: preserve edge-resolved project relation on drag (task.project may be undefined for edge-stored relations)
+    const edgeProject = _taskProjectMap.get(taskId);
     await saveEntity({
-    ...task,
-    status: newStatus,
-    previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
-  }, account?.id);
+      ...task,
+      status: newStatus,
+      previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
+      kanban_state: (newStatus === 'Done' && task.kanban_state === 'blocked') ? 'normal' : task.kanban_state,
+      ...(edgeProject && !task.project ? { project: edgeProject } : {}),
+    }, account?.id);
     // [minor] BUG-64 fix: removed manual _loadData()/_rerenderColumns() here.
     // saveEntity triggers ENTITY_SAVED → the on(EVENTS.ENTITY_SAVED) listener
     // already calls _loadData().then(_rerenderColumns). Manual call caused double-render.
@@ -1452,7 +1654,7 @@ function _injectStyles() {
     .kanban-state-dot--done    { background: var(--color-success); }
     .kanban-state-dot--blocked { background: var(--color-danger); }
     .kanban-state-popover {
-      position: absolute; z-index: 9999;
+      position: fixed; z-index: 9999; /* BUG-12 fix: fixed so scrollY offset not needed */
       background: var(--color-bg); border: 1px solid var(--color-border);
       border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
       padding: var(--space-1); min-width: 120px;
@@ -1477,6 +1679,40 @@ function _injectStyles() {
       to   { opacity: 1; transform: none; }
     }
 
+    /* ── Deadline badge on card ─────────────────── */
+    .kanban-card-deadline {
+      font-size: var(--text-xs);
+      font-variant-numeric: tabular-nums;
+      padding: 1px 4px;
+      border-radius: var(--radius-sm);
+      background: var(--color-surface-2);
+    }
+    .kanban-card-deadline.due-overdue {
+      background: var(--color-danger-bg, #fef2f2);
+      color: var(--color-danger);
+      font-weight: var(--weight-semibold);
+    }
+    .kanban-card-deadline.due-today {
+      background: var(--color-warning-bg, #fffbeb);
+      color: var(--color-warning-text);
+      font-weight: var(--weight-semibold);
+    }
+    .kanban-card-deadline.due-future {
+      color: var(--color-text-muted);
+    }
+
+    /* ── Inbox empty-state helper text ──────────── */
+    .kanban-inbox-hint {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      padding: var(--space-2) var(--space-3);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      margin-bottom: var(--space-3);
+      line-height: 1.5;
+    }
+
     /* ── Mobile ─────────────────────────────────────── */
     @media (max-width: 600px) {
       .kanban-filter-bar {
@@ -1493,20 +1729,30 @@ function _injectStyles() {
 
 // ── Main render ───────────────────────────────────────────── //
 
+let _renderSeq = 0; // BUG-7 fix: render sequence counter to guard against concurrent renders
+
 async function renderKanban(params = {}) {
   const viewEl = document.getElementById('view-kanban');
   if (!viewEl) return;
 
+  const seq = ++_renderSeq; // claim this render slot
   _injectStyles();
 
   viewEl.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading tasks\u2026</div>';
 
+  // BUG-36 fix: reset all filter state on a fresh (non-internal) render to prevent state leak
+  if (!params._internal) {
+    _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
+    _filterPriority = null; _filterOverdue = false;
+    if (_viewMode !== (params.viewMode || _viewMode)) _sortBy = {}; // reset sort on mode change
+  }
   if (params.filter === 'overdue') _filterOverdue = true;
   if (params.viewMode) _viewMode = params.viewMode;
   if (params.filterTab) _filterTab = params.filterTab;
 
   try {
     await _loadData();
+    if (seq !== _renderSeq) return; // BUG-7 fix: a newer render started; abort this one
     viewEl.innerHTML = '';
 
     // \u2500\u2500 Header: icon + title \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -1546,13 +1792,13 @@ async function renderKanban(params = {}) {
     viewEl.appendChild(tabBar);
 
     // \u2500\u2500 Controls row: count + view mode dropdown \u2500\u2500\u2500\u2500
-    const filtered = _applyFilterTab(_applyFilters(_tasks));  // both filter-tab AND kanban bar filters
+    const filtered = _applyFilters(_applyFilterTab(_tasks));  // [minor] Fixed: tab first, then bar filters (matches board order)
     const controls = document.createElement('div');
     controls.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;gap:var(--space-3);padding:var(--space-2) var(--space-5);';
 
     const countEl = document.createElement('span');
     countEl.style.cssText = 'font-size:var(--text-sm);color:var(--color-text-muted);font-weight:var(--weight-semibold);';
-    countEl.textContent = '# ' + filtered.length + ' tasks';
+    countEl.textContent = filtered.length + ' ' + (filtered.length === 1 ? 'task' : 'tasks'); // BUG-16 fix: singular + remove '#'
     controls.appendChild(countEl);
 
     // View mode dropdown
@@ -1594,8 +1840,7 @@ async function renderKanban(params = {}) {
     }
     const _vmClickAway = (ev) => { if (!vmWrap.contains(ev.target)) vmDd.style.display = 'none'; };
     document.addEventListener('click', _vmClickAway);
-    if (!viewEl._vmListeners) viewEl._vmListeners = [];
-    viewEl._vmListeners.push(_vmClickAway);
+    viewEl._vmListeners.push(_vmClickAway); // BUG-37 fix: removed dead if-block (always truthy here)
     vmWrap.appendChild(vmBtn);
     vmWrap.appendChild(vmDd);
     controls.appendChild(vmWrap);
@@ -1608,7 +1853,16 @@ async function renderKanban(params = {}) {
       _buildBoard(viewEl);
     } else {
       viewEl.classList.add('alt-view');
-      _renderAltView(viewEl, filtered);
+      // BUG-11 fix: clear sticky kanban bar filters when entering alt views (no filter UI available)
+      if (_filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue) {
+        _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
+        _filterPriority = null; _filterOverdue = false;
+        // Recompute filtered with cleared state
+        const filteredAlt = _applyFilters(_applyFilterTab(_tasks));
+        _renderAltView(viewEl, filteredAlt);
+      } else {
+        _renderAltView(viewEl, filtered);
+      }
     }
 
   } catch (err) {
@@ -1620,21 +1874,72 @@ async function renderKanban(params = {}) {
 // ── Alternative view modes (non-Kanban) ───────────────────── //
 
 function _renderAltView(container, tasks) {
-  const grouped = (_filterTab === 'context')
-    ? _groupByContext(tasks)
-    : _groupByStatus(tasks);
+  // Select grouping strategy based on active filter tab (spec-compliant)
+  let grouped;
+  switch (_filterTab) {
+    case 'inbox':
+      grouped = _groupByCreatedDate(tasks);
+      break;
+    case 'today':
+      grouped = _groupTodayByStatus(tasks);
+      break;
+    case 'scheduled':
+      grouped = _groupByScheduledDate(tasks);
+      break;
+    case 'open': {
+      // Spec: "ordered by priority and status" — sort by priority, then status, then date
+      const openSorted = [...tasks].sort(_priorityStatusDeadlineSort);
+      grouped = new Map([['Open Tasks', openSorted]]); // BUG-9 fix: _priorityStatusDeadlineSort now includes status
+      break;
+    }
+    case 'completed':
+      // Already sorted by completedAt in _applyFilterTab; single group
+      grouped = new Map([['Completed', tasks]]);
+      break;
+    case 'context':
+      grouped = _groupByContext(tasks);
+      break;
+    case 'all':
+    case 'status':
+    default:
+      grouped = _groupByStatus(tasks);
+      break;
+  }
 
   const body = document.createElement('div');
   body.style.cssText = 'padding:0 var(--space-5) var(--space-5);';
 
   // BUG 13: Show empty state when no tasks
   if (tasks.length === 0) {
-    body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-6);gap:var(--space-3);color:var(--color-text-muted);text-align:center;"><div style="font-size:2.5rem;">\uD83C\uDF89</div><div style="font-size:var(--text-base);font-weight:var(--weight-semibold);color:var(--color-text);">No tasks here</div><div style="font-size:var(--text-sm);">Switch tabs or clear filters to see tasks.</div></div>';
+    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'open' ? '○' : '🎉'; // BUG-17 fix
+    const emptyMsg  = _filterTab === 'inbox'
+      ? 'Your inbox is clear! Tasks without a date or status will appear here.'
+      : _filterTab === 'today'
+      ? 'Nothing scheduled for today.'
+      : _filterTab === 'completed'
+      ? 'No completed tasks yet.'
+      : 'No tasks here. Switch tabs or clear filters to see tasks.';
+    body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-6);gap:var(--space-3);color:var(--color-text-muted);text-align:center;"><div style="font-size:2.5rem;">' + emptyIcon + '</div><div style="font-size:var(--text-base);font-weight:var(--weight-semibold);color:var(--color-text);">Empty</div><div style="font-size:var(--text-sm);">' + emptyMsg + '</div></div>';
     container.appendChild(body);
     return;
   }
+  // Inbox tab: show helper text explaining how to clear tasks from inbox
+  if (_filterTab === 'inbox') {
+    const hint = document.createElement('div');
+    hint.className = 'kanban-inbox-hint';
+    hint.textContent = 'To clear tasks from inbox: assign a due date AND a status. Tasks need both to leave the inbox.';
+    body.appendChild(hint);
+  }
 
-  const _statusColors = { 'Inbox':'#6b7280','Not Started':'#f97316','Next Up':'#eab308','In Progress':'#3b82f6','Review':'#8b5cf6','Done':'#22c55e' };
+  // [minor] FIX-21: Extended color map for date-group keys (Scheduled/Inbox tabs)
+  const _statusColors = {
+    'Inbox':'#6b7280','Not Started':'#f97316','Next Up':'#eab308',
+    'In Progress':'#3b82f6','Review':'#8b5cf6','Done':'#22c55e',
+    '⚠ Overdue': '#dc2626',        // Scheduled tab overdue group
+    'Open Tasks': '#3b82f6',        // Open tab
+    'Completed':  '#22c55e',        // Completed tab
+    'Today': '#6b7280', 'Yesterday': '#6b7280', 'Unknown date': '#9ca3af',
+  };
 
   for (const [groupKey, groupTasks] of grouped) {
     if (!groupTasks.length) continue;  // skip empty groups
@@ -1652,14 +1957,34 @@ function _renderAltView(container, tasks) {
         row.style.cssText = 'display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
         row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-surface)'; });
         row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
-        const cb = task.status === 'Done' ? '\u2705' : '\u25CB';
         const projId = task.project || _taskProjectMap.get(task.id) || '';
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
-        const due = task.dueDate ? task.dueDate.slice(0,10) : '';
-        const overdue = due && due < _todayStr() && task.status !== 'Done';
-        const expandChevron = isEmbed ? '<span style="font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">\u25B6</span>' : '';
-        row.innerHTML = expandChevron + '<span style="font-size:1rem;">' + cb + '</span><span style="flex:1;font-size:var(--text-sm);color:var(--color-text);">' + _esc(task.title || 'Untitled') + '</span>' + (due ? '<span style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : 'var(--color-text-muted)') + ';">' + due + '</span>' : '') + (pName ? '<span style="font-size:var(--text-xs);color:var(--color-accent);background:var(--color-surface-2);padding:1px 8px;border-radius:var(--radius-full);">' + _esc(pName) + '</span>' : '');
-        row.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }));
+        const due = _isoToLocalDate(task.dueDate);
+        const today2 = _todayStr();
+        const overdue = due && due < today2 && task.status !== 'Done';
+        const dueFormatted = due ? _formatDue(due, today2) : '';
+        const dueIcon = overdue ? '⏰ ' : due === today2 ? '⏰ ' : '';
+        const expandChevron = isEmbed ? '<span style="font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">&#9654;</span>' : '';
+        row.innerHTML = expandChevron +
+          '<input type="checkbox" ' + (task.status === 'Done' ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
+          '<span style="flex:1;font-size:var(--text-sm);color:var(--color-text);' + (task.status === 'Done' ? 'text-decoration:line-through;color:var(--color-text-muted);' : '') + '">' + _esc(task.title || 'Untitled') + '</span>' +
+          (due ? '<span style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : due === today2 ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || due === today2 ? 'var(--weight-semibold)' : 'normal') + ';">' + dueIcon + dueFormatted + '</span>' : '') +
+          (pName ? '<span style="font-size:var(--text-xs);color:var(--color-accent);background:var(--color-surface-2);padding:1px 8px;border-radius:var(--radius-full);">' + _esc(pName) + '</span>' : '');
+        // BUG-14 fix: interactive checkbox in list/embed views
+        const listCb = row.querySelector('input[type=checkbox]');
+        if (listCb) {
+          listCb.addEventListener('change', async (e) => {
+            e.stopPropagation();
+            const account = getAccount();
+            const newStatus = listCb.checked ? 'Done' : (task.previousStatus && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
+            if (listCb.checked) window._fhEnv?.services?.effects?.play('confetti');
+            try {
+              let fresh; try { fresh = await getEntity(task.id); } catch { fresh = task; }
+              await saveEntity({ ...fresh, status: newStatus, previousStatus: newStatus === 'Done' ? fresh.status : fresh.previousStatus }, account?.id);
+            } catch (err) { console.error('[kanban] List complete failed:', err); listCb.checked = !listCb.checked; }
+          });
+        }
+        row.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }); });
         body.appendChild(row);
       }
     } else if (_viewMode === 'wall' || _viewMode === 'gallery') {
@@ -1667,15 +1992,18 @@ function _renderAltView(container, tasks) {
       grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-3);width:100%;';
       for (const task of groupTasks) {
         const card = document.createElement('div');
-        card.style.cssText = 'flex:0 0 260px;border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3);background:var(--color-surface);cursor:pointer;display:flex;flex-direction:column;gap:var(--space-1);transition:box-shadow 0.15s;';
+        card.style.cssText = 'flex:1 1 240px;min-width:200px;max-width:320px;border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3);background:var(--color-surface);cursor:pointer;display:flex;flex-direction:column;gap:var(--space-1);transition:box-shadow 0.15s;'; // BUG-42 fix: responsive flex
         card.addEventListener('mouseenter', () => { card.style.boxShadow = 'var(--shadow-md)'; });
         card.addEventListener('mouseleave', () => { card.style.boxShadow = 'none'; });
         const cb = task.status === 'Done' ? '\u2705' : '\u25CB';
-        const due = task.dueDate ? task.dueDate.slice(0,10) : '';
-        const overdue = due && due < _todayStr() && task.status !== 'Done';
+        const wallDue = _isoToLocalDate(task.dueDate); // [minor] FIX-11: timezone safe
+        const wallToday = _todayStr();
+        const overdue = wallDue && wallDue < wallToday && task.status !== 'Done';
+        const dueTodayW = wallDue === wallToday;
+        const wallDueFmt = wallDue ? _formatDue(wallDue, wallToday) : ''; // [minor] FIX-18: formatted
         const projId = task.project || _taskProjectMap.get(task.id) || '';
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
-        card.innerHTML = '<div style="font-size:var(--text-xs);color:var(--color-accent);font-weight:var(--weight-bold);">\u2299 Task</div><div style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);">' + cb + ' ' + _esc(task.title || 'Untitled') + '</div>' + (due ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : 'var(--color-text-muted)') + ';">' + due + ' \uD83D\uDCC5' + (overdue ? ' \u26A0' : '') + '</div>' : '') + (pName ? '<div style="font-size:var(--text-xs);color:var(--color-text-muted);">\uD83C\uDF10 ' + _esc(pName) + '</div>' : '');
+        card.innerHTML = '<div style="font-size:var(--text-xs);color:var(--color-accent);font-weight:var(--weight-bold);">\u2299 Task</div><div style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);">' + cb + ' ' + _esc(task.title || 'Untitled') + '</div>' + (wallDue ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : dueTodayW ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || dueTodayW ? 'var(--weight-semibold)' : 'normal') + ';">' + (overdue || dueTodayW ? '\u23F0 ' : '\uD83D\uDCC5 ') + wallDueFmt + '</div>' : '') + (pName ? '<div style="font-size:var(--text-xs);color:var(--color-text-muted);">\uD83C\uDF10 ' + _esc(pName) + '</div>' : '');
         card.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }));
         grid.appendChild(card);
       }
@@ -1688,15 +2016,15 @@ function _renderAltView(container, tasks) {
         t.style.cssText = 'width:100%;border-collapse:collapse;font-size:var(--text-sm);min-width:700px;';
         t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
         const tbody = document.createElement('tbody');
-        let _rowIdx = 0;
         groupTasks.forEach((tk, i) => {
-          _rowIdx++;
+          // BUG-44 fix: use loop index+1 per group (restarting per group is expected for grouped tables)
           const tr = document.createElement('tr');
           tr.style.cssText = 'border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
           tr.addEventListener('mouseenter', () => { tr.style.background = 'var(--color-surface)'; });
           tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
-          const due = tk.dueDate ? new Date(tk.dueDate + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
-          const ov = tk.dueDate && tk.dueDate.slice(0,10) < _todayStr() && tk.status !== 'Done';
+          const _dueLocal = _isoToLocalDate(tk.dueDate); // BUG-6 fix: normalise to local YYYY-MM-DD first
+          const due = _dueLocal ? new Date(_dueLocal + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
+          const ov = _isoToLocalDate(tk.dueDate) && _isoToLocalDate(tk.dueDate) < _todayStr() && tk.status !== 'Done'; // [minor] FIX-12: timezone safe
           const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';
           const bodyTxt = tk.details ? String(tk.details).replace(/<[^>]+>/g,' ').trim() : '';
           const wc = bodyTxt ? bodyTxt.split(/\s+/).length : 0;
