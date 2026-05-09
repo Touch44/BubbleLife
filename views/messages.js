@@ -157,16 +157,21 @@ function _openMsgPhoto(src) {
 // ── CSS injection ─────────────────────────────────────────────
 
 function _injectStyles() {
-  if (document.getElementById('messages-styles')) return;
+  if (document.getElementById('messages-styles-v2')) return;
   const s = document.createElement('style');
-  s.id = 'messages-styles';
+  s.id = 'messages-styles-v2';
   s.textContent = `
+    /* Layout: applied at runtime so it works even when layout.css is served from old SW cache */
+    #main.messages-active {
+      overflow: hidden !important;
+      padding: 0 !important;
+    }
     #view-messages.active {
       display: flex !important;
-      flex-direction: column;
-      height: 100%;
-      padding: 0;
-      overflow: hidden;
+      flex-direction: column !important;
+      height: 100% !important;
+      padding: 0 !important;
+      overflow: hidden !important;
     }
     .msg-header {
       display: flex; align-items: center; justify-content: space-between;
@@ -674,13 +679,21 @@ export async function renderMessages(params = {}) {
   if (!el) return;
   el.innerHTML = '';
 
+  // Show loading state immediately (before first await)
+  el.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center">⌛ Loading Messages…</div>';
+
   const acct = getAccount();
   if (!acct) {
     el.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted)">Please log in.</div>';
     return;
   }
 
-  _persons   = await getEntitiesByType('person');
+  try {
+    _persons   = await getEntitiesByType('person');
+  } catch(loadErr) {
+    console.error('[messages] failed to load persons:', loadErr);
+    _persons = [];
+  }
   _personMap = new Map(_persons.map(p => [p.id, p]));
 
   const hdr = document.createElement('div');

@@ -364,9 +364,12 @@ function _applyView(entry) {
     el.setAttribute('aria-hidden', 'true');
   });
 
-  // Remove graph-active from main (Blueprint §9.2)
+  // Remove graph-active and messages-active from main when navigating away
   const main = document.getElementById('main');
-  if (main) main.classList.remove('graph-active');
+  if (main) {
+    main.classList.remove('graph-active');
+    main.classList.remove('messages-active');
+  }
 
   // Show target view
   const viewEl = document.getElementById(`view-${viewKey}`);
@@ -378,6 +381,11 @@ function _applyView(entry) {
   // Graph view triggers special layout (Blueprint §9.2)
   if (viewKey === VIEW_KEYS.GRAPH && main) {
     main.classList.add('graph-active');
+  }
+
+  // Messages view needs overflow:hidden on #main so height:100% resolves (same pattern)
+  if (viewKey === VIEW_KEYS.MESSAGES && main) {
+    main.classList.add('messages-active');
   }
 
   // Update active nav item

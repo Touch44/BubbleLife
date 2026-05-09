@@ -911,6 +911,20 @@ body {
   padding-right: var(--panel-width);
 }
 
+/* Messages view: fixed-height two-panel layout (same pattern as graph) */
+#main.messages-active {
+  overflow: hidden;
+  padding: 0;
+}
+
+#view-messages.active {
+  display: flex !important;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
 #entity-panel-header {
   display: flex;
   flex-direction: column;
