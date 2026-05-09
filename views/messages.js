@@ -183,12 +183,15 @@ function _injectStyles() {
     }
     .msg-header h1 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: 0; }
     .msg-layout { display: flex; flex: 1; overflow: hidden; }
-    .msg-inbox {
+    .msg-inbox-col {
       width: 280px; flex-shrink: 0;
       border-right: 1px solid var(--color-border);
-      overflow-y: auto; display: flex; flex-direction: column;
+      display: flex; flex-direction: column; overflow: hidden;
     }
     .msg-inbox-summary { flex-shrink: 0; }
+    .msg-inbox {
+      flex: 1; overflow-y: auto; display: flex; flex-direction: column;
+    }
     .msg-summary {
       display: flex; align-items: center; justify-content: space-between;
       padding: var(--space-2) var(--space-4);
@@ -380,7 +383,6 @@ function _renderInboxSummary(summaryEl, convos, acct) {
       const a = getAccount();
       if (!a?.memberId) return;
       try {
-        const now = new Date().toISOString();
         for (const convo of convos) {
           if ((convo.unreadCounts?.[a.memberId] ?? 0) > 0) {
             const counts = { ...(convo.unreadCounts || {}) };
@@ -388,6 +390,9 @@ function _renderInboxSummary(summaryEl, convos, acct) {
             await saveEntity({ ...convo, unreadCounts: counts });
           }
         }
+        // Refresh summary with fresh data after clearing
+        const fresh = await _loadMyConversations(a.memberId).catch(() => null);
+        if (fresh) _renderInboxSummary(summaryEl, fresh, a);
       } catch (e) {
         console.warn('[messages] mark-all-read failed:', e);
         btn.disabled = false;
@@ -810,18 +815,21 @@ export async function renderMessages(params = {}) {
 
   const layout   = document.createElement('div');
   layout.className = 'msg-layout';
-  const inboxEl  = document.createElement('div');
-  inboxEl.className = 'msg-inbox';
+  const inboxCol  = document.createElement('div');
+  inboxCol.className = 'msg-inbox-col';
   const summaryEl = document.createElement('div');
   summaryEl.className = 'msg-inbox-summary';
-  inboxEl.appendChild(summaryEl);
+  const inboxEl   = document.createElement('div');
+  inboxEl.className = 'msg-inbox';
+  inboxCol.appendChild(summaryEl);
+  inboxCol.appendChild(inboxEl);
   const threadEl = document.createElement('div');
   threadEl.className = 'msg-thread';
   const emptyState = document.createElement('div');
   emptyState.className = 'msg-empty';
   emptyState.innerHTML = '<div class="msg-empty-icon">💬</div><div>Select a conversation</div>';
   threadEl.appendChild(emptyState);
-  layout.appendChild(inboxEl);
+  layout.appendChild(inboxCol);
   layout.appendChild(threadEl);
   el.appendChild(layout);
 
