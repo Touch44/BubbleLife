@@ -920,7 +920,8 @@ body {
 #view-messages.active {
   display: flex !important;
   flex-direction: column;
-  height: 100%;
+  height: calc(100dvh - var(--topbar-height) - var(--tab-bar-height) - var(--breadcrumb-height));
+  max-height: calc(100dvh - var(--topbar-height) - var(--tab-bar-height) - var(--breadcrumb-height));
   padding: 0;
   overflow: hidden;
 }

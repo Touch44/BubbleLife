@@ -169,7 +169,8 @@ function _injectStyles() {
     #view-messages.active {
       display: flex !important;
       flex-direction: column !important;
-      height: 100% !important;
+      height: calc(100dvh - var(--topbar-height) - var(--tab-bar-height) - var(--breadcrumb-height)) !important;
+      max-height: calc(100dvh - var(--topbar-height) - var(--tab-bar-height) - var(--breadcrumb-height)) !important;
       padding: 0 !important;
       overflow: hidden !important;
     }
