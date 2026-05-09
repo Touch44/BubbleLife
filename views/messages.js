@@ -847,6 +847,9 @@ export async function renderMessages(params = {}) {
     if (params.conversationId) {
       // Deep-link: open a specific conversation (from Daily Review, dashboard, wall button)
       await _openConversation(params.conversationId);
+    } else if (_activeConvoId && convos.some(c => c.id === _activeConvoId)) {
+      // Restore previously open conversation when re-navigating to Messages
+      await _openConversation(_activeConvoId);
     } else if (params.targetPersonId) {
       // From wall 'Message' button when no existing 1:1 — pre-open new convo modal
       // Find or pre-select the target person
