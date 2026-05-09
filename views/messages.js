@@ -255,7 +255,7 @@ function _injectStyles() {
     }
     .msg-thread {
       flex: 1; display: flex; flex-direction: column;
-      overflow: hidden; background: var(--color-bg);
+      overflow: hidden; background: var(--color-surface-2);
     }
     .msg-thread-header {
       display: flex; align-items: center; gap: var(--space-3);
@@ -827,7 +827,12 @@ export async function renderMessages(params = {}) {
   threadEl.className = 'msg-thread';
   const emptyState = document.createElement('div');
   emptyState.className = 'msg-empty';
-  emptyState.innerHTML = '<div class="msg-empty-icon">💬</div><div>Select a conversation</div>';
+  emptyState.innerHTML = `
+    <div class="msg-empty-icon" style="font-size:3rem;opacity:0.4">💬</div>
+    <div style="font-weight:var(--weight-semibold);color:var(--color-text)">No conversation open</div>
+    <div style="font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;max-width:200px">
+      Select a conversation from the list, or click <strong>✏️ New</strong> to start one
+    </div>`;
   threadEl.appendChild(emptyState);
   layout.appendChild(inboxCol);
   layout.appendChild(threadEl);
