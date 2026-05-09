@@ -1,5 +1,5 @@
 /**
- * FamilyHub v4.8.0 — views/kanban.js
+ * FamilyHub v4.8.1 — views/kanban.js
  * 4-column Kanban board: Inbox · In Progress · Review · Done
  * Renders into #view-kanban when view="kanban"
  *
@@ -868,6 +868,8 @@ function _buildCard(task) {
         ...freshTaskCb,
         status: newStatus,
         previousStatus: newStatus === 'Done' ? freshTaskCb.status : freshTaskCb.previousStatus,
+        // BUG-R6 fix: clear 'blocked' kanban_state when checking task as Done (mirrors _moveTask fix)
+        kanban_state: (newStatus === 'Done' && freshTaskCb.kanban_state === 'blocked') ? 'normal' : freshTaskCb.kanban_state,
       };
       await saveEntity(entityToSave, account?.id);
       // ENTITY_SAVED listener handles _loadData + _rerenderColumns — no manual call needed
@@ -1012,14 +1014,17 @@ function _buildQuickAdd(statusKey) {
   input.type = 'text';
   input.className = 'input kanban-quick-add-input';
   input.placeholder = 'Task name...';
+  let _qaIsSaving = false; // BUG-R4 fix: prevent blur→focus→blur infinite loop
 
-  const doAdd = async () => {
+  const doAdd = async (fromBlur = false) => {
+    if (_qaIsSaving) return; // BUG-R4 fix: prevent re-entrant calls
     const title = input.value.trim();
     if (!title) {
       inputWrap.style.display = 'none';
       addBtn.style.display = '';
       return;
     }
+    _qaIsSaving = true;
     const account = getAccount();
     try {
       const ctx = getActiveContext();
@@ -1033,22 +1038,27 @@ function _buildQuickAdd(statusKey) {
         ...((_filterTab === 'today') ? { dueDate: _todayStr() } : {}),
       }, account?.id);
       input.value = '';
-      // [minor] BUG-65 fix: removed manual _loadData()/_rerenderColumns() here.
-      // ENTITY_SAVED listener handles refresh. Manual call caused double-render flash.
-      // Animate the new card (last card in column gets slide-in class)
-      setTimeout(() => {
-        const col = wrap.closest('.kanban-col');
-        const newCard = col?.querySelector('.kanban-card:last-child');
-        if (newCard) {
-          newCard.classList.add('kanban-card-new');
-          setTimeout(() => newCard.classList.remove('kanban-card-new'), 400);
-        }
-      }, 250); // allow ENTITY_SAVED re-render to complete first
+      if (!fromBlur) {
+        // Keep input open for rapid keyboard entry (Enter path only)
+        setTimeout(() => {
+          const col = wrap.closest('.kanban-col');
+          const newCard = col?.querySelector('.kanban-card:last-child');
+          if (newCard) {
+            newCard.classList.add('kanban-card-new');
+            setTimeout(() => newCard.classList.remove('kanban-card-new'), 400);
+          }
+          input.focus();
+        }, 250);
+      } else {
+        // On blur-save: close the input so user knows it saved
+        inputWrap.style.display = 'none';
+        addBtn.style.display = '';
+      }
     } catch (err) {
       console.error('[kanban] Quick add failed:', err);
+    } finally {
+      _qaIsSaving = false; // BUG-R4 fix: always release save guard
     }
-    // Keep input open for rapid entry
-    input.focus();
   };
 
   input.addEventListener('keydown', (e) => {
@@ -1064,7 +1074,7 @@ function _buildQuickAdd(statusKey) {
     // BUG-15 fix: save on blur if there is content, don't silently discard
     setTimeout(() => {
       if (input.value.trim()) {
-        doAdd(); // save typed title on focus-away
+        doAdd(true); // BUG-R4 fix: fromBlur=true → close input after save, no focus() loop
       } else {
         inputWrap.style.display = 'none';
         addBtn.style.display = '';
@@ -1737,8 +1747,10 @@ async function renderKanban(params = {}) {
 
   const seq = ++_renderSeq; // claim this render slot
   _injectStyles();
-
-  viewEl.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading tasks\u2026</div>';
+  // BUG-R15 fix: only show loading if this is the latest render (avoids flash on aborted renders)
+  if (seq === _renderSeq) {
+    viewEl.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading tasks…</div>';
+  }
 
   // BUG-36 fix: reset all filter state on a fresh (non-internal) render to prevent state leak
   if (!params._internal) {
@@ -1834,13 +1846,14 @@ async function renderKanban(params = {}) {
     vmBtn.addEventListener('click', (e) => { e.stopPropagation(); vmDd.style.display = vmDd.style.display === 'none' ? '' : 'none'; });
     // [minor] BUG-21 fix: clean up ALL previous click-away listeners before adding new one
     // Without this, each renderKanban (filter tab switch) stacks a new listener.
+    // BUG-R2 fix: always initialise _vmListeners before push (first render = undefined)
     if (viewEl._vmListeners) {
       viewEl._vmListeners.forEach(fn => document.removeEventListener('click', fn));
-      viewEl._vmListeners = [];
     }
+    viewEl._vmListeners = [];
     const _vmClickAway = (ev) => { if (!vmWrap.contains(ev.target)) vmDd.style.display = 'none'; };
     document.addEventListener('click', _vmClickAway);
-    viewEl._vmListeners.push(_vmClickAway); // BUG-37 fix: removed dead if-block (always truthy here)
+    viewEl._vmListeners.push(_vmClickAway);
     vmWrap.appendChild(vmBtn);
     vmWrap.appendChild(vmDd);
     controls.appendChild(vmWrap);
@@ -1857,8 +1870,9 @@ async function renderKanban(params = {}) {
       if (_filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue) {
         _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
         _filterPriority = null; _filterOverdue = false;
-        // Recompute filtered with cleared state
+        // Recompute filtered with cleared state and update count to match
         const filteredAlt = _applyFilters(_applyFilterTab(_tasks));
+        countEl.textContent = filteredAlt.length + ' ' + (filteredAlt.length === 1 ? 'task' : 'tasks'); // BUG-R3 fix: sync count
         _renderAltView(viewEl, filteredAlt);
       } else {
         _renderAltView(viewEl, filtered);
@@ -1995,16 +2009,37 @@ function _renderAltView(container, tasks) {
         card.style.cssText = 'flex:1 1 240px;min-width:200px;max-width:320px;border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3);background:var(--color-surface);cursor:pointer;display:flex;flex-direction:column;gap:var(--space-1);transition:box-shadow 0.15s;'; // BUG-42 fix: responsive flex
         card.addEventListener('mouseenter', () => { card.style.boxShadow = 'var(--shadow-md)'; });
         card.addEventListener('mouseleave', () => { card.style.boxShadow = 'none'; });
-        const cb = task.status === 'Done' ? '\u2705' : '\u25CB';
-        const wallDue = _isoToLocalDate(task.dueDate); // [minor] FIX-11: timezone safe
+        const wallDue = _isoToLocalDate(task.dueDate);
         const wallToday = _todayStr();
         const overdue = wallDue && wallDue < wallToday && task.status !== 'Done';
         const dueTodayW = wallDue === wallToday;
-        const wallDueFmt = wallDue ? _formatDue(wallDue, wallToday) : ''; // [minor] FIX-18: formatted
+        const wallDueFmt = wallDue ? _formatDue(wallDue, wallToday) : '';
         const projId = task.project || _taskProjectMap.get(task.id) || '';
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
-        card.innerHTML = '<div style="font-size:var(--text-xs);color:var(--color-accent);font-weight:var(--weight-bold);">\u2299 Task</div><div style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);">' + cb + ' ' + _esc(task.title || 'Untitled') + '</div>' + (wallDue ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : dueTodayW ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || dueTodayW ? 'var(--weight-semibold)' : 'normal') + ';">' + (overdue || dueTodayW ? '\u23F0 ' : '\uD83D\uDCC5 ') + wallDueFmt + '</div>' : '') + (pName ? '<div style="font-size:var(--text-xs);color:var(--color-text-muted);">\uD83C\uDF10 ' + _esc(pName) + '</div>' : '');
-        card.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }));
+        // BUG-R5 fix: interactive checkbox in wall/gallery cards
+        const wallDoneStyle = task.status === 'Done' ? 'text-decoration:line-through;color:var(--color-text-muted);' : '';
+        card.innerHTML =
+          '<div style="font-size:var(--text-xs);color:var(--color-accent);font-weight:var(--weight-bold);">&#8857; Task</div>' +
+          '<div style="display:flex;align-items:center;gap:6px;">' +
+            '<input type="checkbox" ' + (task.status === 'Done' ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
+            '<span style="font-size:var(--text-sm);font-weight:var(--weight-semibold);' + wallDoneStyle + '">' + _esc(task.title || 'Untitled') + '</span>' +
+          '</div>' +
+          (wallDue ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : dueTodayW ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || dueTodayW ? 'var(--weight-semibold)' : 'normal') + ';">' + (overdue || dueTodayW ? '\u23F0 ' : '\uD83D\uDCC5 ') + wallDueFmt + '</div>' : '') +
+          (pName ? '<div style="font-size:var(--text-xs);color:var(--color-text-muted);">&#127760; ' + _esc(pName) + '</div>' : '');
+        const wallCb = card.querySelector('input[type=checkbox]');
+        if (wallCb) {
+          wallCb.addEventListener('change', async (e) => {
+            e.stopPropagation();
+            const account = getAccount();
+            const newStatus = wallCb.checked ? 'Done' : (task.previousStatus && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
+            if (wallCb.checked) window._fhEnv?.services?.effects?.play('confetti');
+            try {
+              let fresh; try { fresh = await getEntity(task.id); } catch { fresh = task; }
+              await saveEntity({ ...fresh, status: newStatus, previousStatus: newStatus === 'Done' ? fresh.status : fresh.previousStatus }, account?.id);
+            } catch (err) { console.error('[kanban] Wall complete failed:', err); wallCb.checked = !wallCb.checked; }
+          });
+        }
+        card.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }); });
         grid.appendChild(card);
       }
       body.appendChild(grid);
@@ -2017,14 +2052,14 @@ function _renderAltView(container, tasks) {
         t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
         const tbody = document.createElement('tbody');
         groupTasks.forEach((tk, i) => {
-          // BUG-44 fix: use loop index+1 per group (restarting per group is expected for grouped tables)
+          const _rowIdx = i + 1; // row number within this group (1-based)
           const tr = document.createElement('tr');
           tr.style.cssText = 'border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
           tr.addEventListener('mouseenter', () => { tr.style.background = 'var(--color-surface)'; });
           tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
           const _dueLocal = _isoToLocalDate(tk.dueDate); // BUG-6 fix: normalise to local YYYY-MM-DD first
           const due = _dueLocal ? new Date(_dueLocal + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
-          const ov = _isoToLocalDate(tk.dueDate) && _isoToLocalDate(tk.dueDate) < _todayStr() && tk.status !== 'Done'; // [minor] FIX-12: timezone safe
+          const ov = _dueLocal && _dueLocal < _todayStr() && tk.status !== 'Done'; // BUG-R11 fix: reuse _dueLocal, avoid double call
           const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';
           const bodyTxt = tk.details ? String(tk.details).replace(/<[^>]+>/g,' ').trim() : '';
           const wc = bodyTxt ? bodyTxt.split(/\s+/).length : 0;
