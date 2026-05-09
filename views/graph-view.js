@@ -508,7 +508,16 @@ async function renderGraph(params = {}) {
   if (!_graphEl) return;
 
   // [minor] BUG-14 fix: check size > 0 — empty Set is truthy, would pass no types to initGraph
-  const allVisibleTypes = (_savedTypeSet && _savedTypeSet.size > 0) ? _savedTypeSet : getAllGraphVisibleTypes();
+  // Build initial active type set: all graphVisible types EXCEPT graphDefaultHidden ones.
+  // graphDefaultHidden types (e.g. dailyReview) still appear as chips but start deactivated,
+  // keeping the graph clean. Users can toggle them on via the chip buttons.
+  const _getDefaultActiveTypes = () => {
+    const all = getAllEntityTypes();
+    const full = getAllGraphVisibleTypes();
+    const hidden = new Set(all.filter(t => t.graphDefaultHidden).map(t => t.key));
+    return new Set([...full].filter(k => !hidden.has(k)));
+  };
+  const allVisibleTypes = (_savedTypeSet && _savedTypeSet.size > 0) ? _savedTypeSet : _getDefaultActiveTypes();
 
   // On first mount build the full UI; on subsequent calls just refresh the graph
   if (!params._internal || !_mounted) {

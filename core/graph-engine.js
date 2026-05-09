@@ -729,7 +729,8 @@ const BUILT_IN_ENTITY_TYPES = [
     icon:        '☀️',
     color:       '#f59e0b',
     isBuiltIn:   true,
-    graphVisible: true,
+    graphVisible:       true,
+    graphDefaultHidden: true,  // system-generated per-day entities; hidden by default to prevent graph flood
     defaultSort:  '-date',
     views:        ['daily'],
     actions:      ['edit', 'relate'],

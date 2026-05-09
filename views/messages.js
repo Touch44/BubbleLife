@@ -26,6 +26,7 @@ let _activeConvoId = null;
 let _persons       = [];
 let _personMap     = new Map();
 let _markingRead   = false;   // guard: prevents ENTITY_SAVED re-render cascade during markRead
+let _renderGen     = 0;        // generation counter: aborts stale concurrent renders
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -187,6 +188,42 @@ function _injectStyles() {
       border-right: 1px solid var(--color-border);
       overflow-y: auto; display: flex; flex-direction: column;
     }
+    .msg-inbox-summary { flex-shrink: 0; }
+    .msg-summary {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: var(--space-2) var(--space-4);
+      background: var(--color-surface-2);
+      border-bottom: 1px solid var(--color-border);
+      font-size: var(--text-xs);
+      gap: var(--space-2);
+      min-height: 36px;
+    }
+    .msg-summary-unread {
+      display: flex; align-items: center; gap: var(--space-2);
+      color: var(--color-text); font-weight: var(--weight-medium);
+      flex: 1;
+    }
+    .msg-summary-badge {
+      background: var(--color-danger, #ef4444); color: #fff;
+      border-radius: var(--radius-full); font-weight: var(--weight-bold);
+      padding: 1px 6px; font-size: 10px; line-height: 16px;
+    }
+    .msg-summary-action {
+      background: none; border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm); cursor: pointer;
+      font-size: 10px; padding: 2px 8px; color: var(--color-text-muted);
+      white-space: nowrap; transition: all var(--transition-fast);
+      flex-shrink: 0;
+    }
+    .msg-summary-action:hover:not(:disabled) {
+      background: var(--color-surface); color: var(--color-text);
+      border-color: var(--color-accent);
+    }
+    .msg-summary-action:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg-summary-ok {
+      color: var(--color-success, #10b981); font-weight: var(--weight-medium); flex: 1;
+    }
+    .msg-summary-total { color: var(--color-text-muted); flex-shrink: 0; }
     .msg-inbox-row {
       display: flex; align-items: flex-start; gap: var(--space-3);
       padding: var(--space-3) var(--space-4); cursor: pointer;
@@ -312,6 +349,58 @@ function _injectStyles() {
     }
   `;
   document.head.appendChild(s);
+}
+
+
+// ── Inbox summary strip ───────────────────────────────────────
+
+function _renderInboxSummary(summaryEl, convos, acct) {
+  const totalUnread = convos.reduce((s, c) => s + (c.unreadCounts?.[acct.memberId] ?? 0), 0);
+  const totalConvos = convos.length;
+  const unreadConvos = convos.filter(c => (c.unreadCounts?.[acct.memberId] ?? 0) > 0).length;
+
+  summaryEl.innerHTML = '';
+  if (!totalConvos) return;
+
+  const stats = document.createElement('div');
+  stats.className = 'msg-summary';
+
+  if (totalUnread > 0) {
+    stats.innerHTML = `
+      <span class="msg-summary-unread">
+        <span class="msg-summary-badge">${totalUnread > 99 ? '99+' : totalUnread}</span>
+        unread in ${unreadConvos} conversation${unreadConvos !== 1 ? 's' : ''}
+      </span>
+      <button class="msg-summary-action" title="Mark all conversations as read">Mark all read</button>
+    `;
+    stats.querySelector('.msg-summary-action').addEventListener('click', async () => {
+      const btn = stats.querySelector('.msg-summary-action');
+      btn.disabled = true;
+      btn.textContent = 'Clearing…';
+      const a = getAccount();
+      if (!a?.memberId) return;
+      try {
+        const now = new Date().toISOString();
+        for (const convo of convos) {
+          if ((convo.unreadCounts?.[a.memberId] ?? 0) > 0) {
+            const counts = { ...(convo.unreadCounts || {}) };
+            counts[a.memberId] = 0;
+            await saveEntity({ ...convo, unreadCounts: counts });
+          }
+        }
+      } catch (e) {
+        console.warn('[messages] mark-all-read failed:', e);
+        btn.disabled = false;
+        btn.textContent = 'Mark all read';
+      }
+    });
+  } else {
+    stats.innerHTML = `
+      <span class="msg-summary-ok">✓ All caught up</span>
+      <span class="msg-summary-total">${totalConvos} conversation${totalConvos !== 1 ? 's' : ''}</span>
+    `;
+  }
+  summaryEl.appendChild(stats);
 }
 
 // ── Inbox ─────────────────────────────────────────────────────
@@ -678,7 +767,9 @@ export async function renderMessages(params = {}) {
   _injectStyles();
   const el = document.getElementById('view-messages');
   if (!el) return;
-  el.innerHTML = '';
+
+  // Generation guard: abort if a newer render started while we were awaiting
+  const myGen = ++_renderGen;
 
   // Show loading state immediately (before first await)
   el.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center">⌛ Loading Messages…</div>';
@@ -695,7 +786,13 @@ export async function renderMessages(params = {}) {
     console.error('[messages] failed to load persons:', loadErr);
     _persons = [];
   }
+  // Abort if a newer render started while we were awaiting persons
+  if (myGen !== _renderGen) return;
+
   _personMap = new Map(_persons.map(p => [p.id, p]));
+
+  // Clear loading state now that real content is ready to render
+  el.innerHTML = '';
 
   const hdr = document.createElement('div');
   hdr.className = 'msg-header';
@@ -715,6 +812,9 @@ export async function renderMessages(params = {}) {
   layout.className = 'msg-layout';
   const inboxEl  = document.createElement('div');
   inboxEl.className = 'msg-inbox';
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'msg-inbox-summary';
+  inboxEl.appendChild(summaryEl);
   const threadEl = document.createElement('div');
   threadEl.className = 'msg-thread';
   const emptyState = document.createElement('div');
@@ -727,6 +827,9 @@ export async function renderMessages(params = {}) {
 
   if (acct.memberId) {
     const convos = await _loadMyConversations(acct.memberId);
+    // Abort if another render started while loading conversations
+    if (myGen !== _renderGen) return;
+    _renderInboxSummary(summaryEl, convos, acct);
     _renderInbox(inboxEl, convos, acct);
     if (params.conversationId) {
       // Deep-link: open a specific conversation (from Daily Review, dashboard, wall button)
@@ -761,8 +864,10 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   if (!acct?.memberId) return;
 
   _loadMyConversations(acct.memberId).then(convos => {
-    const inboxEl = viewEl.querySelector('.msg-inbox');
-    if (inboxEl) _renderInbox(inboxEl, convos, acct);
+    const inboxEl   = viewEl.querySelector('.msg-inbox');
+    const summaryEl = viewEl.querySelector('.msg-inbox-summary');
+    if (summaryEl) _renderInboxSummary(summaryEl, convos, acct);
+    if (inboxEl)   _renderInbox(inboxEl, convos, acct);
   });
 
   if (entity.type === 'message' && entity.conversationId === _activeConvoId) {
