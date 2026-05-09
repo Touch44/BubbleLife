@@ -1177,6 +1177,51 @@ function _renderEmpty(body, message) {
 // ── Section renderers ─────────────────────────────────────── //
 
 /**
+ * Section 3.5: Unread Messages — conversations with unread count > 0.
+ */
+async function _renderUnreadMessages(container) {
+  const acct = getAccount();
+  if (!acct?.memberId) return;
+
+  const edges  = await getEdgesFrom(acct.memberId, 'participates-in');
+  const convos = (await Promise.all(edges.map(e => getEntity(e.toId)))).filter(Boolean);
+  const unread = convos.filter(c => (c.unreadCounts?.[acct.memberId] ?? 0) > 0);
+  const total  = unread.reduce((s, c) => s + (c.unreadCounts?.[acct.memberId] ?? 0), 0);
+
+  // Only render section when there are actual unread messages
+  if (!unread.length) return;
+
+  const { wrapper, body } = _buildSection('unread-messages', '💬', 'Unread Messages', total);
+  container.appendChild(wrapper);
+  _setSectionOpen('unread-messages', true);
+
+  const persons = await getEntitiesByType('person');
+  const pMap    = new Map(persons.map(p => [p.id, p]));
+  const list    = document.createElement('div');
+  list.className = 'daily-reminder-list';
+
+  for (const convo of unread.slice(0, 5)) {
+    const count  = convo.unreadCounts[acct.memberId];
+    const others = (convo.participantIds || [])
+      .filter(id => id !== acct.memberId)
+      .map(id => pMap.get(id)?.name || pMap.get(id)?.title || 'Unknown');
+    const name    = convo.title || (others.length ? others.join(', ') : 'Conversation');
+    const snippet = convo.lastMessageSnippet || '';
+
+    const row = document.createElement('div');
+    row.className = 'daily-reminder-row';
+    row.style.cssText = 'justify-content:space-between;gap:var(--space-2);cursor:pointer;';
+    row.innerHTML = `
+      <span style="font-weight:var(--weight-semibold);font-size:var(--text-sm);flex-shrink:0">${_esc(name)}</span>
+      <span style="font-size:var(--text-xs);color:var(--color-text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 var(--space-2)">${_esc(snippet)}</span>
+      <span style="font-size:var(--text-xs);font-weight:var(--weight-bold);color:var(--color-accent);flex-shrink:0">${count} new</span>`;
+    row.addEventListener('click', () => navigate(VIEW_KEYS.MESSAGES, { conversationId: convo.id }));
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+/**
  * Section 1: Notes Today — note entities created on this date, linked to the DR.
  * Clicking a note opens a centered content-focused modal (not the right panel).
  */
@@ -2571,7 +2616,10 @@ async function renderDaily(params = {}) {
     // ── Section 3: Reminders (always third — before Notes) ──
     _renderReminders(sections, dateStr, appointments);
 
-    // ── Section 4: Notes (always fourth) ──────────────────────
+    // ── Section 3.5: Unread Messages ──────────────────────────
+    await _renderUnreadMessages(sections);
+
+    // ── Section 4: Notes (always fourth) ──────────────────────────
     await _renderDailyNotes(sections, dateStr);
     sectionRefs.notesBody = sections.querySelector('#daily-section-body-notes');
 
@@ -2642,6 +2690,7 @@ const _DAILY_REFRESH_TYPES = new Set([
   // person and project: task rows display assignee name and project name;
   // if either is renamed the daily view must refresh to reflect the new name.
   'person','project',
+  'conversation',   // unread message count changes when message arrives
 ]);
 let _dailyRefreshTimer = null;
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {

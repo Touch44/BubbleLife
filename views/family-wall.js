@@ -918,6 +918,34 @@ async function _buildCard(post, pm, apm) {
     db.addEventListener('click',async e=>{ e.stopPropagation(); if(confirm('Delete post?')){ await deleteEntity(post.id,acct?.id); renderWall({_internal:true}); } });
     acts.appendChild(db);
   }
+  // Message author shortcut (only when viewer ≠ author and author has a person profile)
+  if (post._authorPersonId && acct?.memberId && post._authorPersonId !== acct.memberId) {
+    const msgBtn = document.createElement('button');
+    msgBtn.className   = 'btn-icon fw-act-btn';
+    msgBtn.title       = 'Message this person';
+    msgBtn.textContent = '✉️';
+    msgBtn.addEventListener('click', async e => {
+      e.stopPropagation();
+      try {
+        const myEdges  = await getEdgesFrom(acct.memberId, 'participates-in');
+        const myConvos = (await Promise.all(myEdges.map(ed => getEntity(ed.toId)))).filter(Boolean);
+        const existing = myConvos.find(cv =>
+          Array.isArray(cv.participantIds) &&
+          cv.participantIds.length === 2 &&
+          cv.participantIds.includes(post._authorPersonId)
+        );
+        // If existing 1:1 found, open it; otherwise navigate to Messages
+        // and pass targetPersonId so the view can auto-open the new convo modal
+        navigate(VIEW_KEYS.MESSAGES, existing
+          ? { conversationId: existing.id }
+          : { targetPersonId: post._authorPersonId });
+      } catch (err) {
+        console.error('[fw] message button failed:', err);
+      }
+    });
+    acts.prepend(msgBtn);
+  }
+
   hdr.appendChild(acts); card.appendChild(hdr);
 
   // Body

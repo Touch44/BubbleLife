@@ -34,6 +34,7 @@ export const VIEW_KEYS = Object.freeze({
   SETTINGS:         'settings',
   // Generic entity-type view
   ENTITY_TYPE:      'entity-type',
+  MESSAGES:         'messages',
 });
 
 /** Human-readable labels for breadcrumbs */
@@ -53,6 +54,7 @@ const VIEW_LABELS = {
   'contacts':        'Contacts',
   'gallery':         'Gallery',
   'settings':        'Settings',
+  'messages':        'Messages',
   'entity-type':     'Entities',
 };
 

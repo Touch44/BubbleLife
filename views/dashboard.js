@@ -28,7 +28,8 @@
  */
 
 import { registerView, navigate, VIEW_KEYS } from '../core/router.js';
-import { getEntitiesByType, saveEntity }      from '../core/db.js';
+import { getEntitiesByType, saveEntity,
+              getEdgesFrom, getEntity }             from '../core/db.js';
 import { on, emit, EVENTS }                   from '../core/events.js';
 import { getActiveContext, filterByContext }  from '../core/context.js';
 import { getAccount }                         from '../core/auth.js';
@@ -632,6 +633,7 @@ async function renderDashboard() {
         ${_cardSkeleton('tasks',    'Tasks',       '✅')}
         ${_cardSkeleton('calendar', 'This Week',   '📅')}
         ${_cardSkeleton('budget',   'Budget',      '💰')}
+        ${_cardSkeleton('messages', 'Messages',      '💬')}
         ${_cardSkeleton('wall',     'Activity Wall', '🏠')}
         ${_cardSkeleton('recipes',  'Recipes',     '🍳')}
         ${_cardSkeleton('documents','Documents',   '📄')}
@@ -777,6 +779,7 @@ async function _loadAndPopulate(el) {
     _populateTaskCard(el, data.tasks);
     _populateCalendarCard(el, data.events, data.appointments);
     _populateBudgetCard(el, data.budgetEntries);
+    await _populateMessagesCard(el);
     _populateWallCard(el, data.posts);
     _populateRecipesCard(el, data.recipes);
     _populateDocumentsCard(el, data.documents);
@@ -942,6 +945,44 @@ function _populateWallCard(el, posts) {
   btn.disabled = false;
   btn.textContent = 'Open Activity Wall';
   btn.onclick = () => navigate(VIEW_KEYS.ACTIVITY_CENTER);
+}
+
+async function _populateMessagesCard(el) {
+  const card = el.querySelector('[data-dash-card="messages"]');
+  if (!card) return;
+  const acct = getAccount();
+  if (!acct?.memberId) return;
+  try {
+    const edges  = await getEdgesFrom(acct.memberId, 'participates-in');
+    const convos = (await Promise.all(edges.map(e => getEntity(e.toId)))).filter(Boolean);
+    const total  = convos.reduce((s, c2) => s + (c2.unreadCounts?.[acct.memberId] ?? 0), 0);
+    const unreadConvos = convos.filter(c2 => (c2.unreadCounts?.[acct.memberId] ?? 0) > 0);
+
+    card.querySelector('.dash-card-badge-el').className =
+      `dash-card-badge ${total > 0 ? 'danger' : 'neutral'} dash-card-badge-el`;
+    card.querySelector('.dash-card-badge-el').textContent =
+      total > 0 ? `${total} unread` : 'All read';
+    card.querySelector('.dash-card-stat').className = 'dash-card-stat';
+    card.querySelector('.dash-card-stat').textContent =
+      `${convos.length} conversation${convos.length !== 1 ? 's' : ''}`;
+
+    let sub = '';
+    if (total > 0) {
+      sub = `<span style="display:block;">${unreadConvos.length} conversation${unreadConvos.length!==1?'s':''} with new messages</span>`;
+    } else if (convos.length > 0) {
+      sub = `<span style="display:block;color:var(--color-text-muted);">All caught up ✓</span>`;
+    } else {
+      sub = `<span style="display:block;color:var(--color-text-muted);">No conversations yet</span>`;
+    }
+    card.querySelector('.dash-card-sub').innerHTML = sub;
+
+    const btn = card.querySelector('.dash-card-cta');
+    btn.disabled    = false;
+    btn.textContent = total > 0 ? 'View Messages' : 'Open Messages';
+    btn.onclick     = () => navigate(VIEW_KEYS.MESSAGES);
+  } catch (e) {
+    console.warn('[dashboard] messages card failed:', e);
+  }
 }
 
 function _populateRecipesCard(el, recipes) {

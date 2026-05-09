@@ -166,6 +166,7 @@ function _seedBuiltins(env, add) {
     { id: 'nav.budget',   label: 'Go to Budget',                    icon: '💰', category: 'Navigate', view: 'budget'   },
     { id: 'nav.recipes',  label: 'Go to Recipes',                   icon: '🍽️', category: 'Navigate', view: 'recipes'  },
     { id: 'nav.settings', label: 'Go to Settings',                  icon: '⚙️', category: 'Navigate', view: 'settings' },
+    { id: 'nav.messages', label: 'Go to Messages',                   icon: '💬', category: 'Navigate', view: 'messages' },
   ];
 
   for (const { id, label, shortcut, icon, category, view } of NAV_COMMANDS) {
@@ -201,6 +202,20 @@ function _seedBuiltins(env, add) {
       },
     });
   }
+
+  // Messages: start new conversation
+  add({
+    id:          'create.message',
+    label:       'New Message',
+    icon:        '✉️',
+    category:    'Create',
+    description: 'Start a new conversation with a family member',
+    scopes:      [],
+    execute: async () => {
+      const { emit } = await import('../core/events.js');
+      emit('messages:open-new');
+    },
+  });
 
   // Utility commands
   add({

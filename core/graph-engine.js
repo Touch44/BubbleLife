@@ -739,6 +739,33 @@ const BUILT_IN_ENTITY_TYPES = [
       field('notes', 'richtext', { isTitle: false,  label: 'Notes' }),
     ],
   },
+  {
+    key:          'conversation',
+    label:        'Conversation',
+    labelPlural:  'Conversations',
+    icon:         '💬',
+    color:        'Blue',
+    isBuiltIn:    true,
+    graphVisible: false,
+    fields: [
+      field('title',          'text',     { label: 'Title' }),
+      field('participantIds', 'relation', { label: 'Participants', relatesTo: 'person' }),
+    ],
+  },
+  {
+    key:          'message',
+    label:        'Message',
+    labelPlural:  'Messages',
+    icon:         '✉️',
+    color:        'Teal',
+    isBuiltIn:    true,
+    graphVisible: false,
+    fields: [
+      field('body',           'text',     { label: 'Body' }),
+      field('conversationId', 'relation', { label: 'Conversation', relatesTo: 'conversation' }),
+      field('fromPersonId',   'relation', { label: 'From',         relatesTo: 'person' }),
+    ],
+  },
 
 ];
 

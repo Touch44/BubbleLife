@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v4.6.0 -->
+  <!-- Build: v4.7.0 -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=4.6.0" />
-  <link rel="stylesheet" href="./styles/layout.css?v=4.6.0" />
-  <link rel="stylesheet" href="./styles/components.css?v=4.6.0" />
-  <link rel="stylesheet" href="./styles/dark.css?v=4.6.0" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=4.7.0" />
+  <link rel="stylesheet" href="./styles/layout.css?v=4.7.0" />
+  <link rel="stylesheet" href="./styles/components.css?v=4.7.0" />
+  <link rel="stylesheet" href="./styles/dark.css?v=4.7.0" />
 </head>
 <body>
 
@@ -291,6 +291,16 @@
           <span class="nav-item-label">Activity Wall</span>
         </button>
       </li>
+      <li role="listitem">
+        <button class="nav-item" data-view="messages"
+                aria-label="Messages">
+          <span class="nav-item-icon" aria-hidden="true">💬</span>
+          <span class="nav-item-label">Messages</span>
+          <span class="nav-item-badge" id="messages-nav-badge"
+                aria-label="unread messages"
+                style="display:none"></span>
+        </button>
+      </li>
 
 
 
@@ -523,6 +533,11 @@
     <!-- Settings -->
     <div id="view-settings" class="view" role="region" aria-label="Settings"
          aria-hidden="true">
+      <!-- Populated by views/messages.js -->
+    <div id="view-messages" class="view" role="region" aria-label="Messages">
+      <span class="sr-only" id="messages-view-desc">Direct messages between family members</span>
+    </div>
+
       <!-- Populated by views/settings.js -->
     </div>
 
@@ -720,6 +735,7 @@
   import './views/kanban.js';                                 // registers 'kanban' view
   import './views/calendar.js';                               // registers 'calendar' view
   import './views/family-wall.js';                            // registers 'activity-center' view
+  import './views/messages.js';                               // registers 'messages' view
   import './views/notes.js';                                  // V-01: registers 'notes' view
   import './views/projects.js';                               // V-02: registers 'projects' view
   import './views/settings.js';                               // V-03: registers 'settings' view
@@ -1130,7 +1146,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=4.6.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=4.7.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -1204,7 +1220,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '4.6.0', emit, on, env: window._fhEnv,
+        version: '4.7.0', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 
