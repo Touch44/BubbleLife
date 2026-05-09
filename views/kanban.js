@@ -1,5 +1,5 @@
 /**
- * FamilyHub v4.8.1 — views/kanban.js
+ * FamilyHub v4.8.4 — views/kanban.js
  * 4-column Kanban board: Inbox · In Progress · Review · Done
  * Renders into #view-kanban when view="kanban"
  *
@@ -71,14 +71,32 @@ let _taskProjectMap  = new Map(); // taskId → projectId (from 'project' relati
 let _taskAssigneeMap = new Map(); // taskId → personId  (from 'assignedTo' relation edge)
 
 // Filter state
-let _filterProject   = null;   // project ID or null
-let _filterAssignees = new Set();
-let _filterTags      = new Set();
-let _filterPriority  = null;   // 'Critical' | 'High' | ... | null
-let _filterOverdue   = false;
+let _filterProject        = null;   // project ID or null
+let _filterAssignees      = new Set();
+let _filterTags           = new Set();
+let _filterPriority       = null;   // 'Critical' | 'High' | ... | null
+let _filterOverdue        = false;
+let _filterScheduledRange = null;   // null=all | 'overdue'|'today'|'tomorrow'|'this-week'|'next-week'|'later'
 
 // ── Capacities-style view modes + filter tabs ─────────────── //
-let _viewMode   = 'kanban';
+let _viewMode   = 'list'; // Spec: "default list with the view button on the right-hand side"
+
+// Spec-defined canonical view per tab. Tabs with spec-defined groupings that are
+// incompatible with kanban status columns force their canonical view.
+// User can always override via the view-mode dropdown.
+const _TAB_CANONICAL_VIEW = {
+  inbox:     'list',    // spec: grouped by creation date
+  today:     'list',    // spec: grouped by status ordered by priority
+  scheduled: 'list',    // spec: grouped by date property
+  status:    'kanban',  // spec: status columns ARE the grouping
+  context:   'list',    // spec: grouped by context
+  open:      'list',    // spec: ordered by priority and status (single group)
+  completed: 'list',    // spec: ordered by completion date
+  all:       'list',    // spec: all tasks, user filter/sort
+};
+
+// Track whether user has manually overridden the view for the current session
+let _userOverrodeView = false;
 let _filterTab  = 'inbox'; // [minor] Spec: inbox is the primary entry point
 
 const _VIEW_MODES = [
@@ -182,6 +200,9 @@ async function _buildBlockerMap() {
 // ── Filter / sort helpers ─────────────────────────────────── //
 
 function _applyFilters(tasks) {
+  // Cache scheduled boundaries once for the whole filter pass (avoid repeated new Date() calls)
+  const _scheduledFilterBoundaries = (_filterScheduledRange && _filterTab === 'scheduled')
+    ? _getScheduledBoundaries() : null;
   return tasks.filter(t => {
     if (_filterProject) {
       const resolvedProj = t.project || _taskProjectMap.get(t.id);
@@ -203,7 +224,14 @@ function _applyFilters(tasks) {
     if (_filterOverdue) {
       const today = _todayStr();
       const due = _isoToLocalDate(t.dueDate);
-      if (!due || due > today) return false; // BUG-46 fix: include today (due === today is overdue)
+      if (!due || due > today) return false;
+    }
+    // Scheduled tab time-context filter (boundaries cached outside loop by closure)
+    if (_filterScheduledRange && _filterTab === 'scheduled') {
+      const dateStr = _isoToLocalDate(t.dueDate);
+      if (!dateStr) return false;
+      const bucket = _classifyScheduledDate(dateStr, _scheduledFilterBoundaries);
+      if (bucket !== _filterScheduledRange) return false;
     }
     return true;
   });
@@ -410,43 +438,100 @@ function _groupByCreatedDate(tasks) {
   return groups;
 }
 
-/** Group tasks for Scheduled tab: buckets by scheduled date, overdue first */
-function _groupByScheduledDate(tasks) {
+/**
+ * Compute the canonical date boundaries for the Scheduled tab time-context buckets.
+ * Returns an object with YYYY-MM-DD strings for each boundary.
+ *   today      : today's date string
+ *   tomorrow   : tomorrow's date string
+ *   weekEnd    : end of THIS week (Sunday of current week, or last day of 7-day window)
+ *   nextWeekEnd: end of NEXT week (7 days after weekEnd)
+ */
+function _getScheduledBoundaries() {
+  const now = new Date();
   const today = _todayStr();
-  const overdue = [];
-  const dateMap = new Map();
+
+  // Tomorrow
+  const tomD = new Date(today + 'T00:00:00');
+  tomD.setDate(tomD.getDate() + 1);
+  const tomorrow = tomD.getFullYear() + '-' + String(tomD.getMonth()+1).padStart(2,'0') + '-' + String(tomD.getDate()).padStart(2,'0');
+
+  // End of this week = this coming Sunday (or Saturday, based on ISO-week-like convention)
+  // We use a simpler: "this week" = today through the next 6 days (rolling 7-day window ending Saturday)
+  // Actually use calendar week: Mon-Sun. Find next Sunday.
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const daysUntilSunday = dayOfWeek === 0 ? 6 : 7 - dayOfWeek; // days until next Sunday (end of week)
+  const weekEndD = new Date(today + 'T00:00:00');
+  weekEndD.setDate(weekEndD.getDate() + daysUntilSunday);
+  const weekEnd = weekEndD.getFullYear() + '-' + String(weekEndD.getMonth()+1).padStart(2,'0') + '-' + String(weekEndD.getDate()).padStart(2,'0');
+
+  // End of next week = 7 days after weekEnd
+  const nextWeekEndD = new Date(weekEndD);
+  nextWeekEndD.setDate(nextWeekEndD.getDate() + 7);
+  const nextWeekEnd = nextWeekEndD.getFullYear() + '-' + String(nextWeekEndD.getMonth()+1).padStart(2,'0') + '-' + String(nextWeekEndD.getDate()).padStart(2,'0');
+
+  return { today, tomorrow, weekEnd, nextWeekEnd };
+}
+
+/**
+ * Classify a YYYY-MM-DD date string into a time-context bucket key.
+ * Returns one of: 'overdue' | 'today' | 'tomorrow' | 'this-week' | 'next-week' | 'later'
+ */
+function _classifyScheduledDate(dateStr, boundaries) {
+  const { today, tomorrow, weekEnd, nextWeekEnd } = boundaries;
+  if (dateStr < today)    return 'overdue';
+  if (dateStr === today)  return 'today';
+  if (dateStr === tomorrow) return 'tomorrow';
+  if (dateStr <= weekEnd) return 'this-week';
+  if (dateStr <= nextWeekEnd) return 'next-week';
+  return 'later';
+}
+
+/** Maps a bucket key to its display label and accent color */
+const SCHEDULED_BUCKETS = [
+  { key: 'overdue',   label: '⚠ Overdue',    color: '#dc2626' },
+  { key: 'today',     label: '📅 Today',      color: '#f97316' },
+  { key: 'tomorrow',  label: '🌅 Tomorrow',   color: '#eab308' },
+  { key: 'this-week', label: '📆 This Week',  color: '#3b82f6' },
+  { key: 'next-week', label: '🗓 Next Week',  color: '#8b5cf6' },
+  { key: 'later',     label: '🔭 Later',      color: '#6b7280' },
+];
+
+/** Group tasks for Scheduled tab: time-context buckets (Overdue/Today/Tomorrow/This Week/Next Week/Later) */
+function _groupByScheduledDate(tasks) {
+  const boundaries = _getScheduledBoundaries();
+
+  // Build bucket map in canonical order
+  const buckets = new Map();
+  for (const b of SCHEDULED_BUCKETS) buckets.set(b.key, []);
+
   for (const t of tasks) {
     const dateStr = _isoToLocalDate(t.dueDate);
     if (!dateStr) continue;
-    if (dateStr < today) {
-      overdue.push(t);
+    const bucket = _classifyScheduledDate(dateStr, boundaries);
+    buckets.get(bucket).push(t);
+  }
+
+  // Sort within each bucket
+  for (const [key, group] of buckets) {
+    if (key === 'overdue') {
+      // Oldest first so user sees most urgent at top
+      group.sort((a, b) => (_isoToLocalDate(a.dueDate) || '').localeCompare(_isoToLocalDate(b.dueDate) || ''));
     } else {
-      if (!dateMap.has(dateStr)) dateMap.set(dateStr, []);
-      dateMap.get(dateStr).push(t);
+      // Earliest date first, then priority+status within same date
+      group.sort((a, b) => {
+        const da = _isoToLocalDate(a.dueDate) || '9999-99-99';
+        const db = _isoToLocalDate(b.dueDate) || '9999-99-99';
+        if (da !== db) return da.localeCompare(db);
+        return _priorityStatusDeadlineSort(a, b);
+      });
     }
   }
+
+  // Build result Map using display labels (skip empty buckets)
   const result = new Map();
-  if (overdue.length) {
-    // Sort overdue by date ascending (earliest overdue first)
-    overdue.sort((a, b) => (_isoToLocalDate(a.dueDate) || '').localeCompare(_isoToLocalDate(b.dueDate) || ''));
-    result.set('⚠ Overdue', overdue);
-  }
-  // Add future dates in order
-  const futureDates = [...dateMap.keys()].sort();
-  for (const d of futureDates) {
-    const dd = new Date(d + 'T00:00:00');
-    let label;
-    if (d === today) label = '📅 Today';
-    else {
-      const tomorrow = (() => {
-        const dx = new Date(today + 'T00:00:00');
-        dx.setDate(dx.getDate() + 1);
-        return dx.getFullYear() + '-' + String(dx.getMonth()+1).padStart(2,'0') + '-' + String(dx.getDate()).padStart(2,'0');
-      })();
-      if (d === tomorrow) label = '📅 Tomorrow';
-      else label = '📅 ' + dd.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-    }
-    result.set(label, dateMap.get(d));
+  for (const b of SCHEDULED_BUCKETS) {
+    const group = buckets.get(b.key);
+    if (group.length > 0) result.set(b.label, group);
   }
   return result;
 }
@@ -496,9 +581,94 @@ function _groupByContext(tasks) {
 
 // ── DOM: Filter bar ───────────────────────────────────────── //
 
+/**
+ * Unified filter change dispatcher.
+ * In kanban mode: only the board columns need updating (_rerenderColumns).
+ * In alt views (list/wall/gallery/table): full re-render needed because
+ * _rerenderColumns only updates _boardEl which is null in alt modes.
+ */
+function _applyFilterChange() {
+  if (_viewMode === 'kanban') {
+    _rerenderColumns();
+  } else {
+    renderKanban({ _internal: true });
+  }
+}
+
+/** CSS string for a scheduled time-context pill button */
+function _scheduledPillStyle(isActive, color) {
+  const base = 'display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:var(--weight-semibold);cursor:pointer;transition:all 0.15s;white-space:nowrap;border:1.5px solid ';
+  if (isActive) {
+    return base + color + ';background:' + color + ';color:#fff;';
+  }
+  return base + color + ';background:transparent;color:' + color + ';';
+}
+
+/** Re-render the scheduled view — triggers full renderKanban for reliable state sync */
+function _reRenderScheduled() {
+  if (_filterTab !== 'scheduled') return;
+  renderKanban({ _internal: true });
+}
+
 function _buildFilterBar(container) {
   const bar = document.createElement('div');
   bar.className = 'kanban-filter-bar';
+
+  // ── Scheduled tab: time-context bucket filters (primary row) ──────────────
+  if (_filterTab === 'scheduled') {
+    const timeRow = document.createElement('div');
+    timeRow.className = 'kanban-scheduled-time-row';
+    timeRow.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);flex-wrap:nowrap;width:100%;padding-bottom:var(--space-2);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-2);overflow-x:auto;scrollbar-width:thin;'; // B25 fix: scroll instead of wrap
+
+    const timeLabel = document.createElement('span');
+    timeLabel.textContent = 'Show:';
+    timeLabel.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);font-weight:var(--weight-semibold);flex-shrink:0;';
+    timeRow.appendChild(timeLabel);
+
+    // "All" pill
+    const allPill = document.createElement('button');
+    allPill.type = 'button';
+    allPill.textContent = 'All';
+    const isAllActive = !_filterScheduledRange;
+    const allPillColor = isAllActive ? 'var(--color-accent,#3b82f6)' : '#6b7280'; // B32: accent when active
+    allPill.style.cssText = _scheduledPillStyle(isAllActive, allPillColor);
+    allPill.addEventListener('click', () => {
+      _filterScheduledRange = null;
+      _reRenderScheduled();
+    });
+    timeRow.appendChild(allPill);
+
+    // Count tasks per bucket — exclude range filter so counts are stable
+    // (users see how many tasks are in each bucket regardless of which pill is active)
+    const boundaries = _getScheduledBoundaries();
+    const bucketCounts = new Map();
+    const savedRange = _filterScheduledRange;
+    _filterScheduledRange = null; // temporarily clear range filter for counting
+    const allForCounts = _applyFilters(_applyFilterTab(_tasks));
+    _filterScheduledRange = savedRange; // restore
+    for (const t of allForCounts) {
+      const ds = _isoToLocalDate(t.dueDate);
+      if (!ds) continue;
+      const bk = _classifyScheduledDate(ds, boundaries);
+      bucketCounts.set(bk, (bucketCounts.get(bk) || 0) + 1);
+    }
+
+    for (const b of SCHEDULED_BUCKETS) {
+      const count = bucketCounts.get(b.key) || 0;
+      const isActive = _filterScheduledRange === b.key;
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.style.cssText = _scheduledPillStyle(isActive, b.color);
+      pill.innerHTML = b.label + (count > 0 ? ' <span style="font-size:10px;opacity:0.85;font-variant-numeric:tabular-nums;">(' + count + ')</span>' : '');
+      pill.addEventListener('click', () => {
+        _filterScheduledRange = isActive ? null : b.key;
+        _reRenderScheduled();
+      });
+      timeRow.appendChild(pill);
+    }
+
+    bar.appendChild(timeRow);
+  }
 
   // Project dropdown
   const projSelect = document.createElement('select');
@@ -514,7 +684,7 @@ function _buildFilterBar(container) {
   }
   projSelect.addEventListener('change', () => {
     _filterProject = projSelect.value || null;
-    _rerenderColumns();
+    _applyFilterChange(); // B04 fix: re-render in all view modes
   });
   bar.appendChild(projSelect);
 
@@ -531,7 +701,7 @@ function _buildFilterBar(container) {
   }
   prioSelect.addEventListener('change', () => {
     _filterPriority = prioSelect.value || null;
-    _rerenderColumns();
+    _applyFilterChange(); // B04 fix
   });
   bar.appendChild(prioSelect);
 
@@ -548,7 +718,7 @@ function _buildFilterBar(container) {
       av.addEventListener('click', () => {
         if (_filterAssignees.has(person.id)) _filterAssignees.delete(person.id);
         else _filterAssignees.add(person.id);
-        _rerenderColumns();
+        _applyFilterChange(); // B04 fix
         av.classList.toggle('active');
       });
       assigneeWrap.appendChild(av);
@@ -568,7 +738,7 @@ function _buildFilterBar(container) {
       chip.addEventListener('click', () => {
         if (_filterTags.has(tag)) _filterTags.delete(tag);
         else _filterTags.add(tag);
-        _rerenderColumns();
+        _applyFilterChange(); // B04 fix
         chip.classList.toggle('active');
       });
       tagWrap.appendChild(chip);
@@ -576,16 +746,18 @@ function _buildFilterBar(container) {
     bar.appendChild(tagWrap);
   }
 
-  // Overdue toggle
-  const overdueBtn = document.createElement('button');
-  overdueBtn.className = 'btn btn-ghost btn-sm kanban-overdue-btn' + (_filterOverdue ? ' active' : '');
-  overdueBtn.textContent = '⏰ Overdue';
-  overdueBtn.addEventListener('click', () => {
-    _filterOverdue = !_filterOverdue;
-    overdueBtn.classList.toggle('active');
-    _rerenderColumns();
-  });
-  bar.appendChild(overdueBtn);
+  // Overdue toggle — hidden on scheduled tab (time-context pills handle this)
+  if (_filterTab !== 'scheduled') { // B34 fix: hide on scheduled tab
+    const overdueBtn = document.createElement('button');
+    overdueBtn.className = 'btn btn-ghost btn-sm kanban-overdue-btn' + (_filterOverdue ? ' active' : '');
+    overdueBtn.textContent = '⏰ Overdue';
+    overdueBtn.addEventListener('click', () => {
+      _filterOverdue = !_filterOverdue;
+      overdueBtn.classList.toggle('active');
+      _applyFilterChange();
+    });
+    bar.appendChild(overdueBtn);
+  }
 
   // Clear filters
   const clearBtn = document.createElement('button');
@@ -597,6 +769,7 @@ function _buildFilterBar(container) {
     _filterTags.clear();
     _filterPriority  = null;
     _filterOverdue   = false;
+    _filterScheduledRange = null;
     renderKanban({ _internal: true });
   });
   bar.appendChild(clearBtn);
@@ -624,7 +797,7 @@ function _rerenderColumns() {
   const filtered = _applyFilters(_tabFiltered);
 
   // Show a friendly empty state banner when filters yield no results
-  const anyFilter = _filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue;
+  const anyFilter = _filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue || _filterScheduledRange; // B06 fix
   if (anyFilter && filtered.length === 0) {
     const banner = document.createElement('div');
     banner.style.cssText = [
@@ -991,6 +1164,35 @@ function _showStateDotPopover(dotEl, task) {
   }, 0);
 }
 
+// ── Quick-add helpers ─────────────────────────────────────── //
+
+/**
+ * Returns the appropriate dueDate for a quick-added task based on the
+ * active filter tab and scheduled range filter.
+ * Returns an object spread (e.g. { dueDate: 'YYYY-MM-DD' }) or {}.
+ */
+function _getQuickAddDueDate() {
+  if (_filterTab === 'today') return { dueDate: _todayStr() };
+  if (_filterTab === 'scheduled') {
+    const b = _getScheduledBoundaries();
+    switch (_filterScheduledRange) {
+      case 'overdue':
+      case 'today':    return { dueDate: b.today };
+      case 'tomorrow': return { dueDate: b.tomorrow };
+      case 'this-week': return { dueDate: b.weekEnd };
+      case 'next-week': return { dueDate: b.nextWeekEnd };
+      case 'later':    {
+        // Later: set dueDate to 2 weeks from weekEnd as a reasonable default
+        const later = new Date(b.nextWeekEnd + 'T00:00:00');
+        later.setDate(later.getDate() + 7);
+        return { dueDate: later.getFullYear() + '-' + String(later.getMonth()+1).padStart(2,'0') + '-' + String(later.getDate()).padStart(2,'0') };
+      }
+      default: return { dueDate: b.today }; // no range = default to today
+    }
+  }
+  return {};
+}
+
 // ── Quick-add ─────────────────────────────────────────────── //
 
 function _buildQuickAdd(statusKey) {
@@ -1034,8 +1236,8 @@ function _buildQuickAdd(statusKey) {
         status:   statusKey,
         priority: 'Medium',
         context:  (!ctx || ctx === 'all') ? 'family' : ctx,
-        // BUG-10 fix: auto-set dueDate=today when quick-adding on the Today tab
-        ...((_filterTab === 'today') ? { dueDate: _todayStr() } : {}),
+        // BUG-10/B18 fix: auto-set dueDate based on active tab and range filter
+        ...(_getQuickAddDueDate()),
       }, account?.id);
       input.value = '';
       if (!fromBlur) {
@@ -1289,15 +1491,19 @@ function _injectStyles() {
       display: flex;
       flex-direction: column;
       height: 100%;
-      overflow: hidden;   /* board mode: columns scroll horizontally */
+      overflow: hidden;
       padding: 0;
     }
+    /* Alt views: the body content area scrolls, not the whole container */
     #view-kanban.active.alt-view {
-      overflow-y: auto;   /* alt views: body scrolls vertically */
+      overflow: hidden; /* container stays fixed */
     }
-
+    #view-kanban.active.alt-view .kanban-alt-body {
+      flex: 1;
+      overflow-y: auto;
+    }
     /* ── Filter Bar ─────────────────────────────────── */
-    .kanban-filter-bar {
+    .kanban-filter-bar { /* B20 fix: removed duplicate flex-shrink:0 from preceding rule */
       display: flex;
       align-items: center;
       gap: var(--space-2);
@@ -1755,8 +1961,13 @@ async function renderKanban(params = {}) {
   // BUG-36 fix: reset all filter state on a fresh (non-internal) render to prevent state leak
   if (!params._internal) {
     _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
-    _filterPriority = null; _filterOverdue = false;
-    if (_viewMode !== (params.viewMode || _viewMode)) _sortBy = {}; // reset sort on mode change
+    _filterPriority = null; _filterOverdue = false; _filterScheduledRange = null;
+    if (_viewMode !== (params.viewMode || _viewMode)) _sortBy = {};
+    // Spec fix: snap to canonical view for the current tab on fresh render
+    if (!params.viewMode) {
+      _viewMode = _TAB_CANONICAL_VIEW[_filterTab] || 'list';
+      _userOverrodeView = false;
+    }
   }
   if (params.filter === 'overdue') _filterOverdue = true;
   if (params.viewMode) _viewMode = params.viewMode;
@@ -1798,7 +2009,13 @@ async function renderKanban(params = {}) {
       const isActive = _filterTab === tab.key;
       btn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border:none;border-radius:var(--radius-md) var(--radius-md) 0 0;cursor:pointer;font-size:var(--text-sm);font-weight:' + (isActive ? 'var(--weight-bold)' : 'var(--weight-normal)') + ';background:' + (isActive ? 'var(--color-surface)' : 'transparent') + ';color:' + (isActive ? 'var(--color-text)' : 'var(--color-text-muted)') + ';border-bottom:2px solid ' + (isActive ? 'var(--color-accent)' : 'transparent') + ';transition:all 0.15s;';
       btn.textContent = tab.icon + ' ' + tab.label;
-      btn.addEventListener('click', () => { _filterTab = tab.key; renderKanban({ _internal: true }); });
+      btn.addEventListener('click', () => {
+        _filterTab = tab.key;
+        _viewMode = _TAB_CANONICAL_VIEW[tab.key] || 'list';
+        _userOverrodeView = false;
+        _filterScheduledRange = null; // reset time-context filter on tab switch
+        renderKanban({ _internal: true });
+      });
       tabBar.appendChild(btn);
     }
     viewEl.appendChild(tabBar);
@@ -1810,7 +2027,8 @@ async function renderKanban(params = {}) {
 
     const countEl = document.createElement('span');
     countEl.style.cssText = 'font-size:var(--text-sm);color:var(--color-text-muted);font-weight:var(--weight-semibold);';
-    countEl.textContent = filtered.length + ' ' + (filtered.length === 1 ? 'task' : 'tasks'); // BUG-16 fix: singular + remove '#'
+    countEl.className = 'kanban-task-count'; // tagged for _reRenderScheduled fast-path
+    countEl.textContent = filtered.length + ' ' + (filtered.length === 1 ? 'task' : 'tasks');
     controls.appendChild(countEl);
 
     // View mode dropdown
@@ -1820,7 +2038,7 @@ async function renderKanban(params = {}) {
     const vmBtn = document.createElement('button');
     vmBtn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);cursor:pointer;font-size:var(--text-sm);color:var(--color-text);';
     vmBtn.type = 'button';
-    vmBtn.innerHTML = currentVm.icon + ' \u25BE';
+    vmBtn.innerHTML = currentVm.icon + ' ' + currentVm.label + ' \u25BE'; // FIX-10: show view name
 
     const vmDd = document.createElement('div');
     vmDd.style.cssText = 'display:none;position:absolute;right:0;top:100%;margin-top:4px;min-width:180px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:200;padding:var(--space-2);';
@@ -1834,7 +2052,12 @@ async function renderKanban(params = {}) {
       item.className = 'kanban-vm-item';
       item.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);padding:6px 8px;border-radius:var(--radius-sm);cursor:pointer;font-size:var(--text-sm);color:var(--color-text);' + (_viewMode === vm.key ? 'background:var(--color-surface-2);font-weight:var(--weight-bold);' : '');
       item.innerHTML = '<span>' + vm.icon + '</span> <span style="flex:1;">' + _esc(vm.label) + '</span>' + (_viewMode === vm.key ? '<span style="color:var(--color-accent);">\u2713</span>' : '');
-      item.addEventListener('click', () => { _viewMode = vm.key; vmDd.style.display = 'none'; renderKanban({ _internal: true }); });
+      item.addEventListener('click', () => {
+        _viewMode = vm.key;
+        _userOverrodeView = true; // user explicitly chose this view
+        vmDd.style.display = 'none';
+        renderKanban({ _internal: true });
+      });
       item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
       item.addEventListener('mouseleave', () => { item.style.background = _viewMode === vm.key ? 'var(--color-surface-2)' : 'transparent'; });
       vmDd.appendChild(item);
@@ -1860,23 +2083,16 @@ async function renderKanban(params = {}) {
     viewEl.appendChild(controls);
 
     // \u2500\u2500 Render body based on view mode \u2500\u2500\u2500\u2500\u2500\u2500
+    // Spec fix: filter bar shown in ALL view modes (not just kanban)
+    // This lets users filter while viewing inbox/today/scheduled/etc. in list mode
+    _buildFilterBar(viewEl);
+
     if (_viewMode === 'kanban') {
       viewEl.classList.remove('alt-view');
-      _buildFilterBar(viewEl);
       _buildBoard(viewEl);
     } else {
       viewEl.classList.add('alt-view');
-      // BUG-11 fix: clear sticky kanban bar filters when entering alt views (no filter UI available)
-      if (_filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue) {
-        _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
-        _filterPriority = null; _filterOverdue = false;
-        // Recompute filtered with cleared state and update count to match
-        const filteredAlt = _applyFilters(_applyFilterTab(_tasks));
-        countEl.textContent = filteredAlt.length + ' ' + (filteredAlt.length === 1 ? 'task' : 'tasks'); // BUG-R3 fix: sync count
-        _renderAltView(viewEl, filteredAlt);
-      } else {
-        _renderAltView(viewEl, filtered);
-      }
+      _renderAltView(viewEl, filtered);
     }
 
   } catch (err) {
@@ -1921,13 +2137,14 @@ function _renderAltView(container, tasks) {
   }
 
   const body = document.createElement('div');
+  body.className = 'kanban-alt-body'; // FIX-7: scrollable wrapper for alt views
   body.style.cssText = 'padding:0 var(--space-5) var(--space-5);';
 
   // BUG 13: Show empty state when no tasks
   if (tasks.length === 0) {
     const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'open' ? '○' : '🎉'; // BUG-17 fix
     const emptyMsg  = _filterTab === 'inbox'
-      ? 'Your inbox is clear! Tasks without a date or status will appear here.'
+      ? 'Your inbox is clear! Tasks missing a due date OR a status appear here — assign both to remove them.'
       : _filterTab === 'today'
       ? 'Nothing scheduled for today.'
       : _filterTab === 'completed'
@@ -1941,17 +2158,25 @@ function _renderAltView(container, tasks) {
   if (_filterTab === 'inbox') {
     const hint = document.createElement('div');
     hint.className = 'kanban-inbox-hint';
-    hint.textContent = 'To clear tasks from inbox: assign a due date AND a status. Tasks need both to leave the inbox.';
+    hint.textContent = 'Inbox shows tasks missing a due date OR a status. Assign both to remove a task from inbox.';
     body.appendChild(hint);
   }
 
-  // [minor] FIX-21: Extended color map for date-group keys (Scheduled/Inbox tabs)
+  // Color map for group badge headers across all tabs
   const _statusColors = {
+    // Status groups
     'Inbox':'#6b7280','Not Started':'#f97316','Next Up':'#eab308',
     'In Progress':'#3b82f6','Review':'#8b5cf6','Done':'#22c55e',
-    '⚠ Overdue': '#dc2626',        // Scheduled tab overdue group
-    'Open Tasks': '#3b82f6',        // Open tab
-    'Completed':  '#22c55e',        // Completed tab
+    // Scheduled tab time-context buckets (using SCHEDULED_BUCKETS display labels)
+    '⚠ Overdue': '#dc2626',
+    '📅 Today':   '#f97316',
+    '🌅 Tomorrow':'#eab308',
+    '📆 This Week':'#3b82f6',
+    '🗓 Next Week':'#8b5cf6',
+    '🔭 Later':   '#6b7280',
+    // Other tabs
+    'Open Tasks': '#3b82f6',
+    'Completed':  '#22c55e',
     'Today': '#6b7280', 'Yesterday': '#6b7280', 'Unknown date': '#9ca3af',
   };
 
