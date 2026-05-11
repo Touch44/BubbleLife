@@ -22,6 +22,17 @@ import { emit, on, EVENTS }                      from '../core/events.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
 import { filterByContext, getActiveContext }      from '../core/context.js';
+import { getSession, stopSession, getElapsed, getRemaining, activeTaskIds, alarmedTaskIds,
+         formatDurationCompact, TIMER_TICK, TIMER_ALARM } from '../services/time-tracker.js';
+
+// ── Timer listener registry (KB-9/10/11 fix) ─────────────── //
+// Tracks per-card/row unsubscribe functions. Cleared before each board re-render
+// to prevent O(n*renders) permanent listener accumulation.
+const _timerUnsubs = [];
+function _pushTimerUnsub(...fns) { _timerUnsubs.push(...fns); }
+function _cleanupTimerListeners() {
+  while (_timerUnsubs.length) { try { _timerUnsubs.pop()(); } catch {} }
+}
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -88,7 +99,6 @@ const _TAB_CANONICAL_VIEW = {
   inbox:     'list',    // spec: grouped by creation date
   today:     'kanban',  // [MAJOR] spec: default to kanban for Today tab
   scheduled: 'list',    // spec: grouped by date property
-  status:    'kanban',  // spec: status columns ARE the grouping
   context:   'list',    // spec: grouped by context
   open:      'list',    // spec: ordered by priority and status (single group)
   completed: 'list',    // spec: ordered by completion date
@@ -109,19 +119,17 @@ const _FILTER_TABS = [
   { key: 'inbox',     label: 'Inbox',     icon: '\uD83D\uDCEC' },
   { key: 'today',     label: 'Today',     icon: '\u2600\uFE0F' },
   { key: 'scheduled', label: 'Scheduled', icon: '\uD83D\uDCC5' },
-  { key: 'status',    label: 'Status',    icon: '\uD83D\uDD04' },
   { key: 'context',   label: 'Context',   icon: '\uD83C\uDFF7\uFE0F' },
   { key: 'open',      label: 'Open',      icon: '\u25CB' },
   { key: 'completed', label: 'Completed', icon: '\u2705' },
   { key: 'all',       label: 'All',       icon: '\uD83D\uDDC2\uFE0F' },
-]; // [minor] Reordered to match spec: Inbox → Today → Scheduled → Status → Context → Open → Completed → All
+]; // [MAJOR] Removed Status tab — Kanban view with status columns makes it redundant
 
 // User's default view preferences per filter tab (loaded from DB on render)
 let _defaultViewPerTab = {
   inbox:     'list',
   today:     'kanban',
   scheduled: 'list',
-  status:    'kanban',
   context:   'list',
   open:      'list',
   completed: 'list',
@@ -757,24 +765,222 @@ function _buildFilterBar(container) {
     bar.appendChild(assigneeWrap);
   }
 
-  // Tag chips
+  // ── Tag multi-select combobox ──────────────────────────────
+  // Fills remaining space, search-as-you-type, multi-select checkboxes,
+  // selected count badge / pills in trigger, one-click clear.
   const allTags = _collectAllTags();
   if (allTags.length) {
-    const tagWrap = document.createElement('div');
-    tagWrap.className = 'kanban-filter-tags';
-    for (const tag of allTags.slice(0, 8)) {
-      const chip = document.createElement('button');
-      chip.className = 'kanban-filter-tag' + (_filterTags.has(tag) ? ' active' : '');
-      chip.textContent = tag;
-      chip.addEventListener('click', () => {
-        if (_filterTags.has(tag)) _filterTags.delete(tag);
-        else _filterTags.add(tag);
-        _applyFilterChange(); // B04 fix
-        chip.classList.toggle('active');
-      });
-      tagWrap.appendChild(chip);
+    const tagCombo = document.createElement('div');
+    tagCombo.className = 'kanban-tag-combo';
+    tagCombo.style.cssText = 'position:relative;flex:1;min-width:120px;max-width:420px;';
+
+    // ── Trigger button ──
+    const tagTrigger = document.createElement('button');
+    tagTrigger.type = 'button';
+    tagTrigger.className = 'kanban-tag-trigger';
+    tagTrigger.style.cssText = [
+      'display:flex;align-items:center;gap:var(--space-1);width:100%;',
+      'padding:3px 8px;border:1px solid var(--color-border);border-radius:var(--radius-md);',
+      'background:var(--color-surface);cursor:pointer;font-size:var(--text-sm);',
+      'color:var(--color-text);min-height:30px;flex-wrap:wrap;text-align:left;',
+    ].join('');
+
+    function _renderTagTrigger() {
+      tagTrigger.innerHTML = '';
+      const selected = [..._filterTags];
+      if (selected.length === 0) {
+        const placeholder = document.createElement('span');
+        placeholder.style.cssText = 'color:var(--color-text-muted);flex:1;font-size:var(--text-sm);';
+        placeholder.textContent = '🏷️ Tags';
+        tagTrigger.appendChild(placeholder);
+      } else if (selected.length <= 3) {
+        // Show pills for up to 3
+        for (const t of selected) {
+          const pill = document.createElement('span');
+          pill.style.cssText = [
+            'display:inline-flex;align-items:center;gap:2px;padding:1px 6px;',
+            'background:var(--color-accent);color:#fff;border-radius:var(--radius-full);',
+            'font-size:var(--text-xs);white-space:nowrap;max-width:90px;overflow:hidden;text-overflow:ellipsis;',
+          ].join('');
+          pill.title = t;
+          pill.textContent = t;
+          tagTrigger.appendChild(pill);
+        }
+      } else {
+        // First pill + count badge when many selected
+        const firstPill = document.createElement('span');
+        firstPill.style.cssText = [
+          'display:inline-flex;align-items:center;padding:1px 6px;',
+          'background:var(--color-accent);color:#fff;border-radius:var(--radius-full);',
+          'font-size:var(--text-xs);white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;',
+        ].join('');
+        firstPill.textContent = selected[0];
+        firstPill.title = selected[0];
+        tagTrigger.appendChild(firstPill);
+        const badge = document.createElement('span');
+        badge.style.cssText = [
+          'display:inline-flex;align-items:center;justify-content:center;',
+          'padding:1px 6px;background:var(--color-accent);color:#fff;',
+          'border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:var(--weight-bold);white-space:nowrap;',
+        ].join('');
+        badge.textContent = `+${selected.length - 1} more`;
+        tagTrigger.appendChild(badge);
+      }
+      // Caret + clear
+      const right = document.createElement('span');
+      right.style.cssText = 'display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;';
+      if (selected.length > 0) {
+        const clearX = document.createElement('span');
+        clearX.textContent = '✕';
+        clearX.style.cssText = 'font-size:10px;color:var(--color-text-muted);padding:0 2px;cursor:pointer;';
+        clearX.title = 'Clear tag filters';
+        clearX.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _filterTags.clear();
+          _renderTagTrigger();
+          _applyFilterChange();
+        });
+        right.appendChild(clearX);
+      }
+      const caret = document.createElement('span');
+      caret.textContent = '▾';
+      caret.style.cssText = 'font-size:9px;color:var(--color-text-muted);';
+      right.appendChild(caret);
+      tagTrigger.appendChild(right);
     }
-    bar.appendChild(tagWrap);
+    _renderTagTrigger();
+
+    // ── Dropdown panel ──
+    const tagDd = document.createElement('div');
+    tagDd.className = 'kanban-tag-dd';
+    tagDd.style.cssText = [
+      'display:none;position:absolute;left:0;top:calc(100% + 4px);min-width:220px;width:max-content;max-width:340px;',
+      'background:var(--color-surface);border:1px solid var(--color-border);',
+      'border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:300;',
+      'flex-direction:column;overflow:hidden;',
+    ].join('');
+
+    // Search input
+    const tagSearch = document.createElement('input');
+    tagSearch.type = 'text';
+    tagSearch.placeholder = 'Search tags…';
+    tagSearch.style.cssText = [
+      'width:100%;padding:8px 10px;border:none;border-bottom:1px solid var(--color-border);',
+      'outline:none;font-size:var(--text-sm);background:transparent;color:var(--color-text);',
+      'box-sizing:border-box;',
+    ].join('');
+    tagDd.appendChild(tagSearch);
+
+    // Options list
+    const tagList = document.createElement('div');
+    tagList.style.cssText = 'max-height:220px;overflow-y:auto;padding:var(--space-1) 0;';
+
+    function _renderTagOptions(filter = '') {
+      tagList.innerHTML = '';
+      const q = filter.toLowerCase();
+      const visible = allTags.filter(t => !q || t.toLowerCase().includes(q));
+      if (visible.length === 0) {
+        const none = document.createElement('div');
+        none.style.cssText = 'padding:8px 12px;font-size:var(--text-sm);color:var(--color-text-muted);';
+        none.textContent = 'No tags match';
+        tagList.appendChild(none);
+        return;
+      }
+      for (const tag of visible) {
+        const row = document.createElement('label');
+        row.style.cssText = [
+          'display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;',
+          'font-size:var(--text-sm);color:var(--color-text);',
+          'transition:background var(--transition-fast);',
+        ].join('');
+        row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-surface-2)'; });
+        row.addEventListener('mouseleave', () => { row.style.background = ''; });
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = _filterTags.has(tag);
+        cb.style.cssText = 'width:14px;height:14px;accent-color:var(--color-accent);cursor:pointer;flex-shrink:0;';
+        cb.addEventListener('change', () => {
+          if (cb.checked) _filterTags.add(tag);
+          else _filterTags.delete(tag);
+          _renderTagTrigger();
+          _applyFilterChange();
+        });
+        const label = document.createElement('span');
+        label.style.cssText = 'flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        label.textContent = tag;
+        row.appendChild(cb);
+        row.appendChild(label);
+        tagList.appendChild(row);
+      }
+    }
+    _renderTagOptions();
+    tagDd.appendChild(tagList);
+
+    // Footer: select all / clear all
+    const tagFooter = document.createElement('div');
+    tagFooter.style.cssText = [
+      'display:flex;justify-content:space-between;padding:6px 10px;',
+      'border-top:1px solid var(--color-border);gap:var(--space-2);',
+    ].join('');
+    const selAllBtn = document.createElement('button');
+    selAllBtn.type = 'button';
+    selAllBtn.textContent = 'Select all';
+    selAllBtn.style.cssText = 'font-size:var(--text-xs);background:none;border:none;color:var(--color-accent);cursor:pointer;padding:0;';
+    selAllBtn.addEventListener('click', () => {
+      const q = tagSearch.value.toLowerCase();
+      allTags.filter(t => !q || t.toLowerCase().includes(q)).forEach(t => _filterTags.add(t));
+      _renderTagOptions(tagSearch.value);
+      _renderTagTrigger();
+      _applyFilterChange();
+    });
+    const clrAllBtn = document.createElement('button');
+    clrAllBtn.type = 'button';
+    clrAllBtn.textContent = 'Clear all';
+    clrAllBtn.style.cssText = 'font-size:var(--text-xs);background:none;border:none;color:var(--color-text-muted);cursor:pointer;padding:0;';
+    clrAllBtn.addEventListener('click', () => {
+      _filterTags.clear();
+      _renderTagOptions(tagSearch.value);
+      _renderTagTrigger();
+      _applyFilterChange();
+    });
+    tagFooter.appendChild(selAllBtn);
+    tagFooter.appendChild(clrAllBtn);
+    tagDd.appendChild(tagFooter);
+
+    // Search live filter
+    tagSearch.addEventListener('input', () => _renderTagOptions(tagSearch.value));
+
+    // Toggle open/close
+    let _tagDdOpen = false;
+    tagTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _tagDdOpen = !_tagDdOpen;
+      tagDd.style.display = _tagDdOpen ? 'flex' : 'none';
+      tagDd.style.flexDirection = 'column';
+      if (_tagDdOpen) {
+        tagSearch.value = '';
+        _renderTagOptions();
+        setTimeout(() => tagSearch.focus(), 50);
+      }
+    });
+
+    // Close on outside click
+    document.addEventListener('click', function _closeTagDd(e) {
+      if (!tagCombo.contains(e.target)) {
+        _tagDdOpen = false;
+        tagDd.style.display = 'none';
+        document.removeEventListener('click', _closeTagDd);
+      }
+    });
+
+    // Close on Escape
+    tagSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { _tagDdOpen = false; tagDd.style.display = 'none'; }
+    });
+
+    tagCombo.appendChild(tagTrigger);
+    tagCombo.appendChild(tagDd);
+    bar.appendChild(tagCombo);
   }
 
   // Overdue toggle — hidden on scheduled tab (time-context pills handle this)
@@ -821,6 +1027,7 @@ function _buildBoard(container) {
 
 function _rerenderColumns() {
   if (!_boardEl) return;
+  _cleanupTimerListeners(); // KB-9 fix: unsubscribe all card timer listeners before clearing DOM
   _boardEl.innerHTML = '';
 
   // Apply filter tab even in kanban mode (e.g. 'completed' → only Done column tasks)
@@ -1064,6 +1271,11 @@ function _buildCard(task) {
       : 'In Progress'; // C02: also exclude Completed from revert to prevent loop
     const newStatus = cb.checked ? 'Completed' : revertStatus;
     if (newStatus === 'Completed') window._fhEnv?.services?.effects?.play('confetti');
+    // TT-12 fix: stop active timer when task is marked complete
+    if (newStatus === 'Completed') {
+      const _activeSession = getSession(task.id);
+      if (_activeSession?.running) stopSession(task.id).catch(() => {});
+    }
     // Optimistic fade for Completed tasks
     if (newStatus === 'Completed') {
       card.style.transition = 'opacity 0.25s';
@@ -1108,6 +1320,51 @@ function _buildCard(task) {
 
   // ── Touch drag ──
   _wireTouchDrag(card, task);
+
+  // ── Timer indicator badge ───────────────────────────────── //
+  // Injected as a DOM element so it can update live via TIMER_TICK
+  const timerBadge = document.createElement('div');
+  timerBadge.className = 'kanban-card-timer';
+  timerBadge.style.cssText = [
+    'display:none;align-items:center;gap:3px;',
+    'font-size:10px;font-weight:var(--weight-semibold);',
+    'font-variant-numeric:tabular-nums;padding:2px 6px;',
+    'border-radius:var(--radius-full);margin-top:4px;',
+    'background:var(--color-accent);color:#fff;width:fit-content;',
+  ].join('');
+
+  function _refreshCardTimer() {
+    const session = getSession(task.id);
+    const alarmed = alarmedTaskIds.value.has(task.id);
+    const active  = activeTaskIds.value.has(task.id);
+    if (!session && !alarmed) {
+      timerBadge.style.display = 'none';
+      return;
+    }
+    timerBadge.style.display = 'inline-flex';
+    const elapsed = getElapsed(session);
+    if (alarmed) {
+      timerBadge.textContent = '🔔 Block done';
+      timerBadge.style.background = 'var(--color-danger)';
+    } else if (session?.mode === 'block' && session.blockSecs) {
+      const rem = getRemaining(session);
+      timerBadge.textContent = '⏲ ' + formatDurationCompact(rem);
+      timerBadge.style.background = rem <= 60 ? 'var(--color-danger)' : 'var(--color-accent)';
+    } else {
+      timerBadge.textContent = '⏱ ' + formatDurationCompact(elapsed);
+      timerBadge.style.background = 'var(--color-accent)';
+    }
+  }
+
+  // Initial render
+  _refreshCardTimer();
+  card.appendChild(timerBadge);
+
+  // Live updates — store unsubscribes in registry (KB-9 fix: cleaned on re-render)
+  _pushTimerUnsub(
+    on(TIMER_TICK,  (d) => { if (d.taskId === task.id) _refreshCardTimer(); }),
+    on(TIMER_ALARM, (d) => { if (d.taskId === task.id) _refreshCardTimer(); })
+  );
 
   return card;
 }
@@ -1575,25 +1832,21 @@ function _injectStyles() {
       background: var(--color-accent);
       color: #fff;
     }
-    .kanban-filter-tags {
-      display: flex;
-      gap: var(--space-1);
-      flex-wrap: wrap;
+    .kanban-tag-combo {
+      position: relative;
     }
-    .kanban-filter-tag {
-      padding: 1px var(--space-2);
-      border-radius: var(--radius-full);
-      border: 1px solid var(--color-border);
-      background: var(--color-bg);
-      font-size: var(--text-xs);
-      cursor: pointer;
-      color: var(--color-text-muted);
-      transition: all var(--transition-fast);
+    .kanban-tag-trigger {
+      transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
     }
-    .kanban-filter-tag.active {
-      background: var(--color-accent);
+    .kanban-tag-trigger:hover {
       border-color: var(--color-accent);
-      color: #fff;
+    }
+    .kanban-tag-trigger:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 1px;
+    }
+    .kanban-tag-dd input[type="checkbox"]:checked {
+      accent-color: var(--color-accent);
     }
     .kanban-overdue-btn.active {
       background: var(--color-danger-bg);
@@ -1989,8 +2242,9 @@ async function renderKanban(params = {}) {
   const seq = ++_renderSeq; // claim this render slot
   _injectStyles();
   
-  // [MAJOR] Load view preferences from DB on first render
-  if (seq === 1) {
+  // [MAJOR] Load view preferences from DB on every fresh (non-internal) render (KB-5 fix)
+  // seq===1 guard was wrong: after navigation _renderSeq > 1 so prefs never reloaded
+  if (!params._internal) {
     await _loadViewPreferences();
   }
   
@@ -2147,6 +2401,7 @@ async function renderKanban(params = {}) {
 // ── Alternative view modes (non-Kanban) ───────────────────── //
 
 function _renderAltView(container, tasks) {
+  _cleanupTimerListeners(); // KB-10/11 fix: unsubscribe previous row timer listeners
   // Select grouping strategy based on active filter tab (spec-compliant)
   let grouped;
   switch (_filterTab) {
@@ -2266,6 +2521,23 @@ function _renderAltView(container, tasks) {
           });
         }
         row.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }); });
+        // Timer live badge
+        const listTimerBadge = document.createElement('span');
+        listTimerBadge.style.cssText = 'display:none;font-size:10px;font-weight:var(--weight-semibold);font-variant-numeric:tabular-nums;padding:1px 5px;border-radius:var(--radius-full);background:var(--color-accent);color:#fff;white-space:nowrap;flex-shrink:0;';
+        function _refreshListTimer() {
+          const _s = getSession(task.id);
+          if (!_s && !alarmedTaskIds.value.has(task.id)) { listTimerBadge.style.display = 'none'; return; }
+          listTimerBadge.style.display = 'inline';
+          if (alarmedTaskIds.value.has(task.id)) { listTimerBadge.textContent = '\uD83D\uDD14'; listTimerBadge.style.background = 'var(--color-danger)'; }
+          else if (_s.mode === 'block' && _s.blockSecs) { const _rem = getRemaining(_s); listTimerBadge.textContent = '\u23F2 ' + formatDurationCompact(_rem); listTimerBadge.style.background = _rem <= 60 ? 'var(--color-danger)' : 'var(--color-accent)'; }
+          else { listTimerBadge.textContent = '\u23F1 ' + formatDurationCompact(getElapsed(_s)); listTimerBadge.style.background = 'var(--color-accent)'; }
+        }
+        _refreshListTimer();
+        row.appendChild(listTimerBadge);
+        _pushTimerUnsub( // KB-10 fix: store unsubscribes for cleanup on re-render
+          on(TIMER_TICK,  (_d) => { if (_d.taskId === task.id) _refreshListTimer(); }),
+          on(TIMER_ALARM, (_d) => { if (_d.taskId === task.id) _refreshListTimer(); })
+        );
         body.appendChild(row);
       }
     } else if (_viewMode === 'wall' || _viewMode === 'gallery') {
@@ -2316,7 +2588,7 @@ function _renderAltView(container, tasks) {
         wrap.style.cssText = 'overflow-x:auto;border:1px solid var(--color-border);border-radius:var(--radius-lg);margin-bottom:var(--space-2);';
         const t = document.createElement('table');
         t.style.cssText = 'width:100%;border-collapse:collapse;font-size:var(--text-sm);min-width:700px;';
-        t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
+        t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">⏱ Timer</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
         const tbody = document.createElement('tbody');
         groupTasks.forEach((tk, i) => {
           const _rowIdx = i + 1; // row number within this group (1-based)
@@ -2330,7 +2602,32 @@ function _renderAltView(container, tasks) {
           const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';
           const bodyTxt = tk.details ? String(tk.details).replace(/<[^>]+>/g,' ').trim() : '';
           const wc = bodyTxt ? bodyTxt.split(/\s+/).length : 0;
-          tr.innerHTML = '<td style="padding:8px 12px;color:var(--color-text-muted);">' + _rowIdx + '</td><td style="padding:8px 12px;font-weight:var(--weight-semibold);">' + _esc(tk.title||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.status||'') + '</td><td style="padding:8px 12px;">' + due + (ov ? ' <span style="color:var(--color-danger);font-size:var(--text-xs);">Overdue</span>' : '') + '</td><td style="padding:8px 12px;">' + _esc(tk.priority||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.context||'') + '</td><td style="padding:8px 12px;">' + _esc(tags) + '</td><td style="padding:8px 12px;">\u270E ' + wc + ' words</td>';
+          tr.innerHTML = '<td style="padding:8px 12px;color:var(--color-text-muted);">' + _rowIdx + '</td><td style="padding:8px 12px;font-weight:var(--weight-semibold);">' + _esc(tk.title||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.status||'') + '</td><td style="padding:8px 12px;">' + due + (ov ? ' <span style="color:var(--color-danger);font-size:var(--text-xs);">Overdue</span>' : '') + '</td><td style="padding:8px 12px;">' + _esc(tk.priority||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.context||'') + '</td><td style="padding:8px 12px;">' + _esc(tags) + '</td><td class="kanban-table-timer-cell" style="padding:8px 12px;font-variant-numeric:tabular-nums;"></td><td style="padding:8px 12px;">\u270E ' + wc + ' words</td>';
+          // Wire live timer badge into table cell
+          const _timerTd = tr.querySelector('.kanban-table-timer-cell');
+          if (_timerTd) {
+            function _refreshTableTimer() {
+              const _ts = getSession(tk.id);
+              const _al = alarmedTaskIds.value.has(tk.id);
+              if (!_ts && !_al) {
+                _timerTd.textContent = tk.timeTracked > 0 ? formatDurationCompact(tk.timeTracked) : '—';
+                _timerTd.style.color = 'var(--color-text-muted)';
+                return;
+              }
+              if (_al) { _timerTd.innerHTML = '<span style="background:var(--color-danger);color:#fff;border-radius:var(--radius-full);padding:1px 6px;font-size:10px;">🔔 Done</span>'; return; }
+              const _elapsed = getElapsed(_ts);
+              const _isBlock = _ts.mode === 'block' && _ts.blockSecs;
+              const _rem = _isBlock ? getRemaining(_ts) : null;
+              const _txt = _isBlock ? ('⏲ ' + formatDurationCompact(_rem)) : ('⏱ ' + formatDurationCompact(_elapsed));
+              const _col = (_isBlock && _rem <= 60) ? 'var(--color-danger)' : 'var(--color-accent)';
+              _timerTd.innerHTML = '<span style="background:' + _col + ';color:#fff;border-radius:var(--radius-full);padding:1px 6px;font-size:10px;">' + _txt + '</span>';
+            }
+            _refreshTableTimer();
+            _pushTimerUnsub( // KB-11 fix: store unsubscribes for cleanup on re-render
+              on(TIMER_TICK,  (_d) => { if (_d.taskId === tk.id) _refreshTableTimer(); }),
+              on(TIMER_ALARM, (_d) => { if (_d.taskId === tk.id) _refreshTableTimer(); })
+            );
+          }
           tr.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: tk.id }));
           tbody.appendChild(tr);
         });
@@ -2393,6 +2690,12 @@ on('context:changed', () => {
   } else {
     renderKanban({ _internal: true }).catch(() => {});
   }
+});
+
+// KB-7 fix: sync in-memory view preferences when user changes them in Settings
+window.addEventListener('fh:taskViewPrefChanged', (e) => {
+  const { tabKey, viewMode } = e.detail || {};
+  if (tabKey && viewMode) _defaultViewPerTab[tabKey] = viewMode;
 });
 
 registerView('kanban', renderKanban);

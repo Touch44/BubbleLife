@@ -219,14 +219,6 @@ async function renderSettings() {
               </select>
             </div>
             <div>
-              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">🔄 Status</label>
-              <select id="pref-status" data-tab="status" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
-                <option value="list" ${taskViewPrefs.status === 'list' ? 'selected' : ''}>List</option>
-                <option value="kanban" ${taskViewPrefs.status === 'kanban' ? 'selected' : ''}>Kanban</option>
-                <option value="table" ${taskViewPrefs.status === 'table' ? 'selected' : ''}>Table</option>
-              </select>
-            </div>
-            <div>
               <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">🏷️ Context</label>
               <select id="pref-context" data-tab="context" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
                 <option value="list" ${taskViewPrefs.context === 'list' ? 'selected' : ''}>List</option>
@@ -264,7 +256,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v4.9.0</div>
+          <div><strong>FamilyHub</strong> v4.9.3</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -481,6 +473,8 @@ async function renderSettings() {
         const current = (await getSetting('taskViewPreferences')) || {};
         current[tabKey] = viewMode;
         await setSetting('taskViewPreferences', current);
+        // KB-7 fix: notify kanban module to reload in-memory preferences immediately
+        window.dispatchEvent(new CustomEvent('fh:taskViewPrefChanged', { detail: { tabKey, viewMode } }));
         // Brief success feedback
         const tempColor = select.style.borderColor;
         select.style.borderColor = 'var(--color-accent)';

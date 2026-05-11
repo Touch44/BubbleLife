@@ -34,6 +34,9 @@ import { on, emit, EVENTS }                   from '../core/events.js';
 import { getActiveContext, filterByContext }  from '../core/context.js';
 import { getAccount }                         from '../core/auth.js';
 import { openForm }                           from '../components/entity-form.js';
+import { activeTaskIds, alarmedTaskIds, sessionsSignal,
+         getElapsed, getRemaining, formatDurationCompact, formatDuration,
+         TIMER_TICK, TIMER_ALARM } from '../services/time-tracker.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -688,6 +691,12 @@ async function renderDashboard() {
         <button class="dash-daily-cta" id="dash-daily-btn">Start Daily Review</button>
       </div>
 
+      <!-- Widget: Active Timers -->
+      <div class="dash-widget dash-widget-full" id="dash-widget-timers" style="display:none;">
+        <div class="dash-widget-title">⏱️ Active Timers</div>
+        <div id="dash-timers-list"></div>
+      </div>
+
     </div>
   `;
 
@@ -696,6 +705,83 @@ async function renderDashboard() {
   el.querySelector('#dash-proj-nav')?.addEventListener('click', () => navigate(VIEW_KEYS.PROJECTS));
   el.querySelector('#dash-note-add')?.addEventListener('click', () => openForm('note'));
   el.querySelector('#dash-daily-btn')?.addEventListener('click', () => navigate(VIEW_KEYS.DAILY));
+
+  // ── Active Timers Widget ────────────────────────────────────
+  {
+    const timerWidget = el.querySelector('#dash-widget-timers');
+    const timerList   = el.querySelector('#dash-timers-list');
+
+    // TT-9 fix: lightweight tick-updates (badge text only); structural rebuild only on alarm/save
+    // TT-13 fix: timer row click also opens the task panel directly
+    const _rowRefs = new Map(); // taskId → { badge, icon, subText }
+
+    function _buildTimerWidget() {
+      if (!timerWidget || !timerList) return;
+      const sessions = sessionsSignal.value;
+      const active   = activeTaskIds.value;
+      const alarmed  = alarmedTaskIds.value;
+      const relevant = [...active, ...alarmed];
+      if (relevant.length === 0) { timerWidget.style.display = 'none'; _rowRefs.clear(); return; }
+      timerWidget.style.display = '';
+      const relSet = new Set(relevant);
+      for (const [tid] of _rowRefs) {
+        if (!relSet.has(tid)) { timerList.querySelector('[data-ttask="' + tid + '"]')?.remove(); _rowRefs.delete(tid); }
+      }
+      for (const taskId of relevant) {
+        const session = sessions[taskId];
+        if (!session) continue;
+        if (_rowRefs.has(taskId)) { _tickTimerRow(taskId); continue; }
+        const row = document.createElement('div');
+        row.className = 'dash-widget-row';
+        row.dataset.ttask = taskId;
+        row.style.cssText = 'display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;cursor:pointer;';
+        const icon = document.createElement('span'); icon.style.cssText = 'font-size:1.1rem;flex-shrink:0;';
+        const info = document.createElement('div'); info.style.cssText = 'flex:1;min-width:0;';
+        info.innerHTML = '<div style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (session.taskTitle || 'Task') + '</div>';
+        const subText = document.createElement('div'); subText.style.cssText = 'font-size:var(--text-xs);';
+        info.appendChild(subText);
+        const badge = document.createElement('span');
+        badge.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-bold);font-variant-numeric:tabular-nums;padding:2px 8px;border-radius:var(--radius-full);color:#fff;';
+        row.append(icon, info, badge);
+        row.addEventListener('click', () => {
+          navigate(VIEW_KEYS.KANBAN, { filterTab: 'today' });
+          setTimeout(() => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: taskId }), 300);
+        });
+        timerList.appendChild(row);
+        _rowRefs.set(taskId, { badge, icon, subText });
+        _tickTimerRow(taskId);
+      }
+    }
+
+    function _tickTimerRow(taskId) {
+      const refs = _rowRefs.get(taskId); if (!refs) return;
+      const sessions = sessionsSignal.value; const alarmed = alarmedTaskIds.value;
+      const session = sessions[taskId]; if (!session) return;
+      const { badge, icon, subText } = refs;
+      const isAlarmed = alarmed.has(taskId);
+      const elapsed   = getElapsed(session);
+      const remaining = session.mode === 'block' && session.blockSecs ? getRemaining(session) : null;
+      icon.textContent = isAlarmed ? '\uD83D\uDD14' : session.mode === 'block' ? '\u23F2\uFE0F' : '\u23F1\uFE0F';
+      if (isAlarmed) {
+        subText.style.color = 'var(--color-danger)'; badge.style.background = 'var(--color-danger)';
+        subText.textContent = '\uD83D\uDD14 Block complete \u2014 ' + formatDuration(elapsed) + ' recorded'; badge.textContent = 'DONE';
+      } else if (session.mode === 'block' && remaining !== null) {
+        const u = remaining <= 60; subText.style.color = u ? 'var(--color-danger)' : 'var(--color-text-muted)';
+        badge.style.background = u ? 'var(--color-danger)' : 'var(--color-accent)';
+        subText.textContent = '\u23F2 ' + formatDurationCompact(remaining) + ' remaining of ' + formatDuration(session.blockSecs);
+        badge.textContent = formatDurationCompact(remaining);
+      } else {
+        subText.style.color = 'var(--color-text-muted)'; badge.style.background = 'var(--color-accent)';
+        subText.textContent = '\u23F1 Running \u2014 ' + formatDuration(elapsed);
+        badge.textContent = formatDurationCompact(elapsed);
+      }
+    }
+
+    _buildTimerWidget();
+    on(TIMER_TICK,  () => { for (const [tid] of _rowRefs) _tickTimerRow(tid); }); // badge-only, no DOM rebuild
+    on(TIMER_ALARM, _buildTimerWidget); // structural refresh
+    on(TIMER_SAVED, _buildTimerWidget);
+  }
 
   // Wire scroll buttons for cards strip
   {

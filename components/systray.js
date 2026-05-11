@@ -20,6 +20,7 @@ import { systrayRegistry } from '../core/registry.js';
 import { computed, signal, effect } from '../core/signals.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { on, EVENTS } from '../core/events.js';
+import { activeTaskIds, alarmedTaskIds, TIMER_ALARM } from '../services/time-tracker.js';
 
 let _env    = null;
 let _mount  = null;
@@ -191,6 +192,55 @@ function _buildPresenceItem() {
   return el;
 }
 
+// ── Built-in: TimerItem ───────────────────────────────────── //
+
+function _buildTimerItem() {
+  const el = document.createElement('div');
+  el.className = 'st-item';
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+
+  const icon  = document.createElement('span');
+  icon.className = 'st-icon';
+  icon.textContent = '⏱️';
+
+  const badge = document.createElement('span');
+  badge.className = 'st-badge st-badge-info';
+
+  el.append(icon, badge);
+
+  effect(() => {
+    const activeCount  = activeTaskIds.value.size;
+    const alarmedCount = alarmedTaskIds.value.size;
+    const total = activeCount + alarmedCount;
+
+    badge.textContent = total > 0 ? String(total) : '';
+    badge.style.display = total > 0 ? '' : 'none';
+
+    if (alarmedCount > 0) {
+      badge.className = 'st-badge st-badge-danger';
+      el.classList.add('st-item-alert');
+      el.title = `${alarmedCount} timer alarm${alarmedCount !== 1 ? 's' : ''}`;
+      icon.textContent = '⏰';
+    } else if (activeCount > 0) {
+      badge.className = 'st-badge st-badge-info';
+      el.classList.remove('st-item-alert');
+      el.title = `${activeCount} timer${activeCount !== 1 ? 's' : ''} running`;
+      icon.textContent = '⏱️';
+    } else {
+      el.classList.remove('st-item-alert');
+      el.title = 'No active timers';
+      icon.textContent = '⏱️';
+    }
+  });
+
+  el.addEventListener('click', () => {
+    navigate(VIEW_KEYS.KANBAN, { filterTab: 'today' });
+  });
+
+  return el;
+}
+
 // ── Render systray ────────────────────────────────────────── //
 
 function _render() {
@@ -229,6 +279,11 @@ export function initSystray(env, mountId = 'topbar-systray') {
   _mount.className = 'st-bar';
 
   // Register built-in items
+  systrayRegistry.add('timer', {
+    order:  5,
+    render: () => _buildTimerItem(),
+  });
+
   systrayRegistry.add('tasks-due', {
     order:  10,
     render: () => _buildTasksDueItem(),

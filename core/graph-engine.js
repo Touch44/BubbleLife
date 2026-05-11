@@ -135,19 +135,20 @@ const BUILT_IN_ENTITY_TYPES = [
     fields: [
       field('title',      'title',    { isTitle: true, label: 'Title' }),
       field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
-      field('status',     'select',   { label: 'Status',   options: ['Not Started', 'Next Up', 'In Progress', 'Completed', 'Done', 'Review', 'Inbox'] }), // legacy values kept for backward compat
+      field('status',     'select',   { label: 'Status',   options: ['Not Started', 'Next Up', 'In Progress', 'Completed'] }), // [minor] Removed legacy: Done, Review, Inbox (backward compat preserved in sort/filter logic)
       field('priority',   'select',   { label: 'Priority', options: ['Low', 'Medium', 'High', 'Critical'] }),
       field('dueDate',    'date',     { label: 'Due Date' }),
       field('dueTime',    'time',     { label: 'Due Time', placeholder: '06:00', helpText: 'Time of day (defaults to 6:00 AM if not set)' }),
       field('assignedTo', 'relation', { label: 'Assigned To', relatesTo: 'person' }),
       field('project',    'relation', { label: 'Project',     relatesTo: 'project' }),
       field('tags',       'tags',     { label: 'Tags' }),
-      field('details',    'richtext',   { label: 'Details', isTitle: false }),
+      field('details',    'richtext',   { label: 'Activity', isTitle: false }),
       field('checklist',  'checklist',  { label: 'Checklist', isTitle: false }),
       field('blockedBy',  'relation',   { label: 'Blocked By', relatesTo: 'task' }),
       field('blocking',   'relation',   { label: 'Blocking',   relatesTo: 'task' }),
       field('effort',     'select',   { label: 'Effort', options: ['XS', 'S', 'M', 'L', 'XL'] }),
       field('urgency',    'select',   { label: 'Urgency', options: ['Normal', 'Urgent', 'Overdue'], hidden: true }),
+      field('timeTracked','number',   { label: 'Time Tracked (s)', hidden: true }), // [MAJOR] stores total seconds; display handled by time-tracker service
     ],
     // P-27: field-level onChange cascading
     onChanges: {

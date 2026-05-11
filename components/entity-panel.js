@@ -28,6 +28,11 @@ import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { mountActivityStream, recordCreated } from './activity-stream.js';
+import {
+  getSession, startFreeRun, startBlock, stopSession, resetSession, adjustSession, clearAlarm,
+  getElapsed, getRemaining, formatDuration, formatDurationCompact,
+  activeTaskIds, alarmedTaskIds, TIMER_TICK, TIMER_ALARM, TIMER_SAVED,
+} from '../services/time-tracker.js';
 
 // ── Graph view state ──────────────────────────────────────── //
 let _graphViewActive = false;
@@ -1163,8 +1168,8 @@ const CONTENT_FIRST_TYPES = new Set([
 const VIEW_DEFS = [
   { key: 'content',    icon: '📄',  title: 'Content' },
   { key: 'properties', icon: '📝',  title: 'Properties' },
-  { key: 'relations',  icon: '🔗',  title: 'Relations' },
-  { key: 'activity',   icon: '📋',  title: 'Activity' },
+  { key: 'relations',  icon: '🔗',  title: 'Details' },    // [MAJOR] renamed from Relations
+  { key: 'activity',   icon: '📋',  title: 'Change Log' }, // [MAJOR] renamed from Activity
 ];
 
 // ════════════════════════════════════════════════════════════
@@ -2568,12 +2573,411 @@ function _isoToLocalDate(isoStr) {
   return `${y}-${m}-${dy}`;
 }
 
+// ── Time Tracker UI ───────────────────────────────────────── //
+
+function _buildTimeTrackerUI(container, entity) {
+  const taskId = entity.id;
+
+  const header = document.createElement('div');
+  header.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);';
+  header.textContent = '⏱️ Time Tracking';
+  container.appendChild(header);
+
+  // ── Main display: full elapsed ──
+  const display = document.createElement('div');
+  display.style.cssText = [
+    'font-size:2.2rem;font-weight:var(--weight-bold);color:var(--color-text);',
+    'font-variant-numeric:tabular-nums;letter-spacing:-0.02em;',
+    'margin-bottom:var(--space-2);line-height:1;',
+  ].join('');
+  container.appendChild(display);
+
+  // Sub-display: days / hours / mins / secs breakdown
+  const breakdown = document.createElement('div');
+  breakdown.style.cssText = 'display:flex;gap:var(--space-3);margin-bottom:var(--space-4);';
+  const mkUnit = (label) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;min-width:32px;';
+    const num = document.createElement('span');
+    num.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-bold);color:var(--color-text);font-variant-numeric:tabular-nums;';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'font-size:10px;color:var(--color-text-muted);margin-top:1px;';
+    lbl.textContent = label;
+    wrap.append(num, lbl);
+    return { wrap, num };
+  };
+  const days  = mkUnit('days');
+  const hours = mkUnit('hrs');
+  const mins  = mkUnit('min');
+  const secs  = mkUnit('sec');
+  breakdown.append(days.wrap, hours.wrap, mins.wrap, secs.wrap);
+  container.appendChild(breakdown);
+
+  // ── Control row: Start / Stop / Reset ──
+  const ctrlRow = document.createElement('div');
+  ctrlRow.style.cssText = 'display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3);';
+  container.appendChild(ctrlRow);
+
+  const mkBtn = (text, accent = false, danger = false) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    b.style.cssText = [
+      'padding:6px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);',
+      'font-weight:var(--weight-semibold);cursor:pointer;border:1px solid var(--color-border);',
+      'transition:opacity 0.12s;',
+      accent ? 'background:var(--color-accent);color:#fff;border-color:var(--color-accent);' :
+      danger  ? 'background:var(--color-surface);color:var(--color-danger);border-color:var(--color-danger);' :
+                'background:var(--color-surface);color:var(--color-text);',
+    ].join('');
+    b.addEventListener('mouseenter', () => b.style.opacity = '0.8');
+    b.addEventListener('mouseleave', () => b.style.opacity = '1');
+    return b;
+  };
+
+  const startBtn  = mkBtn('▶ Start', true);
+  const stopBtn   = mkBtn('⏸ Pause');
+  const resetBtn  = mkBtn('↺ Reset', false, true);
+  ctrlRow.append(startBtn, stopBtn, resetBtn);
+
+  // ── Status badge ──
+  const statusBadge = document.createElement('div');
+  statusBadge.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-3);min-height:18px;';
+  container.appendChild(statusBadge);
+
+  // ── Time Block section ──
+  const blockSection = document.createElement('div');
+  blockSection.style.cssText = 'background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);';
+  container.appendChild(blockSection);
+
+  const blockTitle = document.createElement('div');
+  blockTitle.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-2);';
+  blockTitle.textContent = '⏲ Time Block';
+  blockSection.appendChild(blockTitle);
+
+  const blockRow = document.createElement('div');
+  blockRow.style.cssText = 'display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;';
+  blockSection.appendChild(blockRow);
+
+  const blockSelect = document.createElement('select');
+  blockSelect.style.cssText = 'padding:5px 8px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);flex:1;min-width:130px;';
+  const blockOptions = [
+    { label: '5 min',   secs: 300   },
+    { label: '10 min',  secs: 600   },
+    { label: '15 min',  secs: 900   },
+    { label: '25 min (Pomodoro)', secs: 1500 },
+    { label: '30 min',  secs: 1800  },
+    { label: '45 min',  secs: 2700  },
+    { label: '1 hr',    secs: 3600  },
+    { label: '1.5 hr',  secs: 5400  },
+    { label: '2 hr',    secs: 7200  },
+    { label: '3 hr',    secs: 10800 },
+    { label: '4 hr',    secs: 14400 },
+    { label: '5 hr',    secs: 18000 },
+  ];
+  for (const opt of blockOptions) {
+    const o = document.createElement('option');
+    o.value = String(opt.secs);
+    o.textContent = opt.label;
+    blockSelect.appendChild(o);
+  }
+  blockRow.appendChild(blockSelect);
+
+  const startBlockBtn = mkBtn('▶ Start Block', true);
+  blockRow.appendChild(startBlockBtn);
+
+  // Block countdown display
+  const blockCountdown = document.createElement('div');
+  blockCountdown.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);margin-top:var(--space-2);min-height:20px;';
+  blockSection.appendChild(blockCountdown);
+
+  // ── Manual adjust section ──
+  const adjSection = document.createElement('div');
+  adjSection.style.cssText = 'margin-bottom:var(--space-3);';
+  container.appendChild(adjSection);
+
+  const adjTitle = document.createElement('div');
+  adjTitle.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-2);';
+  adjTitle.textContent = '✏️ Manual Adjust';
+  adjSection.appendChild(adjTitle);
+
+  const adjRow = document.createElement('div');
+  adjRow.style.cssText = 'display:flex;gap:var(--space-1);align-items:center;flex-wrap:wrap;';
+  adjSection.appendChild(adjRow);
+
+  const mkNumInput = (placeholder, width = '52px') => {
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.min = '0';
+    inp.placeholder = placeholder;
+    inp.style.cssText = `width:${width};padding:5px 6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);text-align:center;`;
+    return inp;
+  };
+  const mkLabel = (text) => {
+    const lbl = document.createElement('span');
+    lbl.textContent = text;
+    lbl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);';
+    return lbl;
+  };
+
+  const adjD = mkNumInput('0d', '44px');
+  const adjH = mkNumInput('0h', '44px');
+  const adjM = mkNumInput('0m', '44px');
+  const adjS = mkNumInput('0s', '44px');
+  const adjBtn = mkBtn('Set & Continue');
+
+  adjRow.append(adjD, mkLabel('d'), adjH, mkLabel('h'), adjM, mkLabel('m'), adjS, mkLabel('s'), adjBtn);
+
+  // ── Total saved time display ──
+  const savedRow = document.createElement('div');
+  savedRow.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-1);';
+  container.appendChild(savedRow);
+
+  // ── Refresh logic ──────────────────────────────────────────
+
+  function _updateDisplay() {
+    const session  = getSession(taskId);
+    const elapsed  = getElapsed(session) || (entity.timeTracked || 0);
+    const running  = session?.running;
+    const alarmed  = session?.alarmed;
+    const isBlock  = session?.mode === 'block';
+
+    // Big display
+    const totalSecs = getElapsed(session);
+    display.textContent = formatDurationCompact(totalSecs);
+
+    // Breakdown
+    const d = Math.floor(totalSecs / 86400);
+    const h = Math.floor((totalSecs % 86400) / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = Math.floor(totalSecs % 60);
+    days.num.textContent  = String(d);
+    hours.num.textContent = String(h);
+    mins.num.textContent  = String(m);
+    secs.num.textContent  = String(s);
+
+    // Status badge
+    if (alarmed) {
+      statusBadge.textContent = '🔔 Block complete! Timer stopped.';
+      statusBadge.style.color = 'var(--color-danger)';
+    } else if (running && isBlock) {
+      const rem = getRemaining(session);
+      statusBadge.textContent = `⏲ Block — ${formatDuration(rem)} remaining`;
+      statusBadge.style.color = rem <= 60 ? 'var(--color-danger)' : 'var(--color-accent)';
+    } else if (running) {
+      statusBadge.textContent = '🔴 Recording…';
+      statusBadge.style.color = 'var(--color-accent)';
+    } else if (totalSecs > 0) {
+      statusBadge.textContent = `Paused — ${formatDuration(totalSecs)} total`;
+      statusBadge.style.color = 'var(--color-text-muted)';
+    } else {
+      statusBadge.textContent = 'Not started';
+      statusBadge.style.color = 'var(--color-text-muted)';
+    }
+
+    // Button states
+    startBtn.disabled  = running && !alarmed;
+    startBtn.style.opacity = (running && !alarmed) ? '0.4' : '1';
+    stopBtn.disabled   = !running;
+    stopBtn.style.opacity = !running ? '0.4' : '1';
+
+    // Block countdown
+    if (isBlock && session?.blockSecs) {
+      const rem = getRemaining(session);
+      if (alarmed) {
+        blockCountdown.textContent = '🔔 Block finished!';
+        blockCountdown.style.color = 'var(--color-danger)';
+      } else if (running) {
+        const pct = Math.max(0, (rem / session.blockSecs) * 100);
+        blockCountdown.innerHTML = `<span style="color:var(--color-accent);">${formatDuration(rem)}</span> remaining <span style="color:var(--color-text-muted);">(${Math.round(100 - pct)}% done)</span>`;
+      } else {
+        blockCountdown.textContent = '';
+      }
+    } else {
+      blockCountdown.textContent = '';
+    }
+
+    // Saved time
+    savedRow.textContent = entity.timeTracked > 0
+      ? `💾 Saved total: ${formatDuration(entity.timeTracked)}`
+      : '';
+  }
+
+  // Wire controls
+  startBtn.addEventListener('click', async () => {
+    await startFreeRun(taskId, entity);
+    _updateDisplay();
+  });
+
+  stopBtn.addEventListener('click', async () => {
+    await stopSession(taskId);
+    entity.timeTracked = getElapsed(getSession(taskId));
+    _updateDisplay();
+    toast.success('Time saved ✓');
+  });
+
+  resetBtn.addEventListener('click', async () => {
+    const dialog = window._fhEnv?.services?.dialog;
+    let ok = true;
+    if (dialog) ok = await dialog.confirm('Reset timer? Current session will be discarded.', { confirmLabel: 'Reset', danger: true });
+    if (!ok) return;
+    await resetSession(taskId);
+    // TT-8 fix: persist reset to IDB and update local state so _save() doesn't resurrect old value
+    entity.timeTracked = 0;
+    if (_draft) _draft.timeTracked = 0;
+    try {
+      const fresh = await getEntity(taskId);
+      if (fresh) await saveEntity({ ...fresh, timeTracked: 0 });
+    } catch (e) { console.warn('[timer] reset persist failed:', e); }
+    _updateDisplay();
+    toast.success('Timer reset');
+  });
+
+  startBlockBtn.addEventListener('click', async () => {
+    const blockSecs = parseInt(blockSelect.value, 10);
+    if (!blockSecs) return;
+    clearAlarm(taskId);
+    await startBlock(taskId, entity, blockSecs);
+    _updateDisplay();
+  });
+
+  adjBtn.addEventListener('click', async () => {
+    const d = parseInt(adjD.value) || 0;
+    const h = parseInt(adjH.value) || 0;
+    const m = parseInt(adjM.value) || 0;
+    const s = parseInt(adjS.value) || 0;
+    const totalSecs = d * 86400 + h * 3600 + m * 60 + s;
+    await adjustSession(taskId, totalSecs, entity);
+    _updateDisplay();
+    adjD.value = adjH.value = adjM.value = adjS.value = '';
+  });
+
+  // Live tick updates — store unsubscribes; clean up when container is removed from DOM
+  const _unsubTick  = on(TIMER_TICK,  (data) => { if (data.taskId === taskId) _updateDisplay(); });
+  const _unsubAlarm = on(TIMER_ALARM, (data) => { if (data.taskId === taskId) _updateDisplay(); });
+  const _unsubSaved = on(TIMER_SAVED, (data) => {
+    if (data.taskId === taskId) { entity.timeTracked = data.elapsed; _updateDisplay(); }
+  });
+  // MutationObserver: when container is removed (tab switch / panel close), unsubscribe all
+  const _ttCleanup = () => { _unsubTick(); _unsubAlarm(); _unsubSaved(); };
+  const _ttObserver = new MutationObserver(() => {
+    if (!document.contains(container)) { _ttCleanup(); _ttObserver.disconnect(); }
+  });
+  _ttObserver.observe(document.body, { childList: true, subtree: true });
+
+  // Initial render
+  // Pre-fill adjust fields from current elapsed
+  const initSession = getSession(taskId);
+  if (initSession) {
+    const e = getElapsed(initSession);
+    adjD.placeholder = String(Math.floor(e / 86400));
+    adjH.placeholder = String(Math.floor((e % 86400) / 3600));
+    adjM.placeholder = String(Math.floor((e % 3600) / 60));
+    adjS.placeholder = String(Math.floor(e % 60));
+  }
+  _updateDisplay();
+}
+
 // ── Relations Tab — comprehensive connection system ───────────
 
 async function _renderRelationsTab(container) {
   if (!_entity) return;
 
   container.innerHTML = '';
+
+  // ── Section 0: Action buttons (moved from header) ───────────
+  if (_entity && _config) {
+    const actSection = document.createElement('div');
+    actSection.style.cssText = 'border-bottom:1px solid var(--color-border);padding-bottom:var(--space-4);margin-bottom:var(--space-4);';
+    container.appendChild(actSection);
+
+    const actHeader = document.createElement('div');
+    actHeader.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);';
+    actHeader.textContent = '⚡ Actions';
+    actSection.appendChild(actHeader);
+
+    const actRow = document.createElement('div');
+    actRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-2);';
+    actSection.appendChild(actRow);
+
+    const mkActionBtn = (label, icon, style = '', danger = false) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.innerHTML = `<span>${icon}</span> ${label}`;
+      btn.style.cssText = [
+        'display:inline-flex;align-items:center;gap:4px;padding:6px 12px;',
+        'border:1px solid var(--color-border);border-radius:var(--radius-md);',
+        'background:var(--color-surface);cursor:pointer;font-size:var(--text-sm);',
+        'color:' + (danger ? 'var(--color-danger)' : 'var(--color-text)') + ';',
+        'transition:background 0.12s;', style,
+      ].join('');
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--color-surface-2)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'var(--color-surface)'; });
+      return btn;
+    };
+
+    const actions = _config.actions || [];
+    const isDone = _entity.status === 'Completed' || _entity.status === 'Done';
+
+    // Complete (tasks only)
+    if (_entity.type === 'task') {
+      const completeBtn = mkActionBtn(isDone ? 'Mark In Progress' : 'Mark Complete', isDone ? '↩' : '✓', 'color:var(--color-success-text,#15803d);border-color:var(--color-success-text,#15803d);');
+      completeBtn.addEventListener('click', async () => {
+        _entity.status = isDone ? 'In Progress' : 'Completed';
+        _markDirty();
+        await _save();
+        _renderHeader();
+        _renderActiveTab();
+      });
+      actRow.appendChild(completeBtn);
+    }
+
+    // Archive/Unarchive
+    if (actions.includes('archive') || actions.includes('edit')) {
+      const isArchived = _entity.status === 'Archived' || _entity.archived;
+      const archBtn = mkActionBtn(isArchived ? 'Unarchive' : 'Archive', isArchived ? '↑' : '📦');
+      archBtn.addEventListener('click', async () => {
+        if (_entity.status !== undefined) _entity.status = isArchived ? 'Active' : 'Archived';
+        else _entity.archived = !isArchived;
+        _markDirty();
+        await _save();
+        _renderHeader();
+        _renderActiveTab();
+      });
+      actRow.appendChild(archBtn);
+    }
+
+    // Duplicate
+    if (actions.includes('duplicate')) {
+      const dupBtn = mkActionBtn('Duplicate', '⎘');
+      dupBtn.addEventListener('click', () => _duplicateEntity());
+      actRow.appendChild(dupBtn);
+    }
+
+    // Add to project
+    if (_entity.type !== 'project') {
+      const projBtn = mkActionBtn('Add to Project', '📁');
+      projBtn.addEventListener('click', () => _showProjectPicker());
+      actRow.appendChild(projBtn);
+    }
+
+    // Convert
+    if (actions.includes('convert')) {
+      const convBtn = mkActionBtn('Convert to…', '🔄');
+      convBtn.addEventListener('click', () => _showConvertDropdown());
+      actRow.appendChild(convBtn);
+    }
+
+    // Delete: available in header toolbar — not duplicated in Details tab (EP-1 fix)
+  }
+
+  // ── Section 1: Time Tracker (tasks only) ────────────────────
+  if (_entity?.type === 'task') {
+    const ttSection = document.createElement('div');
+    ttSection.style.cssText = 'border-bottom:1px solid var(--color-border);padding-bottom:var(--space-4);margin-bottom:var(--space-4);';
+    container.appendChild(ttSection);
+    _buildTimeTrackerUI(ttSection, _entity);
+  }
 
   // [minor] BUG-72 fix: skip _ensureDailyLinks in graph mode — graph browsing is read-only
   if (!_graphViewActive) {

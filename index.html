@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v4.9.0 [MAJOR] Inbox filter, Today Kanban default, Task View Preferences, List/Table categories -->
+  <!-- Build: v4.9.3 [MAJOR] Status options, time tracker, tab renames, action buttons in Details -->
 
   <title>FamilyHub</title>
 
@@ -768,6 +768,7 @@
   import { historyServiceDescriptor }     from './services/history.js';      // P-10
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
+  import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -994,6 +995,7 @@
       initContext();                       // CS-01: restore active context from localStorage
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
+      initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
 
       // CS-02: Wire context switcher buttons
       {
@@ -1218,7 +1220,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '4.9.0', emit, on, env: window._fhEnv,
+        version: '4.9.3', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 
