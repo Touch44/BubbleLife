@@ -45,6 +45,7 @@ let _tt_formatDurationCompact = (s) => { const m=Math.floor((s||0)/60),sc=Math.f
 let _tt_formatDuration  = (s) => { if(!s||s<0)return '0s'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return [h&&h+'h',m&&m+'m',sec+'s'].filter(Boolean).join(' '); };
 let _tt_TIMER_TICK      = 'timer:tick';
 let _tt_TIMER_ALARM     = 'timer:alarm';
+let _tt_TIMER_SAVED     = 'timer:saved';
 let _tt_loaded          = false;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -622,6 +623,7 @@ async function renderDashboard() {
       _tt_formatDuration = tt.formatDuration;
       _tt_TIMER_TICK     = tt.TIMER_TICK;
       _tt_TIMER_ALARM    = tt.TIMER_ALARM;
+      _tt_TIMER_SAVED    = tt.TIMER_SAVED;
     } catch (e) { console.warn('[dashboard] time-tracker not available:', e.message); }
     _tt_loaded = true;
   }
@@ -806,7 +808,7 @@ async function renderDashboard() {
     _buildTimerWidget();
     on(_tt_TIMER_TICK,  () => { for (const [tid] of _rowRefs) _tickTimerRow(tid); }); // badge-only, no DOM rebuild
     on(_tt_TIMER_ALARM, _buildTimerWidget); // structural refresh
-    on(TIMER_SAVED, _buildTimerWidget);
+    on(_tt_TIMER_SAVED, _buildTimerWidget);
   }
 
   // Wire scroll buttons for cards strip
