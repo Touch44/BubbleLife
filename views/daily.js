@@ -34,7 +34,7 @@ import { toast }                            from '../core/toast.js';
 // ── Constants ─────────────────────────────────────────────── //
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
-const DONE_STATUSES  = new Set(['done', 'Done']);
+const DONE_STATUSES  = new Set(['done', 'Done', 'Completed']);
 
 /** sessionStorage key prefix for section open/closed state */
 const SS_PREFIX = 'fh_daily_section_';
@@ -439,18 +439,28 @@ async function _syncDailyReviewLinks(dateStr, data) {
       linkedSet.add(n.id);
     }
 
-    // ── Tasks due today OR overdue (graph edge linking for knowledge graph) ──
-    // Tasks appear in their own UI section, but we ALSO create graph edges so
-    // the Daily Review node in the Knowledge Graph shows connected task nodes.
-    // [minor] BUG-41 fix: include overdue tasks — they appear in today's UI section
-    // so they should also appear as graph neighbors of today's DR node.
-    for (const t of data.tasks.filter(t => {
-      const due = _isoToLocalDate(t.dueDate);
-      if (!due) return false;
-      return due === dateStr || (due < dateStr && t.status !== 'Done');
-    })) {
-      await _linkToDailyReview(dr.id, t.id, 'task', linkedSet);
-      linkedSet.add(t.id);
+    // ── Tasks: link ONLY to deadline DR + today's DR (not every intermediate DR) ──
+    // Rule: an overdue task must NOT accumulate links to every daily review between
+    // its deadline and today. It should appear in exactly two DRs:
+    //   1. The DR for its actual due date (deadline context)
+    //   2. Today's DR (current action context)
+    // This prevents the knowledge graph from showing 12+ connections for one task.
+    {
+      const todayStr = _toDateStr(_todayLocal());
+      const isViewingToday = dateStr === todayStr;
+      for (const t of data.tasks.filter(t => {
+        const due = _isoToLocalDate(t.dueDate);
+        if (!due) return false;
+        const isDone = t.status === 'Completed' || t.status === 'Done' || t.status === 'done';
+        if (isDone) return false;
+        // Link if: viewing the task's own deadline DR, OR viewing today's DR and task is overdue/due
+        const isDeadlineDR = due === dateStr;
+        const isTodayDR    = isViewingToday && due <= todayStr;
+        return isDeadlineDR || isTodayDR;
+      })) {
+        await _linkToDailyReview(dr.id, t.id, 'task', linkedSet);
+        linkedSet.add(t.id);
+      }
     }
 
     // ── Events spanning today (graph edge linking for knowledge graph) ─

@@ -1,6 +1,6 @@
 /**
- * FamilyHub v4.8.4 — views/kanban.js
- * 4-column Kanban board: Inbox · In Progress · Review · Done
+ * FamilyHub v4.8.6 — views/kanban.js
+ * 4-column Kanban board: Not Started · Next Up · In Progress · Completed
  * Renders into #view-kanban when view="kanban"
  *
  * Features:
@@ -26,10 +26,10 @@ import { filterByContext, getActiveContext }      from '../core/context.js';
 // ── Constants ─────────────────────────────────────────────── //
 
 const COLUMNS = [
-  { key: 'Inbox',       label: 'Inbox',       color: 'var(--kanban-inbox)' },
+  { key: 'Not Started', label: 'Not Started', color: 'var(--kanban-inbox)' },
+  { key: 'Next Up',     label: 'Next Up',     color: 'var(--kanban-review)' },
   { key: 'In Progress', label: 'In Progress', color: 'var(--kanban-progress)' },
-  { key: 'Review',      label: 'Review',      color: 'var(--kanban-review)' },
-  { key: 'Done',        label: 'Done',        color: 'var(--kanban-done)' },
+  { key: 'Completed',   label: 'Completed',   color: 'var(--kanban-done)' },
 ];
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -101,11 +101,8 @@ let _filterTab  = 'inbox'; // [minor] Spec: inbox is the primary entry point
 
 const _VIEW_MODES = [
   { key: 'list',    label: 'List',    icon: '\uD83D\uDCCB' },
-  { key: 'wall',    label: 'Wall',    icon: '\uD83E\uDDE0' },
   { key: 'kanban',  label: 'Kanban',  icon: '\uD83D\uDCCA' },
-  { key: 'gallery', label: 'Gallery', icon: '\uD83D\uDDBC\uFE0F' },
   { key: 'table',   label: 'Table',   icon: '\uD83D\uDDD3\uFE0F' },
-  { key: 'embed',   label: 'Embed',   icon: '\uD83D\uDCCE' },
 ];
 
 const _FILTER_TABS = [
@@ -178,7 +175,7 @@ async function _buildRelationEdgeMaps() {
 
 async function _buildBlockerMap() {
   _blockMap.clear();
-  const doneSet   = new Set(['Done', 'done']);
+  const doneSet   = new Set(['Completed', 'Done', 'done']);
   const taskIndex = new Map(_tasks.map(t => [t.id, t]));
 
   // Parallel IDB reads — all blocker edge lookups fire concurrently
@@ -313,7 +310,7 @@ function _collectAssignees() {
  * Status    — all tasks grouped by status (original kanban grouping).
  * Context   — all tasks grouped by context tag, ordered by priority then status.
  * Open      — all undone tasks, ordered by priority then status.
- * Completed — tasks where status === 'Done', ordered by completedAt descending.
+ * Completed — tasks where status === 'Completed', ordered by completedAt descending.
  * All       — all tasks; user filter/sort choices apply.
  *
  * Deadline ranking (global tie-breaker):
@@ -332,7 +329,7 @@ function _applyFilterTab(tasks) {
       // It leaves inbox once BOTH a dueDate AND a meaningful status have been assigned.
       return tasks.filter(t => {
         const hasDate   = !!_isoToLocalDate(t.dueDate);
-        const hasStatus = !!(t.status && t.status !== 'Inbox');
+        const hasStatus = !!(t.status && t.status !== 'Inbox' && t.status !== 'Not Started');
         return !hasDate || !hasStatus; // BUG-1 fix: OR not AND
       });
 
@@ -340,7 +337,7 @@ function _applyFilterTab(tasks) {
       // Spec: tasks scheduled for today PLUS tasks with overdue or due-today deadlines.
       // On the task entity, dueDate serves as both the scheduled date and the deadline.
       return tasks.filter(t => {
-        if (t.status === 'Done' || t.status === 'done') return false; // BUG-3 fix: also exclude lowercase 'done'
+        if (t.status === 'Completed' || t.status === 'Done' || t.status === 'done') return false;
         const due = _isoToLocalDate(t.dueDate); // dueDate = both schedule and deadline
         if (!due) return false;
         return due <= today; // today's tasks + all overdue tasks
@@ -349,16 +346,16 @@ function _applyFilterTab(tasks) {
 
     case 'scheduled':
       // All tasks with a scheduled date, excluding Done (completed tasks don't need rescheduling)
-      return tasks.filter(t => !!_isoToLocalDate(t.dueDate) && t.status !== 'Done' && t.status !== 'done'); // BUG-4 fix
+      return tasks.filter(t => !!_isoToLocalDate(t.dueDate) && t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
 
     case 'open':
       // All undone tasks
-      return tasks.filter(t => t.status !== 'Done' && t.status !== 'done');
+      return tasks.filter(t => t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
 
     case 'completed':
       // Tasks marked Done, most recently completed first
       return tasks
-        .filter(t => t.status === 'Done' || t.status === 'done')
+        .filter(t => t.status === 'Completed' || t.status === 'Done' || t.status === 'done')
         .sort((a, b) => (b.completedAt || b.updatedAt || '').localeCompare(a.completedAt || a.updatedAt || ''));
 
     case 'status':
@@ -386,7 +383,7 @@ function _deadlineSort(a, b) {
 /** Priority + status + deadline composite sort (used by Today, Open, Context tabs).
  *  Order: priority → status (In Progress first) → dueDate → title (stable)
  */
-const STATUS_SORT_ORDER = { 'In Progress': 0, 'Review': 1, 'Inbox': 2, 'Done': 3 }; // BUG-9 fix
+const STATUS_SORT_ORDER = { 'In Progress': 0, 'Next Up': 1, 'Not Started': 2, 'Inbox': 2, 'Completed': 3, 'Done': 3, 'Review': 1 }; // C10: legacy status backward compat
 function _priorityStatusDeadlineSort(a, b) {
   // 1. Priority
   const ap = PRIORITY_ORDER[a.priority] ?? 99;
@@ -424,13 +421,13 @@ function _groupByCreatedDate(tasks) {
   for (const t of sorted) {
     const raw = t.createdAt ? t.createdAt.slice(0, 10) : 'Unknown';
     let label;
-    if (raw === today)     label = 'Today';
-    else if (raw === yesterday) label = 'Yesterday';
+    if (raw === today)     label = 'Created Today';
+    else if (raw === yesterday) label = 'Created Yesterday';
     else if (raw !== 'Unknown') {
       const d = new Date(raw + 'T00:00:00');
-      label = d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+      label = 'Created ' + d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     } else {
-      label = 'Unknown date';
+      label = 'Created (date unknown)';
     }
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(t);
@@ -538,10 +535,10 @@ function _groupByScheduledDate(tasks) {
 
 /** Group for Today tab: by status, ordered by priority within each group */
 function _groupTodayByStatus(tasks) {
-  const statusOrder = ['Inbox', 'In Progress', 'Review', 'Done'];
+  const statusOrder = ['Not Started', 'Inbox', 'Next Up', 'Review', 'In Progress', 'Completed', 'Done']; // H05b legacy
   const groups = new Map();
   for (const t of [...tasks].sort(_priorityStatusDeadlineSort)) {
-    const s = t.status || 'Inbox';
+    const s = t.status || 'Not Started';
     if (!groups.has(s)) groups.set(s, []);
     groups.get(s).push(t);
   }
@@ -552,10 +549,10 @@ function _groupTodayByStatus(tasks) {
 }
 
 function _groupByStatus(tasks) {
-  const order = ['Inbox', 'In Progress', 'Review', 'Done'];
+  const order = ['Not Started', 'Inbox', 'Next Up', 'Review', 'In Progress', 'Completed', 'Done']; // H05: legacy status compat
   const groups = new Map();
   for (const t of tasks) {
-    const s = t.status || 'Inbox';
+    const s = t.status || 'Not Started';
     if (!groups.has(s)) groups.set(s, []);
     groups.get(s).push(t);
   }
@@ -570,7 +567,8 @@ function _groupByContext(tasks) {
   // Sort tasks by priority+deadline within each context group
   const sortedTasks = [...tasks].sort(_priorityStatusDeadlineSort);
   for (const t of sortedTasks) {
-    const ctx = (!t.context || t.context === 'all') ? 'All Contexts' : t.context; // BUG-40 fix: friendly label for 'all'
+    const CTX_LABELS = { family: 'Family', personal: 'Personal', business: 'Business' };
+    const ctx = (!t.context || t.context === 'all') ? 'All Contexts' : (CTX_LABELS[t.context] || t.context); // M03: capitalize
     if (!groups.has(ctx)) groups.set(ctx, []);
     groups.get(ctx).push(t);
   }
@@ -816,7 +814,12 @@ function _rerenderColumns() {
 
   for (const col of COLUMNS) {
     const colTasks = _sortTasks(
-      filtered.filter(t => col.key === 'Inbox' ? (!t.status || t.status === 'Inbox') : t.status === col.key),
+      filtered.filter(t => {
+        if (col.key === 'Not Started') return !t.status || t.status === 'Not Started' || t.status === 'Inbox';
+        if (col.key === 'Next Up')     return t.status === 'Next Up' || t.status === 'Review'; // H02: legacy 'Review'
+        if (col.key === 'Completed')   return t.status === 'Completed' || t.status === 'Done'; // H03: legacy 'Done'
+        return t.status === col.key;
+      }),
       col.key
     );
     _buildColumn(_boardEl, col, colTasks);
@@ -970,7 +973,7 @@ function _buildCard(task) {
   card.innerHTML = `
     <div class="kanban-card-top">
       <label class="kanban-card-check-label">
-        <input type="checkbox" class="kanban-card-checkbox" ${task.status === 'Done' ? 'checked' : ''} />
+        <input type="checkbox" class="kanban-card-checkbox" ${(task.status === 'Completed' || task.status === 'Done') ? 'checked' : ''} />
       </label>
       <span class="kanban-card-title">${_esc(task.title || 'Untitled')}</span>
       ${prioDot}
@@ -1022,14 +1025,14 @@ function _buildCard(task) {
   cb.addEventListener('change', async (e) => {
     e.stopPropagation();
     const account = getAccount();
-    // Revert to last non-Done status, not always 'Inbox'
-    const revertStatus = (task.previousStatus && task.previousStatus !== 'Done')
+    // Revert to last non-completed status, not always 'Not Started'
+    const revertStatus = (task.previousStatus && task.previousStatus !== 'Done' && task.previousStatus !== 'Completed')
       ? task.previousStatus
-      : 'In Progress';
-    const newStatus = cb.checked ? 'Done' : revertStatus;
-    if (newStatus === 'Done') window._fhEnv?.services?.effects?.play('confetti');
-    // Optimistic fade for Done tasks
-    if (newStatus === 'Done') {
+      : 'In Progress'; // C02: also exclude Completed from revert to prevent loop
+    const newStatus = cb.checked ? 'Completed' : revertStatus;
+    if (newStatus === 'Completed') window._fhEnv?.services?.effects?.play('confetti');
+    // Optimistic fade for Completed tasks
+    if (newStatus === 'Completed') {
       card.style.transition = 'opacity 0.25s';
       card.style.opacity = '0.35';
     }
@@ -1040,9 +1043,8 @@ function _buildCard(task) {
       const entityToSave = {
         ...freshTaskCb,
         status: newStatus,
-        previousStatus: newStatus === 'Done' ? freshTaskCb.status : freshTaskCb.previousStatus,
-        // BUG-R6 fix: clear 'blocked' kanban_state when checking task as Done (mirrors _moveTask fix)
-        kanban_state: (newStatus === 'Done' && freshTaskCb.kanban_state === 'blocked') ? 'normal' : freshTaskCb.kanban_state,
+        previousStatus: newStatus === 'Completed' ? freshTaskCb.status : freshTaskCb.previousStatus,
+        kanban_state: (newStatus === 'Completed' && freshTaskCb.kanban_state === 'blocked') ? 'normal' : freshTaskCb.kanban_state,
       };
       await saveEntity(entityToSave, account?.id);
       // ENTITY_SAVED listener handles _loadData + _rerenderColumns — no manual call needed
@@ -1235,7 +1237,7 @@ function _buildQuickAdd(statusKey) {
         title,
         status:   statusKey,
         priority: 'Medium',
-        context:  (!ctx || ctx === 'all') ? 'family' : ctx,
+        context:  (!ctx || ctx === 'all') ? 'personal' : ctx,
         // BUG-10/B18 fix: auto-set dueDate based on active tab and range filter
         ...(_getQuickAddDueDate()),
       }, account?.id);
@@ -1440,8 +1442,8 @@ async function _moveTask(taskId, newStatus) {
     await saveEntity({
       ...task,
       status: newStatus,
-      previousStatus: newStatus === 'Done' ? task.status : task.previousStatus,
-      kanban_state: (newStatus === 'Done' && task.kanban_state === 'blocked') ? 'normal' : task.kanban_state,
+      previousStatus: (newStatus === 'Completed' || newStatus === 'Done') ? task.status : task.previousStatus, // C03
+      kanban_state: (newStatus === 'Completed' && task.kanban_state === 'blocked') ? 'normal' : task.kanban_state,
       ...(edgeProject && !task.project ? { project: edgeProject } : {}),
     }, account?.id);
     // [minor] BUG-64 fix: removed manual _loadData()/_rerenderColumns() here.
@@ -1449,7 +1451,7 @@ async function _moveTask(taskId, newStatus) {
     // already calls _loadData().then(_rerenderColumns). Manual call caused double-render.
 
     // P-12: play confetti when task moves to Done column
-    if (newStatus === 'Done' || newStatus === 'done') {
+    if (newStatus === 'Completed' || newStatus === 'Done' || newStatus === 'done') {
       window._fhEnv?.services?.effects?.play('confetti');
     }
   } catch (err) {
@@ -1981,7 +1983,7 @@ async function renderKanban(params = {}) {
     // \u2500\u2500 Header: icon + title \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:var(--space-4) var(--space-5) 0;';
-    header.innerHTML = '<div style="display:flex;align-items:center;gap:var(--space-3);"><span style="font-size:1.4rem;">\u2299</span><span style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:var(--color-text);">Tasks</span></div><div style="display:flex;align-items:center;gap:var(--space-2);"><span class="kanban-search-toggle" title="Search" style="cursor:pointer;font-size:1.1rem;">\uD83D\uDD0D</span><span class="kanban-collapse-toggle" title="Collapse" style="cursor:pointer;font-size:1.1rem;">\u2303</span></div>';
+    header.innerHTML = '<div style="display:flex;align-items:center;gap:var(--space-3);"><span style="font-size:1.4rem;">\u2611</span><span style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:var(--color-text);">Tasks</span></div><div style="display:flex;align-items:center;gap:var(--space-2);"><span class="kanban-search-toggle" title="Search" style="cursor:pointer;font-size:1.1rem;">\uD83D\uDD0D</span><span class="kanban-collapse-toggle" title="Collapse" style="cursor:pointer;font-size:1.1rem;">\u2303</span></div>';
     viewEl.appendChild(header);
 
     // BUG 21: Wire search toggle — focuses the filter bar project/tag controls
@@ -2144,7 +2146,7 @@ function _renderAltView(container, tasks) {
   if (tasks.length === 0) {
     const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'open' ? '○' : '🎉'; // BUG-17 fix
     const emptyMsg  = _filterTab === 'inbox'
-      ? 'Your inbox is clear! Tasks missing a due date OR a status appear here — assign both to remove them.'
+      ? 'Your inbox is clear! Tasks with no due date (or no status) appear here, grouped by creation date — not deadline.'
       : _filterTab === 'today'
       ? 'Nothing scheduled for today.'
       : _filterTab === 'completed'
@@ -2158,15 +2160,14 @@ function _renderAltView(container, tasks) {
   if (_filterTab === 'inbox') {
     const hint = document.createElement('div');
     hint.className = 'kanban-inbox-hint';
-    hint.textContent = 'Inbox shows tasks missing a due date OR a status. Assign both to remove a task from inbox.';
+    hint.textContent = 'These tasks have no due date set. Grouped by when they were created — not by deadline. Assign a due date and a status to remove from inbox.';
     body.appendChild(hint);
   }
 
   // Color map for group badge headers across all tabs
   const _statusColors = {
     // Status groups
-    'Inbox':'#6b7280','Not Started':'#f97316','Next Up':'#eab308',
-    'In Progress':'#3b82f6','Review':'#8b5cf6','Done':'#22c55e',
+    'Not Started':'#6b7280','Inbox':'#6b7280','Next Up':'#f97316','Review':'#8b5cf6','In Progress':'#3b82f6','Completed':'#22c55e','Done':'#22c55e',
     // Scheduled tab time-context buckets (using SCHEDULED_BUCKETS display labels)
     '⚠ Overdue': '#dc2626',
     '📅 Today':   '#f97316',
@@ -2176,8 +2177,8 @@ function _renderAltView(container, tasks) {
     '🔭 Later':   '#6b7280',
     // Other tabs
     'Open Tasks': '#3b82f6',
-    'Completed':  '#22c55e',
-    'Today': '#6b7280', 'Yesterday': '#6b7280', 'Unknown date': '#9ca3af',
+    // 'Completed' already defined in Status groups above
+    'Created Today': '#6b7280', 'Created Yesterday': '#6b7280', 'Created (date unknown)': '#9ca3af',
   };
 
   for (const [groupKey, groupTasks] of grouped) {
@@ -2200,13 +2201,13 @@ function _renderAltView(container, tasks) {
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
         const due = _isoToLocalDate(task.dueDate);
         const today2 = _todayStr();
-        const overdue = due && due < today2 && task.status !== 'Done';
+        const overdue = due && due < today2 && task.status !== 'Done' && task.status !== 'Completed'; // C07
         const dueFormatted = due ? _formatDue(due, today2) : '';
         const dueIcon = overdue ? '⏰ ' : due === today2 ? '⏰ ' : '';
         const expandChevron = isEmbed ? '<span style="font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">&#9654;</span>' : '';
         row.innerHTML = expandChevron +
-          '<input type="checkbox" ' + (task.status === 'Done' ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
-          '<span style="flex:1;font-size:var(--text-sm);color:var(--color-text);' + (task.status === 'Done' ? 'text-decoration:line-through;color:var(--color-text-muted);' : '') + '">' + _esc(task.title || 'Untitled') + '</span>' +
+          '<input type="checkbox" ' + ((task.status === 'Completed' || task.status === 'Done') ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
+          '<span style="flex:1;font-size:var(--text-sm);color:var(--color-text);' + ((task.status === 'Completed' || task.status === 'Done') ? 'text-decoration:line-through;color:var(--color-text-muted);' : '') + '">' + _esc(task.title || 'Untitled') + '</span>' +
           (due ? '<span style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : due === today2 ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || due === today2 ? 'var(--weight-semibold)' : 'normal') + ';">' + dueIcon + dueFormatted + '</span>' : '') +
           (pName ? '<span style="font-size:var(--text-xs);color:var(--color-accent);background:var(--color-surface-2);padding:1px 8px;border-radius:var(--radius-full);">' + _esc(pName) + '</span>' : '');
         // BUG-14 fix: interactive checkbox in list/embed views
@@ -2215,11 +2216,11 @@ function _renderAltView(container, tasks) {
           listCb.addEventListener('change', async (e) => {
             e.stopPropagation();
             const account = getAccount();
-            const newStatus = listCb.checked ? 'Done' : (task.previousStatus && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
+            const newStatus = listCb.checked ? 'Completed' : (task.previousStatus && task.previousStatus !== 'Completed' && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
             if (listCb.checked) window._fhEnv?.services?.effects?.play('confetti');
             try {
               let fresh; try { fresh = await getEntity(task.id); } catch { fresh = task; }
-              await saveEntity({ ...fresh, status: newStatus, previousStatus: newStatus === 'Done' ? fresh.status : fresh.previousStatus }, account?.id);
+              await saveEntity({ ...fresh, status: newStatus, previousStatus: (newStatus === 'Completed' || newStatus === 'Done') ? fresh.status : fresh.previousStatus }, account?.id); // C04
             } catch (err) { console.error('[kanban] List complete failed:', err); listCb.checked = !listCb.checked; }
           });
         }
@@ -2236,17 +2237,17 @@ function _renderAltView(container, tasks) {
         card.addEventListener('mouseleave', () => { card.style.boxShadow = 'none'; });
         const wallDue = _isoToLocalDate(task.dueDate);
         const wallToday = _todayStr();
-        const overdue = wallDue && wallDue < wallToday && task.status !== 'Done';
+        const overdue = wallDue && wallDue < wallToday && task.status !== 'Done' && task.status !== 'Completed'; // C06
         const dueTodayW = wallDue === wallToday;
         const wallDueFmt = wallDue ? _formatDue(wallDue, wallToday) : '';
         const projId = task.project || _taskProjectMap.get(task.id) || '';
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
         // BUG-R5 fix: interactive checkbox in wall/gallery cards
-        const wallDoneStyle = task.status === 'Done' ? 'text-decoration:line-through;color:var(--color-text-muted);' : '';
+        const wallDoneStyle = (task.status === 'Completed' || task.status === 'Done') ? 'text-decoration:line-through;color:var(--color-text-muted);' : '';
         card.innerHTML =
           '<div style="font-size:var(--text-xs);color:var(--color-accent);font-weight:var(--weight-bold);">&#8857; Task</div>' +
           '<div style="display:flex;align-items:center;gap:6px;">' +
-            '<input type="checkbox" ' + (task.status === 'Done' ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
+            '<input type="checkbox" ' + ((task.status === 'Completed' || task.status === 'Done') ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
             '<span style="font-size:var(--text-sm);font-weight:var(--weight-semibold);' + wallDoneStyle + '">' + _esc(task.title || 'Untitled') + '</span>' +
           '</div>' +
           (wallDue ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : dueTodayW ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || dueTodayW ? 'var(--weight-semibold)' : 'normal') + ';">' + (overdue || dueTodayW ? '\u23F0 ' : '\uD83D\uDCC5 ') + wallDueFmt + '</div>' : '') +
@@ -2256,13 +2257,13 @@ function _renderAltView(container, tasks) {
           wallCb.addEventListener('change', async (e) => {
             e.stopPropagation();
             const account = getAccount();
-            const newStatus = wallCb.checked ? 'Done' : (task.previousStatus && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
+            const newStatus = wallCb.checked ? 'Completed' : (task.previousStatus && task.previousStatus !== 'Completed' && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
             if (wallCb.checked) window._fhEnv?.services?.effects?.play('confetti');
             try {
               let fresh; try { fresh = await getEntity(task.id); } catch { fresh = task; }
-              await saveEntity({ ...fresh, status: newStatus, previousStatus: newStatus === 'Done' ? fresh.status : fresh.previousStatus }, account?.id);
+              await saveEntity({ ...fresh, status: newStatus, previousStatus: (newStatus === 'Completed' || newStatus === 'Done') ? fresh.status : fresh.previousStatus }, account?.id); // C05
             } catch (err) { console.error('[kanban] Wall complete failed:', err); wallCb.checked = !wallCb.checked; }
-          });
+          }); // C05: previousStatus fix applied above in wallCb change handler
         }
         card.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }); });
         grid.appendChild(card);
@@ -2284,7 +2285,7 @@ function _renderAltView(container, tasks) {
           tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
           const _dueLocal = _isoToLocalDate(tk.dueDate); // BUG-6 fix: normalise to local YYYY-MM-DD first
           const due = _dueLocal ? new Date(_dueLocal + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
-          const ov = _dueLocal && _dueLocal < _todayStr() && tk.status !== 'Done'; // BUG-R11 fix: reuse _dueLocal, avoid double call
+          const ov = _dueLocal && _dueLocal < _todayStr() && tk.status !== 'Completed' && tk.status !== 'Done';
           const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';
           const bodyTxt = tk.details ? String(tk.details).replace(/<[^>]+>/g,' ').trim() : '';
           const wc = bodyTxt ? bodyTxt.split(/\s+/).length : 0;

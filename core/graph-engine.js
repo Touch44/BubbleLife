@@ -135,7 +135,7 @@ const BUILT_IN_ENTITY_TYPES = [
     fields: [
       field('title',      'title',    { isTitle: true, label: 'Title' }),
       field('context',  'select',   { label: 'Context', options: ['family','personal','business','all'] }),
-      field('status',     'select',   { label: 'Status',   options: ['Inbox', 'In Progress', 'Review', 'Done'] }),
+      field('status',     'select',   { label: 'Status',   options: ['Not Started', 'Next Up', 'In Progress', 'Completed', 'Done', 'Review', 'Inbox'] }), // legacy values kept for backward compat
       field('priority',   'select',   { label: 'Priority', options: ['Low', 'Medium', 'High', 'Critical'] }),
       field('dueDate',    'date',     { label: 'Due Date' }),
       field('dueTime',    'time',     { label: 'Due Time', placeholder: '06:00', helpText: 'Time of day (defaults to 6:00 AM if not set)' }),
