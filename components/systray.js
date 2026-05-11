@@ -53,7 +53,7 @@ async function _refreshData() {
     _overdueTasks.value = tasks.filter(t =>
       !t.deleted &&
       t.dueDate &&
-      t.dueDate.slice(0, 10) < today &&
+      (t.dueDate && (t.dueDate.length === 10 ? t.dueDate : t.dueDate.slice(0,10)) < today) && // NEW-04: timezone-safe
       !DONE_STATUSES.has(t.status)
     );
   } catch { _overdueTasks.value = []; }

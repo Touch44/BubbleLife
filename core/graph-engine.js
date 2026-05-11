@@ -155,7 +155,7 @@ const BUILT_IN_ENTITY_TYPES = [
         if (!newVal) return { urgency: 'Normal' };
         const _d = new Date();
         const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
-        const due   = String(newVal).slice(0, 10);
+        const _dv = String(newVal); const due = /^\d{4}-\d{2}-\d{2}/.test(_dv) ? _dv.slice(0, 10) : new Date(_dv).toLocaleDateString('en-CA'); // NEW-10 timezone-safe
         if (due < today) return { urgency: 'Overdue' };
         if (due === today) return { urgency: 'Urgent' };
         return { urgency: 'Normal' };

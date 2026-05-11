@@ -17,7 +17,7 @@
 
 import { registerView }                         from '../core/router.js';
 import { getEntitiesByType, getEdgesFrom,
-         getEntity, saveEntity }                 from '../core/db.js';
+         getEntity, saveEntity, getSetting, setSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }                      from '../core/events.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
@@ -86,7 +86,7 @@ let _viewMode   = 'list'; // Spec: "default list with the view button on the rig
 // User can always override via the view-mode dropdown.
 const _TAB_CANONICAL_VIEW = {
   inbox:     'list',    // spec: grouped by creation date
-  today:     'list',    // spec: grouped by status ordered by priority
+  today:     'kanban',  // [MAJOR] spec: default to kanban for Today tab
   scheduled: 'list',    // spec: grouped by date property
   status:    'kanban',  // spec: status columns ARE the grouping
   context:   'list',    // spec: grouped by context
@@ -116,6 +116,18 @@ const _FILTER_TABS = [
   { key: 'all',       label: 'All',       icon: '\uD83D\uDDC2\uFE0F' },
 ]; // [minor] Reordered to match spec: Inbox → Today → Scheduled → Status → Context → Open → Completed → All
 
+// User's default view preferences per filter tab (loaded from DB on render)
+let _defaultViewPerTab = {
+  inbox:     'list',
+  today:     'kanban',
+  scheduled: 'list',
+  status:    'kanban',
+  context:   'list',
+  open:      'list',
+  completed: 'list',
+  all:       'list',
+};
+
 // Sort state per column key
 let _sortBy = {};  // { 'Inbox': 'deadline', ... }
 
@@ -124,6 +136,28 @@ let _dragTaskId = null;
 let _dragEl     = null;
 let _dragGhost  = null;
 let _dropTarget = null;
+
+// ── View Preferences (DB persistence) ────────────────────── //
+
+async function _loadViewPreferences() {
+  try {
+    const saved = await getSetting('taskViewPreferences');
+    if (saved && typeof saved === 'object') {
+      _defaultViewPerTab = { ..._defaultViewPerTab, ...saved };
+    }
+  } catch (err) {
+    console.warn('[kanban] Failed to load view preferences:', err);
+  }
+}
+
+async function _saveViewPreference(tabKey, viewMode) {
+  try {
+    _defaultViewPerTab[tabKey] = viewMode;
+    await setSetting('taskViewPreferences', _defaultViewPerTab);
+  } catch (err) {
+    console.error('[kanban] Failed to save view preference:', err);
+  }
+}
 
 // ── Data loading ──────────────────────────────────────────── //
 
@@ -324,13 +358,12 @@ function _applyFilterTab(tasks) {
   const today = _todayStr();
   switch (_filterTab) {
     case 'inbox':
-      // Spec: "All tasks without a scheduled date OR without a status."
-      // A task appears in inbox if it is missing a dueDate OR missing a meaningful status.
-      // It leaves inbox once BOTH a dueDate AND a meaningful status have been assigned.
+      // Spec: "All tasks without a scheduled date (no due date set)."
+      // A task appears in inbox ONLY if it is missing a dueDate.
+      // It leaves inbox once a due date has been assigned.
       return tasks.filter(t => {
-        const hasDate   = !!_isoToLocalDate(t.dueDate);
-        const hasStatus = !!(t.status && t.status !== 'Inbox' && t.status !== 'Not Started');
-        return !hasDate || !hasStatus; // BUG-1 fix: OR not AND
+        const hasDate = !!_isoToLocalDate(t.dueDate);
+        return !hasDate; // [MAJOR] Show ONLY tasks without due dates
       });
 
     case 'today': {
@@ -1955,6 +1988,12 @@ async function renderKanban(params = {}) {
 
   const seq = ++_renderSeq; // claim this render slot
   _injectStyles();
+  
+  // [MAJOR] Load view preferences from DB on first render
+  if (seq === 1) {
+    await _loadViewPreferences();
+  }
+  
   // BUG-R15 fix: only show loading if this is the latest render (avoids flash on aborted renders)
   if (seq === _renderSeq) {
     viewEl.innerHTML = '<div style="padding:var(--space-8);color:var(--color-text-muted);text-align:center;">Loading tasks…</div>';
@@ -1965,9 +2004,9 @@ async function renderKanban(params = {}) {
     _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
     _filterPriority = null; _filterOverdue = false; _filterScheduledRange = null;
     if (_viewMode !== (params.viewMode || _viewMode)) _sortBy = {};
-    // Spec fix: snap to canonical view for the current tab on fresh render
+    // Spec fix: snap to user's saved view preference for the current tab, fallback to canonical
     if (!params.viewMode) {
-      _viewMode = _TAB_CANONICAL_VIEW[_filterTab] || 'list';
+      _viewMode = _defaultViewPerTab[_filterTab] || _TAB_CANONICAL_VIEW[_filterTab] || 'list';
       _userOverrodeView = false;
     }
   }
@@ -2013,7 +2052,8 @@ async function renderKanban(params = {}) {
       btn.textContent = tab.icon + ' ' + tab.label;
       btn.addEventListener('click', () => {
         _filterTab = tab.key;
-        _viewMode = _TAB_CANONICAL_VIEW[tab.key] || 'list';
+        // Use user's saved preference for this tab, fallback to canonical default
+        _viewMode = _defaultViewPerTab[tab.key] || _TAB_CANONICAL_VIEW[tab.key] || 'list';
         _userOverrodeView = false;
         _filterScheduledRange = null; // reset time-context filter on tab switch
         renderKanban({ _internal: true });
@@ -2057,6 +2097,7 @@ async function renderKanban(params = {}) {
       item.addEventListener('click', () => {
         _viewMode = vm.key;
         _userOverrodeView = true; // user explicitly chose this view
+        _saveViewPreference(_filterTab, vm.key); // [MAJOR] Persist user's choice
         vmDd.style.display = 'none';
         renderKanban({ _internal: true });
       });

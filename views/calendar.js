@@ -35,7 +35,7 @@ import { toast }                     from '../core/toast.js';
 // Module-level edge map for task assignee resolution (set during render from _loadData)
 let _calTaskAssigneeEdgeMap = new Map();
 
-const DONE_STATUSES = new Set(['done', 'Done']);
+const DONE_STATUSES = new Set(['done', 'Done', 'Completed']); // NEW-03
 
 /**
  * Calendar entity type registry — extensible for future custom types.

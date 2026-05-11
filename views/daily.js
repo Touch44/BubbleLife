@@ -727,7 +727,8 @@ function _buildTopBar(container, dateStr) {
       if (key === 'note')                  prefill.category = 'Daily';
       // D-04: pass daily-local context so newly created entities respect chip override
       const addCtx = _getDailyContext();
-      prefill.context = addCtx === 'all' ? 'family' : addCtx;
+      // NEW-05: tasks default personal; other entities default family
+      prefill.context = addCtx === 'all' ? (selectedAddType === 'task' ? 'personal' : 'family') : addCtx;
       _createAndLink(key, dateStr, prefill);
     });
     addMenu.appendChild(item);
@@ -913,7 +914,7 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
 
       // D-04: use daily-local context override for entity creation
       const captureCtx = _getDailyContext();
-      const entityCtx  = captureCtx === 'all' ? 'family' : captureCtx;
+      const entityCtx  = captureCtx === 'all' ? (selectedType === 'task' ? 'personal' : 'family') : captureCtx; // NEW-06
 
       // Build entity based on type
       const entityData = { type: selectedType, title, createdAt: now, updatedAt: now, context: entityCtx };
@@ -1055,7 +1056,7 @@ function _prependCapturedItem(entity, type, dateStr, sectionRefs) {
     cb.addEventListener('change', async () => {
       if (!cb.checked) return;
       const account = getAccount();
-      await saveEntity({ ...entity, status: 'Done' }, account?.id);
+      await saveEntity({ ...entity, status: 'Completed' }, account?.id); // NEW-01
       row.style.opacity = '0.4';
       row.style.transition = 'opacity 0.3s';
       setTimeout(() => {
@@ -1534,7 +1535,7 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
     checkbox.addEventListener('change', async () => {
       if (!checkbox.checked) return;
       try {
-        const updated = { ...task, status: 'Done' };
+        const updated = { ...task, status: 'Completed' }; // NEW-02
         await saveEntity(updated, account?.id);
         row.style.opacity = '0.4';
         row.style.transition = 'opacity 0.3s';

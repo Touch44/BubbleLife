@@ -3071,8 +3071,8 @@ function _navigateToLinkedEntity(linked) {
   }
 
   if (linked.type === 'task') {
-    // Navigate to kanban and open the form for that task (form-first UX)
-    navigate('kanban', {}, 'Tasks');
+    // Navigate to kanban today tab with kanban view, then open the form for that task (form-first UX)
+    navigate('kanban', { filterTab: 'today', viewMode: 'kanban' }, 'Tasks');
     setTimeout(() => emit(EVENTS.PANEL_OPENED, { entityId: linked.id, entityType: 'task' }), 200);
     return;
   }

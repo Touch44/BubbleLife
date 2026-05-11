@@ -14,7 +14,7 @@
  */
 
 import { registerView } from '../core/router.js';
-import { exportAll, importAll, getStorageUsage } from '../core/db.js';
+import { exportAll, importAll, getStorageUsage, getSetting, setSetting } from '../core/db.js';
 import { getAccount, getAllAccounts, generateInvite } from '../core/auth.js';
 import { startTour } from '../core/tour.js';
 
@@ -59,8 +59,10 @@ async function renderSettings() {
   // Load data
   let accounts = [];
   let storageInfo = { used: 0, quota: 0 };
+  let taskViewPrefs = {};
   try { accounts = await getAllAccounts() || []; } catch (e) { /* skip */ }
   try { storageInfo = await getStorageUsage() || { used: 0, quota: 0 }; } catch (e) { /* skip */ }
+  try { taskViewPrefs = await getSetting('taskViewPreferences') || {}; } catch (e) { /* skip */ }
 
   const usedMB = ((storageInfo.used || 0) / (1024 * 1024)).toFixed(2);
 
@@ -188,9 +190,81 @@ async function renderSettings() {
         </div>
       `)}
 
+      ${_section('Task Display Preferences', '📋', `
+        <div style="display:flex;flex-direction:column;gap:var(--space-3);">
+          <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Choose your default view for each task category:</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--space-3);">
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">📥 Inbox</label>
+              <select id="pref-inbox" data-tab="inbox" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.inbox === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.inbox === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.inbox === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">☀️ Today</label>
+              <select id="pref-today" data-tab="today" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.today === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.today === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.today === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">📅 Scheduled</label>
+              <select id="pref-scheduled" data-tab="scheduled" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.scheduled === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.scheduled === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.scheduled === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">🔄 Status</label>
+              <select id="pref-status" data-tab="status" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.status === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.status === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.status === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">🏷️ Context</label>
+              <select id="pref-context" data-tab="context" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.context === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.context === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.context === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">○ Open</label>
+              <select id="pref-open" data-tab="open" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.open === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.open === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.open === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">✅ Completed</label>
+              <select id="pref-completed" data-tab="completed" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.completed === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.completed === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.completed === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">📚 All</label>
+              <select id="pref-all" data-tab="all" style="width:100%;padding:6px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="list" ${taskViewPrefs.all === 'list' ? 'selected' : ''}>List</option>
+                <option value="kanban" ${taskViewPrefs.all === 'kanban' ? 'selected' : ''}>Kanban</option>
+                <option value="table" ${taskViewPrefs.all === 'table' ? 'selected' : ''}>Table</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      `)}
+
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v4.8.7</div>
+          <div><strong>FamilyHub</strong> v4.9.0</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -395,6 +469,27 @@ async function renderSettings() {
   el.querySelector('#settings-tour-btn')?.addEventListener('click', () => {
     startTour('onboarding', window._fhEnv, true);
   });
+
+  // Task View Preferences — save to DB when user changes dropdown
+  const prefSelects = el.querySelectorAll('[id^="pref-"]');
+  for (const select of prefSelects) {
+    select.addEventListener('change', async (e) => {
+      const tabKey = select.dataset.tab;
+      const viewMode = e.target.value;
+      try {
+        // Update local preferences
+        const current = (await getSetting('taskViewPreferences')) || {};
+        current[tabKey] = viewMode;
+        await setSetting('taskViewPreferences', current);
+        // Brief success feedback
+        const tempColor = select.style.borderColor;
+        select.style.borderColor = 'var(--color-accent)';
+        setTimeout(() => { select.style.borderColor = tempColor; }, 300);
+      } catch (err) {
+        console.error('[settings] Failed to save view preference:', err);
+      }
+    });
+  }
 }
 
 // ── Registration ───────────────────────────────────────────────
