@@ -20,7 +20,18 @@ import { systrayRegistry } from '../core/registry.js';
 import { computed, signal, effect } from '../core/signals.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { on, EVENTS } from '../core/events.js';
-import { activeTaskIds, alarmedTaskIds, TIMER_ALARM } from '../services/time-tracker.js';
+// [fix] time-tracker loaded dynamically — systray badge works even before file is deployed
+let _st_activeTaskIds  = { value: new Set() };
+let _st_alarmedTaskIds = { value: new Set() };
+let _st_TIMER_ALARM    = 'timer:alarm';
+(async () => {
+  try {
+    const tt = await import('../services/time-tracker.js');
+    _st_activeTaskIds  = tt.activeTaskIds;
+    _st_alarmedTaskIds = tt.alarmedTaskIds;
+    _st_TIMER_ALARM    = tt.TIMER_ALARM;
+  } catch (e) { console.warn('[systray] time-tracker not available:', e.message); }
+})();
 
 let _env    = null;
 let _mount  = null;
@@ -210,8 +221,8 @@ function _buildTimerItem() {
   el.append(icon, badge);
 
   effect(() => {
-    const activeCount  = activeTaskIds.value.size;
-    const alarmedCount = alarmedTaskIds.value.size;
+    const activeCount  = _st_activeTaskIds.value.size;
+    const alarmedCount = _st_alarmedTaskIds.value.size;
     const total = activeCount + alarmedCount;
 
     badge.textContent = total > 0 ? String(total) : '';

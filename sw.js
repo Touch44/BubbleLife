@@ -1,18 +1,18 @@
 /**
- * FamilyHub v4.9.3 — Service Worker (sw.js)
+ * FamilyHub v4.9.4 — Service Worker (sw.js)
  * [MAJOR] Status options, time tracker, tab renames, action buttons in Details
  */
 'use strict';
 
-const APP_VERSION   = '4.9.3'; // [MAJOR] time tracking, status fix, tab renames
+const APP_VERSION   = '4.9.4'; // [MAJOR] time tracking, status fix, tab renames
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
   './', './index.html', './manifest.json',
-  './styles/tokens.css?v=4.9.3', './styles/layout.css?v=4.9.3',
-  './styles/components.css?v=4.9.3', './styles/dark.css?v=4.9.3',
+  './styles/tokens.css?v=4.9.4', './styles/layout.css?v=4.9.4',
+  './styles/components.css?v=4.9.4', './styles/dark.css?v=4.9.4',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',

@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v4.9.3 [MAJOR] Status options, time tracker, tab renames, action buttons in Details -->
+  <!-- Build: v4.9.4 [MAJOR] Status options, time tracker, tab renames, action buttons in Details -->
 
   <title>FamilyHub</title>
 
@@ -1220,7 +1220,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '4.9.3', emit, on, env: window._fhEnv,
+        version: '4.9.4', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

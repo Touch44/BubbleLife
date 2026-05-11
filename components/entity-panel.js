@@ -28,11 +28,47 @@ import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { mountActivityStream, recordCreated } from './activity-stream.js';
-import {
-  getSession, startFreeRun, startBlock, stopSession, resetSession, adjustSession, clearAlarm,
-  getElapsed, getRemaining, formatDuration, formatDurationCompact,
-  activeTaskIds, alarmedTaskIds, TIMER_TICK, TIMER_ALARM, TIMER_SAVED,
-} from '../services/time-tracker.js';
+// [fix] time-tracker loaded dynamically — panel works even before file is deployed
+let getSession    = () => null;
+let startFreeRun  = async () => {};
+let startBlock    = async () => {};
+let stopSession   = async () => {};
+let resetSession  = async () => {};
+let adjustSession = async () => {};
+let clearAlarm    = () => {};
+let getElapsed    = () => 0;
+let getRemaining  = () => null;
+let formatDuration = (s) => { if(!s||s<0)return '0s'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return [h&&h+'h',m&&m+'m',sec+'s'].filter(Boolean).join(' '); };
+let formatDurationCompact = (s) => { const m=Math.floor((s||0)/60),sc=Math.floor((s||0)%60); return String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0'); };
+let activeTaskIds  = { value: new Set() };
+let alarmedTaskIds = { value: new Set() };
+let TIMER_TICK  = 'timer:tick';
+let TIMER_ALARM = 'timer:alarm';
+let TIMER_SAVED = 'timer:saved';
+let _ttPanelLoaded = false;
+async function _ensureTimeTrackerPanel() {
+  if (_ttPanelLoaded) return;
+  _ttPanelLoaded = true;
+  try {
+    const tt = await import('../services/time-tracker.js');
+    getSession    = tt.getSession;
+    startFreeRun  = tt.startFreeRun;
+    startBlock    = tt.startBlock;
+    stopSession   = tt.stopSession;
+    resetSession  = tt.resetSession;
+    adjustSession = tt.adjustSession;
+    clearAlarm    = tt.clearAlarm;
+    getElapsed    = tt.getElapsed;
+    getRemaining  = tt.getRemaining;
+    formatDuration = tt.formatDuration;
+    formatDurationCompact = tt.formatDurationCompact;
+    activeTaskIds  = tt.activeTaskIds;
+    alarmedTaskIds = tt.alarmedTaskIds;
+    TIMER_TICK  = tt.TIMER_TICK;
+    TIMER_ALARM = tt.TIMER_ALARM;
+    TIMER_SAVED = tt.TIMER_SAVED;
+  } catch (e) { console.warn('[entity-panel] time-tracker not available:', e.message); }
+}
 
 // ── Graph view state ──────────────────────────────────────── //
 let _graphViewActive = false;
@@ -2575,7 +2611,9 @@ function _isoToLocalDate(isoStr) {
 
 // ── Time Tracker UI ───────────────────────────────────────── //
 
-function _buildTimeTrackerUI(container, entity) {
+async function _buildTimeTrackerUI(container, entity) {
+  // [fix] Ensure time-tracker loaded before using its API
+  await _ensureTimeTrackerPanel();
   const taskId = entity.id;
 
   const header = document.createElement('div');
@@ -2976,7 +3014,7 @@ async function _renderRelationsTab(container) {
     const ttSection = document.createElement('div');
     ttSection.style.cssText = 'border-bottom:1px solid var(--color-border);padding-bottom:var(--space-4);margin-bottom:var(--space-4);';
     container.appendChild(ttSection);
-    _buildTimeTrackerUI(ttSection, _entity);
+    _buildTimeTrackerUI(ttSection, _entity).catch(e => console.warn('[panel] timer UI error:', e));
   }
 
   // [minor] BUG-72 fix: skip _ensureDailyLinks in graph mode — graph browsing is read-only

@@ -34,9 +34,18 @@ import { on, emit, EVENTS }                   from '../core/events.js';
 import { getActiveContext, filterByContext }  from '../core/context.js';
 import { getAccount }                         from '../core/auth.js';
 import { openForm }                           from '../components/entity-form.js';
-import { activeTaskIds, alarmedTaskIds, sessionsSignal,
-         getElapsed, getRemaining, formatDurationCompact, formatDuration,
-         TIMER_TICK, TIMER_ALARM } from '../services/time-tracker.js';
+// [fix] Stubs replaced at runtime by dynamic import in renderDashboard() — 
+// prevents module crash if time-tracker.js not yet deployed on server.
+let _tt_activeTaskIds   = { value: new Set() };
+let _tt_alarmedTaskIds  = { value: new Set() };
+let _tt_sessionsSignal  = { value: {} };
+let _tt_getElapsed      = () => 0;
+let _tt_getRemaining    = () => null;
+let _tt_formatDurationCompact = (s) => { const m=Math.floor((s||0)/60),sc=Math.floor((s||0)%60); return String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0'); };
+let _tt_formatDuration  = (s) => { if(!s||s<0)return '0s'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return [h&&h+'h',m&&m+'m',sec+'s'].filter(Boolean).join(' '); };
+let _tt_TIMER_TICK      = 'timer:tick';
+let _tt_TIMER_ALARM     = 'timer:alarm';
+let _tt_loaded          = false;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -600,6 +609,23 @@ function _cardSkeleton(id, title, icon) {
 // ── Main render function ──────────────────────────────────────────────────────
 
 async function renderDashboard() {
+  // [fix] Lazy-load time-tracker on first render — safe even if file not yet deployed
+  if (!_tt_loaded) {
+    try {
+      const tt = await import('../services/time-tracker.js');
+      _tt_activeTaskIds  = tt.activeTaskIds;
+      _tt_alarmedTaskIds = tt.alarmedTaskIds;
+      _tt_sessionsSignal = tt.sessionsSignal;
+      _tt_getElapsed     = tt.getElapsed;
+      _tt_getRemaining   = tt.getRemaining;
+      _tt_formatDurationCompact = tt.formatDurationCompact;
+      _tt_formatDuration = tt.formatDuration;
+      _tt_TIMER_TICK     = tt.TIMER_TICK;
+      _tt_TIMER_ALARM    = tt.TIMER_ALARM;
+    } catch (e) { console.warn('[dashboard] time-tracker not available:', e.message); }
+    _tt_loaded = true;
+  }
+
   // Render mutex — prevents double-render race when ENTITY_SAVED fires
   // during the async _resolveFirstName() gap below.
   if (_rendering) return;
@@ -717,9 +743,9 @@ async function renderDashboard() {
 
     function _buildTimerWidget() {
       if (!timerWidget || !timerList) return;
-      const sessions = sessionsSignal.value;
-      const active   = activeTaskIds.value;
-      const alarmed  = alarmedTaskIds.value;
+      const sessions = _tt_sessionsSignal.value;
+      const active   = _tt_activeTaskIds.value;
+      const alarmed  = _tt_alarmedTaskIds.value;
       const relevant = [...active, ...alarmed];
       if (relevant.length === 0) { timerWidget.style.display = 'none'; _rowRefs.clear(); return; }
       timerWidget.style.display = '';
@@ -755,31 +781,31 @@ async function renderDashboard() {
 
     function _tickTimerRow(taskId) {
       const refs = _rowRefs.get(taskId); if (!refs) return;
-      const sessions = sessionsSignal.value; const alarmed = alarmedTaskIds.value;
+      const sessions = _tt_sessionsSignal.value; const alarmed = _tt_alarmedTaskIds.value;
       const session = sessions[taskId]; if (!session) return;
       const { badge, icon, subText } = refs;
       const isAlarmed = alarmed.has(taskId);
-      const elapsed   = getElapsed(session);
-      const remaining = session.mode === 'block' && session.blockSecs ? getRemaining(session) : null;
+      const elapsed   = _tt_getElapsed(session);
+      const remaining = session.mode === 'block' && session.blockSecs ? _tt_getRemaining(session) : null;
       icon.textContent = isAlarmed ? '\uD83D\uDD14' : session.mode === 'block' ? '\u23F2\uFE0F' : '\u23F1\uFE0F';
       if (isAlarmed) {
         subText.style.color = 'var(--color-danger)'; badge.style.background = 'var(--color-danger)';
-        subText.textContent = '\uD83D\uDD14 Block complete \u2014 ' + formatDuration(elapsed) + ' recorded'; badge.textContent = 'DONE';
+        subText.textContent = '\uD83D\uDD14 Block complete \u2014 ' + _tt_formatDuration(elapsed) + ' recorded'; badge.textContent = 'DONE';
       } else if (session.mode === 'block' && remaining !== null) {
         const u = remaining <= 60; subText.style.color = u ? 'var(--color-danger)' : 'var(--color-text-muted)';
         badge.style.background = u ? 'var(--color-danger)' : 'var(--color-accent)';
-        subText.textContent = '\u23F2 ' + formatDurationCompact(remaining) + ' remaining of ' + formatDuration(session.blockSecs);
-        badge.textContent = formatDurationCompact(remaining);
+        subText.textContent = '\u23F2 ' + _tt_formatDurationCompact(remaining) + ' remaining of ' + _tt_formatDuration(session.blockSecs);
+        badge.textContent = _tt_formatDurationCompact(remaining);
       } else {
         subText.style.color = 'var(--color-text-muted)'; badge.style.background = 'var(--color-accent)';
-        subText.textContent = '\u23F1 Running \u2014 ' + formatDuration(elapsed);
-        badge.textContent = formatDurationCompact(elapsed);
+        subText.textContent = '\u23F1 Running \u2014 ' + _tt_formatDuration(elapsed);
+        badge.textContent = _tt_formatDurationCompact(elapsed);
       }
     }
 
     _buildTimerWidget();
-    on(TIMER_TICK,  () => { for (const [tid] of _rowRefs) _tickTimerRow(tid); }); // badge-only, no DOM rebuild
-    on(TIMER_ALARM, _buildTimerWidget); // structural refresh
+    on(_tt_TIMER_TICK,  () => { for (const [tid] of _rowRefs) _tickTimerRow(tid); }); // badge-only, no DOM rebuild
+    on(_tt_TIMER_ALARM, _buildTimerWidget); // structural refresh
     on(TIMER_SAVED, _buildTimerWidget);
   }
 

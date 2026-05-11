@@ -22,8 +22,33 @@ import { emit, on, EVENTS }                      from '../core/events.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
 import { filterByContext, getActiveContext }      from '../core/context.js';
-import { getSession, stopSession, getElapsed, getRemaining, activeTaskIds, alarmedTaskIds,
-         formatDurationCompact, TIMER_TICK, TIMER_ALARM } from '../services/time-tracker.js';
+// [fix] time-tracker loaded dynamically — kanban works even before file is deployed
+let getSession    = () => null;
+let stopSession   = async () => {};
+let getElapsed    = () => 0;
+let getRemaining  = () => null;
+let activeTaskIds  = { value: new Set() };
+let alarmedTaskIds = { value: new Set() };
+let formatDurationCompact = (s) => { const m=Math.floor((s||0)/60),sc=Math.floor((s||0)%60); return String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0'); };
+let TIMER_TICK  = 'timer:tick';
+let TIMER_ALARM = 'timer:alarm';
+let _ttKanbanLoaded = false;
+async function _ensureTimeTracker() {
+  if (_ttKanbanLoaded) return;
+  _ttKanbanLoaded = true;
+  try {
+    const tt = await import('../services/time-tracker.js');
+    getSession    = tt.getSession;
+    stopSession   = tt.stopSession;
+    getElapsed    = tt.getElapsed;
+    getRemaining  = tt.getRemaining;
+    activeTaskIds  = tt.activeTaskIds;
+    alarmedTaskIds = tt.alarmedTaskIds;
+    formatDurationCompact = tt.formatDurationCompact;
+    TIMER_TICK  = tt.TIMER_TICK;
+    TIMER_ALARM = tt.TIMER_ALARM;
+  } catch (e) { console.warn('[kanban] time-tracker not available:', e.message); }
+}
 
 // ── Timer listener registry (KB-9/10/11 fix) ─────────────── //
 // Tracks per-card/row unsubscribe functions. Cleared before each board re-render
@@ -2238,6 +2263,9 @@ let _renderSeq = 0; // BUG-7 fix: render sequence counter to guard against concu
 async function renderKanban(params = {}) {
   const viewEl = document.getElementById('view-kanban');
   if (!viewEl) return;
+
+  // [fix] Ensure time-tracker module is loaded (safe if file not yet on server)
+  await _ensureTimeTracker();
 
   const seq = ++_renderSeq; // claim this render slot
   _injectStyles();
