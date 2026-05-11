@@ -236,7 +236,7 @@ async function renderProjects(params = {}) {
 
   for (const project of filtered) {
     const projTasks = _getProjectTasks(project.id);
-    const doneTasks = projTasks.filter(t => t.status === 'Done' || t.status === 'done');
+    const doneTasks = projTasks.filter(t => t.status === 'Done' || t.status === 'done' || t.status === 'Completed'); // SYS-10
     const progress = projTasks.length > 0 ? Math.round((doneTasks.length / projTasks.length) * 100) : 0;
 
     const statusColor = STATUS_COLORS[project.status] || '#6b7280';

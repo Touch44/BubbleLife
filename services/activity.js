@@ -116,7 +116,7 @@ export function initActivityService() {
 
     // Task state transitions
     if (entity.type === 'task') {
-      if (entity.status === 'Done') {
+      if (entity.status === 'Done' || entity.status === 'Completed') { // SYS-11
         await _writeActivity('task:completed', entity);
       } else if (entity.urgency === 'Overdue') {
         if (_lastTaskUrgency.get(entity.id) !== 'Overdue') {

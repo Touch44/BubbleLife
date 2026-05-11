@@ -861,12 +861,12 @@ function _renderHeaderActions() {
   };
 
   // ── PRIMARY: Complete (tasks only) ──────────────────────
-  if (_entity.type === 'task' && _entity.status !== 'Done') {
+  if (_entity.type === 'task' && _entity.status !== 'Done' && _entity.status !== 'Completed') { // SYS-05
     const btn = mkBtn('✓', 'Mark complete');
     btn.style.color = 'var(--color-success-text, #15803d)';
     btn.style.fontWeight = '600';
     btn.addEventListener('click', async () => {
-      _entity.status = 'Done';
+      _entity.status = 'Completed'; // SYS-06
       _markDirty();
       await _save();
       _renderHeader();

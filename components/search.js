@@ -284,7 +284,7 @@ function _score(entity, cfg, titleLower, lq, titleMatch) {
   if (cfg?.key === 'task' && entity.dueDate) {
     const now   = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-    if (entity.dueDate.slice(0, 10) < today && entity.status !== 'Done') s += 25;
+    if (entity.dueDate.slice(0, 10) < today && entity.status !== 'Done' && entity.status !== 'Completed') s += 25; // SYS-12
   }
 
   return s;

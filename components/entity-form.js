@@ -120,7 +120,7 @@ export function openForm(typeKey, prefill = {}, onSave = null) {
   // CS-05: Auto-fill context from active context if not already set
   if (!_draft.context && !ALWAYS_SHARED_TYPES.has(typeKey)) {
     const activeCtx = getActiveContext();
-    _draft.context = activeCtx === 'all' ? 'family' : activeCtx;
+    _draft.context = activeCtx === 'all' ? 'personal' : activeCtx; // SYS-04: default personal not family
   }
 
   _relationValues.clear();
@@ -500,7 +500,7 @@ function _buildAndMount(config) {
 
       // ── Status toggle: In Progress <> Complete (tasks only) ──
       if (_editEntity.type === 'task') {
-        const isDone = _editEntity.status === 'Done';
+        const isDone = _editEntity.status === 'Completed' || _editEntity.status === 'Done'; // SYS-01
         const statusBtn = document.createElement('button');
         statusBtn.style.cssText = [
           'display: inline-flex; align-items: center; gap: 6px;',
@@ -513,10 +513,10 @@ function _buildAndMount(config) {
         statusBtn.innerHTML = isDone
           ? '<span>✓</span><span>Mark in progress</span>'
           : '<span style="opacity:0.5">○</span><span>Mark complete</span>';
-        statusBtn.title = isDone ? 'Switch back to In Progress' : 'Mark as Done';
+        statusBtn.title = isDone ? 'Switch back to In Progress' : 'Mark as completed'; // SYS-02b
         statusBtn.addEventListener('click', async () => {
           try {
-            const newStatus = isDone ? 'In Progress' : 'Done';
+            const newStatus = isDone ? 'In Progress' : 'Completed'; // SYS-02
             const updated = { ..._editEntity, status: newStatus };
             const saved = await saveEntity(updated, getAccount()?.id);
             _editEntity = saved;
@@ -526,7 +526,7 @@ function _buildAndMount(config) {
             const statusSelect = _overlay?.querySelector('#ef-field-status');
             if (statusSelect) statusSelect.value = newStatus;
             emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
-            toast.success(newStatus === 'Done' ? 'Marked complete ✓' : 'Marked in progress');
+            toast.success(newStatus === 'Completed' ? 'Marked complete ✓' : 'Marked in progress'); // SYS-03
             _buildTab1ActionBar();
           } catch (err) {
             console.error('[entity-form] status toggle failed:', err);

@@ -919,7 +919,7 @@ function _buildCaptureBar(container, dateStr, sectionRefs) {
       const entityData = { type: selectedType, title, createdAt: now, updatedAt: now, context: entityCtx };
       if (selectedType === 'task') {
         entityData.dueDate = dateStr;
-        entityData.status  = 'Inbox';
+        entityData.status  = 'Not Started'; // SYS-14: align with new status names
         entityData.priority = 'Medium';
       } else if (selectedType === 'note') {
         entityData.category = 'Daily';

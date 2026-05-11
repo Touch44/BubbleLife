@@ -175,7 +175,7 @@ function _openQuickForm(type, callerPrefill = {}) {
 
   // Context-aware prefill: kanban/daily → task gets status:Inbox (only if not already set)
   if (type === 'task') {
-    if (!prefill.status)   prefill.status   = 'Inbox';
+    if (!prefill.status)   prefill.status   = 'Not Started'; // SYS-13
     if (!prefill.priority) prefill.priority = 'Medium';
   }
   // activity-center posts prefill type

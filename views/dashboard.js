@@ -806,9 +806,10 @@ function _populateTaskCard(el, tasks) {
   if (!card) return;
 
   const today    = _todayStr();
-  const open     = tasks.filter(t => t.status !== 'Done');
-  const dueToday = open.filter(t => t.dueDate && String(t.dueDate).slice(0,10) === today);
-  const overdue  = open.filter(t => t.dueDate && String(t.dueDate).slice(0,10) < today);
+  const open     = tasks.filter(t => t.status !== 'Done' && t.status !== 'Completed'); // SYS-07
+  const _safeDate = (d) => { if (!d) return null; const s = String(d); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0,10) : null; };
+  const dueToday = open.filter(t => _safeDate(t.dueDate) === today); // SYS-09
+  const overdue  = open.filter(t => _safeDate(t.dueDate) && _safeDate(t.dueDate) < today);
 
   const hasAlert = overdue.length > 0;
   const badgeClass = hasAlert ? 'danger' : dueToday.length > 0 ? 'warn' : 'ok';
@@ -1242,8 +1243,9 @@ function _populateBanner(el, tasks, documents, posts) {
   }
 
   const today    = _todayStr();
-  const openTasks = tasks.filter(t => t.status !== 'Done');
-  const overdue  = openTasks.filter(t => t.dueDate && String(t.dueDate).slice(0,10) < today);
+  const openTasks = tasks.filter(t => t.status !== 'Done' && t.status !== 'Completed'); // SYS-08
+  const _safeDate2 = (d) => { if (!d) return null; const s = String(d); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0,10) : null; };
+  const overdue  = openTasks.filter(t => _safeDate2(t.dueDate) && _safeDate2(t.dueDate) < today); // SYS-09c
 
   const expiringSoon = documents.filter(d => {
     const n = _daysUntil(d.expiryDate);
