@@ -1,6 +1,6 @@
 /**
- * FamilyHub v3 — views/settings.js
- * [MAJOR] V-03 — Settings View — Theme, Accounts, Invites, Data
+ * FamilyHub v5.1.0 — views/settings.js
+ * [minor] Phase 2 additions: Notifications & Reminders section (quiet hours, push, audio tone)
  *
  * Sections:
  *   1. Appearance (light/dark toggle)
@@ -256,7 +256,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v5.0.0</div>
+          <div><strong>FamilyHub</strong> v5.1.0</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -267,6 +267,154 @@ async function renderSettings() {
       `)}
     </div>
   `;
+
+  // ── [v5.1.0] Notifications & Reminders section (appended separately for async data) ──
+  {
+    let quietHours = { enabled: false, start: '22:00', end: '07:00' };
+    let pushGranted = false;
+    try { quietHours = (await getSetting('reminderQuietHours')) || quietHours; } catch {}
+    try { pushGranted = Notification?.permission === 'granted'; } catch {}
+
+    const notifSection = document.createElement('div');
+    notifSection.style.cssText = 'max-width:600px;margin:0 auto;padding:0 var(--space-4) var(--space-6);';
+    notifSection.innerHTML = `
+      <div style="border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-5);margin-bottom:var(--space-4);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:var(--space-4);">
+          <span style="font-size:1.3rem;">🔔</span>
+          <span style="font-size:var(--text-base);font-weight:var(--weight-semibold);">Notifications &amp; Reminders</span>
+        </div>
+
+        <!-- Push Permission -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--color-border);">
+          <div>
+            <div style="font-size:var(--text-sm);font-weight:var(--weight-semibold);">Push Notifications</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted);">Required for reminders when app is in background</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="settings-push-status" style="font-size:var(--text-xs);padding:2px 8px;border-radius:12px;
+              ${pushGranted ? 'background:#dcfce7;color:#15803d;' : 'background:#fee2e2;color:#dc2626;'}">
+              ${pushGranted ? '✓ Granted' : '✗ Not granted'}
+            </span>
+            ${!pushGranted ? `<button id="settings-push-btn" style="padding:5px 12px;border:1px solid var(--color-accent);border-radius:var(--radius-md);background:transparent;color:var(--color-accent);font-size:var(--text-sm);cursor:pointer;">Enable</button>` : ''}
+          </div>
+        </div>
+
+        <!-- Audio Tone -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--color-border);">
+          <div>
+            <div style="font-size:var(--text-sm);font-weight:var(--weight-semibold);">Audio Alert Tone</div>
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted);">Played when a reminder fires (audio channel must be enabled)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <select id="settings-audio-tone" style="padding:5px 8px;border:1px solid var(--color-border);border-radius:var(--radius-md);font-size:var(--text-sm);background:var(--color-bg);color:var(--color-text);">
+              <option value="chime">🔔 Chime</option>
+              <option value="bell">🔔 Bell</option>
+              <option value="ping">📍 Ping</option>
+              <option value="gentle">🌊 Gentle</option>
+              <option value="alarm">🚨 Alarm</option>
+            </select>
+            <button id="settings-audio-test" style="padding:5px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:transparent;color:var(--color-text);font-size:var(--text-sm);cursor:pointer;">▶ Test</button>
+          </div>
+        </div>
+
+        <!-- Quiet Hours -->
+        <div style="padding:10px 0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div>
+              <div style="font-size:var(--text-sm);font-weight:var(--weight-semibold);">Quiet Hours</div>
+              <div style="font-size:var(--text-xs);color:var(--color-text-muted);">No reminders will fire during this window</div>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input id="settings-quiet-enabled" type="checkbox" ${quietHours.enabled ? 'checked' : ''}
+                style="width:16px;height:16px;accent-color:var(--color-accent);" />
+              <span style="font-size:var(--text-sm);">Enable</span>
+            </label>
+          </div>
+          <div id="settings-quiet-times" style="display:${quietHours.enabled ? 'flex' : 'none'};align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label style="font-size:var(--text-xs);color:var(--color-text-muted);">From</label>
+              <input id="settings-quiet-start" type="time" value="${quietHours.start || '22:00'}"
+                style="padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-md);font-size:var(--text-sm);background:var(--color-bg);color:var(--color-text);" />
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label style="font-size:var(--text-xs);color:var(--color-text-muted);">To</label>
+              <input id="settings-quiet-end" type="time" value="${quietHours.end || '07:00'}"
+                style="padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-md);font-size:var(--text-sm);background:var(--color-bg);color:var(--color-text);" />
+            </div>
+            <button id="settings-quiet-save" style="padding:5px 12px;border:none;border-radius:var(--radius-md);background:var(--color-accent);color:#fff;font-size:var(--text-sm);font-weight:600;cursor:pointer;">Save</button>
+          </div>
+        </div>
+      </div>`;
+
+    // [BUG-6 FIX] Append inside the main container (not after it) for correct centering/layout
+    notifSection.style.cssText = 'padding-top: var(--space-2);'; // flush with section spacing
+    el.querySelector('div[style*="max-width"]')?.appendChild(notifSection);
+
+    // Wire Notifications section
+    const pushBtn = el.querySelector('#settings-push-btn');
+    if (pushBtn) {
+      pushBtn.addEventListener('click', async () => {
+        pushBtn.textContent = 'Requesting…';
+        pushBtn.disabled = true;
+        try {
+          const { requestPushPermission } = await import('../services/reminder.js');
+          const result = await requestPushPermission();
+          if (result === 'granted') {
+            el.querySelector('#settings-push-status').textContent = '✓ Granted';
+            el.querySelector('#settings-push-status').style.background = '#dcfce7';
+            el.querySelector('#settings-push-status').style.color = '#15803d';
+            pushBtn.remove();
+          } else {
+            pushBtn.textContent = 'Denied by browser';
+            pushBtn.style.color = 'var(--color-danger)';
+          }
+        } catch { pushBtn.textContent = 'Enable'; pushBtn.disabled = false; }
+      });
+    }
+
+    el.querySelector('#settings-audio-tone')?.addEventListener('change', async (e) => {
+      try { await setSetting('reminderDefaultTone', e.target.value); } catch {}
+    });
+
+    el.querySelector('#settings-audio-test')?.addEventListener('click', () => {
+      const tone = el.querySelector('#settings-audio-tone')?.value || 'chime';
+      if (!window._fhAudioCtx) {
+        try { window._fhAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+      }
+      const ctx = window._fhAudioCtx;
+      if (!ctx || ctx.state === 'suspended') { alert('Click elsewhere on the page first to enable audio, then try again'); return; }
+      const TONES = { chime:{f:528,t:'sine',d:0.6}, bell:{f:659,t:'sine',d:0.5}, ping:{f:440,t:'triangle',d:0.2}, gentle:{f:396,t:'sine',d:0.8}, alarm:{f:880,t:'square',d:0.3} };
+      const tp = TONES[tone] || TONES.chime;
+      try {
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = tp.t; osc.frequency.value = tp.f;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + tp.d);
+        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + tp.d);
+      } catch (e) { console.warn('[settings] audio test failed:', e); }
+    });
+
+    const quietEnabled = el.querySelector('#settings-quiet-enabled');
+    const quietTimes   = el.querySelector('#settings-quiet-times');
+    quietEnabled?.addEventListener('change', () => {
+      if (quietTimes) quietTimes.style.display = quietEnabled.checked ? 'flex' : 'none';
+    });
+
+    el.querySelector('#settings-quiet-save')?.addEventListener('click', async () => {
+      const start   = el.querySelector('#settings-quiet-start')?.value || '22:00';
+      const end     = el.querySelector('#settings-quiet-end')?.value   || '07:00';
+      const enabled = el.querySelector('#settings-quiet-enabled')?.checked || false;
+      const saveBtn = el.querySelector('#settings-quiet-save');
+      try {
+        await setSetting('reminderQuietHours', { enabled, start, end });
+        if (saveBtn) { saveBtn.textContent = '✓ Saved'; setTimeout(() => { saveBtn.textContent = 'Save'; }, 1500); }
+      } catch (err) {
+        console.error('[settings] quiet hours save failed:', err);
+        if (saveBtn) { saveBtn.textContent = '⚠ Failed'; setTimeout(() => { saveBtn.textContent = 'Save'; }, 2000); }
+      }
+    });
+  }
 
   // ── Wire event handlers ───────────────────────────────────
 

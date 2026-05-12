@@ -34,6 +34,10 @@ import { toast }                     from '../core/toast.js';
 // ── Constants ─────────────────────────────────────────────── //
 // Module-level edge map for task assignee resolution (set during render from _loadData)
 let _calTaskAssigneeEdgeMap = new Map();
+// [v5.1.0] Reminder badge map: entityId → count of active reminders
+let _calReminderMap = new Map();
+// [v5.1.0] Filter toggle: show only entities with reminders
+let _calFilterReminderOnly = false;
 
 const DONE_STATUSES = new Set(['done', 'Done', 'Completed']); // NEW-03
 
@@ -311,6 +315,22 @@ async function _loadData() {
     })
   );
   data._taskAssigneeEdgeMap = taskAssigneeEdgeMap;
+
+  // [v5.1.0] Build entity → reminder count map for 🔔 indicators
+  try {
+    const reminders = await getEntitiesByType('reminder');
+    const active    = reminders.filter(r => !r.deleted && (r.status === 'active' || r.status === 'snoozed') && !r.isTemplate);
+    _calReminderMap.clear();
+    await Promise.all(active.map(async r => {
+      try {
+        const edges = await getEdgesFrom(r.id, 'reminds');
+        for (const e of edges) {
+          _calReminderMap.set(e.toId, (_calReminderMap.get(e.toId) || 0) + 1);
+        }
+      } catch { /* non-fatal */ }
+    }));
+  } catch { /* non-fatal */ }
+
   return data;
 }
 
@@ -353,6 +373,8 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
     for (const entity of entities) {
       // Apply custom filter (e.g. exclude done tasks)
       if (reg.filterFn && !reg.filterFn(entity)) continue;
+      // [v5.1.0] Reminder-only filter toggle
+      if (_calFilterReminderOnly && !_calReminderMap.has(entity.id)) continue;
 
       // For tasks: synthesize a datetime ISO from dueDate + dueTime (default 06:00)
       // [minor] BUG-24/44/74 fix: do NOT mutate entity directly — store computed ISO
@@ -422,11 +444,13 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
 
 const SS_CAL_MODE   = 'fh_cal_mode';
 const SS_CAL_ANCHOR = 'fh_cal_anchor';
+const SS_CAL_REM    = 'fh_cal_reminder_filter'; // [v5.1.0] reminder filter toggle
 
 function _saveViewState() {
   try {
     sessionStorage.setItem(SS_CAL_MODE, _mode);
     sessionStorage.setItem(SS_CAL_ANCHOR, _toDateStr(_anchorDate));
+    sessionStorage.setItem(SS_CAL_REM, _calFilterReminderOnly ? '1' : '0');
   } catch { /* ignore quota errors */ }
 }
 
@@ -441,6 +465,9 @@ function _restoreViewState() {
       const d = new Date(savedAnchor + 'T00:00:00');
       if (!isNaN(d.getTime())) _anchorDate = d;
     }
+    // [v5.1.0] Restore reminder filter toggle state
+    const savedRem = sessionStorage.getItem(SS_CAL_REM);
+    if (savedRem !== null) _calFilterReminderOnly = savedRem === '1';
   } catch { /* ignore */ }
 }
 
@@ -549,6 +576,27 @@ function _buildHeader(container) {
   }
 
   header.append(titleRow, toggleRow);
+
+  // [v5.1.0] Reminder filter toggle — show only items with active reminders
+  const reminderFilterRow = document.createElement('div');
+  reminderFilterRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 12px 2px;';
+  const reminderFilterBtn = document.createElement('button');
+  reminderFilterBtn.style.cssText = [
+    'display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:14px;',
+    'font-size:0.75rem;cursor:pointer;transition:all 0.15s;',
+    _calFilterReminderOnly
+      ? 'background:var(--color-accent,#4f8ef7);color:#fff;border:1px solid var(--color-accent,#4f8ef7);'
+      : 'background:transparent;color:var(--color-text-muted,#94a3b8);border:1px solid var(--color-border,#e2e8f0);',
+  ].join('');
+  reminderFilterBtn.textContent = '🔔 Reminders only';
+  reminderFilterBtn.addEventListener('click', () => {
+    _calFilterReminderOnly = !_calFilterReminderOnly;
+    _saveViewState(); // [BUG-11 FIX] persist toggle state
+    renderCalendar({ _internal: true });
+  });
+  reminderFilterRow.appendChild(reminderFilterBtn);
+  header.appendChild(reminderFilterRow);
+
   container.appendChild(header);
 }
 
@@ -886,6 +934,15 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
         badge.className = 'cal-overdue-badge';
         badge.textContent = 'overdue';
         titleSpan.appendChild(badge);
+      }
+      // [v5.1.0] 🔔 reminder indicator
+      const _reminderCnt = _calReminderMap.get(item.entity.id) || 0;
+      if (_reminderCnt > 0) {
+        const rb = document.createElement('span');
+        rb.style.cssText = 'margin-left:4px;font-size:0.65rem;padding:1px 4px;border-radius:8px;background:var(--color-accent-muted,#ede9fe);color:var(--color-accent,#4f8ef7);font-weight:600;';
+        rb.textContent = `🔔${_reminderCnt}`;
+        rb.title = `${_reminderCnt} active reminder${_reminderCnt!==1?'s':''}`;
+        titleSpan.appendChild(rb);
       }
 
       const detail = document.createElement('span');
@@ -1416,6 +1473,13 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap) {
       const blockTitle = document.createElement('span');
       blockTitle.className = 'cal-week-event-title';
       blockTitle.textContent = item.entity.title || 'Untitled';
+      // [v5.1.0] 🔔 reminder indicator on week blocks
+      if (_calReminderMap.has(item.entity.id)) {
+        const rb = document.createElement('span');
+        rb.style.cssText = 'margin-left:3px;font-size:0.6rem;';
+        rb.textContent = '🔔';
+        blockTitle.appendChild(rb);
+      }
 
       const blockTime = document.createElement('span');
       blockTime.className = 'cal-week-event-time';
@@ -2471,6 +2535,18 @@ async function renderCalendar(params = {}) {
 
 on(EVENTS.ENTITY_SAVED,   _debouncedRender);
 on(EVENTS.ENTITY_DELETED, _debouncedRender);
+
+// [v5.1.0] REMINDER event listeners — refresh calendar 🔔 indicators when reminders change
+for (const _rEvt of [
+  EVENTS.REMINDER_CREATED, EVENTS.REMINDER_UPDATED,
+  EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_PAUSED, EVENTS.REMINDER_RESUMED,
+]) {
+  on(_rEvt, () => {
+    if (document.getElementById('view-calendar')?.classList.contains('active')) {
+      _debouncedRender();
+    }
+  });
+}
 
 // Close popover when navigating away from calendar
 on(EVENTS.VIEW_CHANGED, ({ viewKey }) => {

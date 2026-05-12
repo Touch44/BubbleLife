@@ -16,7 +16,8 @@
  */
 
 import { getEntitiesByType, getEntity, saveEntity, deleteEntity,
-         getEdgesFrom, getEdgesTo, saveEdge, deleteEdge, uid } from '../core/db.js';
+         getEdgesFrom, getEdgesTo, saveEdge, deleteEdge, uid,
+         getSetting } from '../core/db.js';
 import { emit, on, EVENTS }          from '../core/events.js';
 import { getAccount }                from '../core/auth.js';
 import { nextDate, rruleToHuman }    from './rrule-lite.js';
@@ -109,10 +110,14 @@ function _startScheduler() {
 async function _tick() {
   if (_schedulerRunning) return; // concurrency guard
   // 3P-C-03 fix: don't fire reminders before user is logged in
-  // getAccount() returns null before auth completes — IDB may have stale reminders
   if (!getAccount()) return;
-  _schedulerRunning = true;
+  _schedulerRunning = true;  // set BEFORE any await to prevent concurrent ticks
   try {
+    // [v5.1.0] QUIET HOURS GATE — must be inside the guard to prevent race conditions
+    if (await _isQuietHours()) {
+      console.debug('[reminder] quiet hours active — skipping tick');
+      return;
+    }
     const now = new Date();
     // Use existing 'type' index — no new IDB indexes needed
     const all = await getEntitiesByType('reminder');
@@ -412,7 +417,8 @@ async function _dismiss(reminderId, by) {
 async function _snooze(reminderId, minutes) {
   const r = await getEntity(reminderId);
   if (!r) return;
-  const ms          = (minutes || r.snoozeMinutes || 10) * 60000;
+  // [v5.1.0] Use adaptive snooze minutes if caller didn't specify explicit duration
+  const ms          = ((minutes != null ? minutes : _adaptiveSnoozeMinutes(r)) || 10) * 60000;
   const snoozeUntil = _localISO(new Date(Date.now() + ms));
   const updated     = await saveEntity({
     ...r, status: 'snoozed', snoozeUntil, nextFireAt: snoozeUntil,
@@ -545,24 +551,109 @@ async function _syncPushSchedules() {
   } catch (err) { console.warn('[reminder] syncPushSchedules failed:', err); }
 }
 
-// ── Service descriptor ────────────────────────────────────── //
+// [v5.0.0] Reminder insurance timers are already done above. Below: Phase 2 additions.
+
+// ════════════════════════════════════════════════════════════
+// [v5.1.0] PHASE 2 — QUIET HOURS + SNOOZE HEURISTICS + PUSH PERMISSION
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Check if the current time falls within the user's configured quiet hours.
+ * Quiet hours stored as { enabled: bool, start: "HH:MM", end: "HH:MM" }.
+ * Returns true if now is inside the quiet window and quiet hours are enabled.
+ */
+async function _isQuietHours() {
+  try {
+    const qh = await getSetting('reminderQuietHours');
+    if (!qh || !qh.enabled) return false;
+    const now   = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const [startH, startM] = (qh.start || '22:00').split(':').map(Number);
+    const [endH,   endM]   = (qh.end   || '07:00').split(':').map(Number);
+    const startMin = startH * 60 + startM;
+    const endMin   = endH   * 60 + endM;
+    // [BUG-23 FIX] Same start/end = invalid config (not "always quiet"), treat as disabled
+    if (startMin === endMin) return false;
+    // Handle overnight ranges (e.g. 22:00 → 07:00)
+    if (startMin <= endMin) return nowMin >= startMin && nowMin < endMin;
+    return nowMin >= startMin || nowMin < endMin; // wraps midnight
+  } catch { return false; }
+}
+
+/**
+ * Adaptive snooze: return suggested snooze minutes based on firing history.
+ * Heuristic: snooze grows linearly for the first 5 fires, then caps at 60m.
+ * @param {object} reminder
+ * @returns {number} minutes
+ */
+function _adaptiveSnoozeMinutes(reminder) {
+  const base      = reminder.snoozeMinutes || 10;
+  const fireCount = reminder.fireCount     || 0;
+  // Phase 2 heuristic: base × (1 + clamp(fireCount − 1, 0, 4)) capped at 60
+  const multiplier = 1 + Math.min(Math.max(fireCount - 1, 0), 4);
+  return Math.min(base * multiplier, 60);
+}
+
+/**
+ * Request push notification permission from the browser.
+ * Persists approval state and syncs upcoming reminders to SW.
+ * Exported for Settings page and reminder-form.
+ */
+export async function requestPushPermission() {
+  if (!('Notification' in window)) return 'unsupported';
+  if (Notification.permission === 'granted') {
+    await _syncPushSchedules();
+    return 'granted';
+  }
+  if (Notification.permission === 'denied') return 'denied';
+  const result = await Notification.requestPermission();
+  if (result === 'granted') {
+    await _syncPushSchedules();
+    // Persist so Settings page can reflect state without re-requesting
+    import('../core/db.js').then(m => m.setSetting('pushPermissionGranted', true)).catch(() => {});
+  }
+  return result;
+}
+
+// ════════════════════════════════════════════════════════════
+// PHASE 3 SCAFFOLD — future extension points (not implemented)
+// ════════════════════════════════════════════════════════════
+// Phase 3 will add:
+//   - Auto-reminder rules engine  (services/auto-reminder-rules.js)
+//   - Chained reminders           (chained field on reminder entity)
+//   - Analytics panel             (views/reminder-analytics.js)
+//   - Location geofencing         (services/geofence.js — Geolocation API + PostGIS)
+//   - Claude API NLP input        (services/claude-nlp.js — parse natural language fireAt)
+//   - Person-routed delivery      (per-account push token table in MySQL)
+//   - Export / CSV audit trail    (api/reminder-export.php)
+// Export stubs so importing code doesn't break when Phase 3 files are added:
+export const phase3Stubs = {
+  autoRulesEngine:  () => { throw new Error('[Phase 3] Auto-rules engine not yet implemented'); },
+  chainedReminders: () => { throw new Error('[Phase 3] Chained reminders not yet implemented'); },
+  nlpInput:         () => { throw new Error('[Phase 3] NLP input not yet implemented'); },
+  geofence:         () => { throw new Error('[Phase 3] Geofencing not yet implemented'); },
+};
 
 export const reminderServiceDescriptor = {
   dependencies: ['data', 'notification'],
   start(env) {
     _notifSvc = env.services.notification;
     return {
-      dismiss:           (id, by)            => _dismiss(id, by),
-      snooze:            (id, mins)          => _snooze(id, mins),
-      pause:             (id)                => _pause(id),
-      resume:            (id)                => _resume(id),
-      duplicate:         (id, tId, ovr)      => _duplicate(id, tId, ovr),
-      applyTemplate:     (tId, type, cJson)  => _applyTemplate(tId, type, cJson),
-      getActiveAlerts:   ()                  => [..._alerts],
-      dismissAlert:      (alertId)           => _dismissAlert(alertId),
-      clearAllAlerts:    ()                  => _clearAllAlerts(),
-      syncPushSchedules: ()                  => _syncPushSchedules(),
-      createReminder:    (data, targetId)    => createReminder(data, targetId),
+      dismiss:               (id, by)            => _dismiss(id, by),
+      snooze:                (id, mins)          => _snooze(id, mins),
+      pause:                 (id)                => _pause(id),
+      resume:                (id)                => _resume(id),
+      duplicate:             (id, tId, ovr)      => _duplicate(id, tId, ovr),
+      applyTemplate:         (tId, type, cJson)  => _applyTemplate(tId, type, cJson),
+      getActiveAlerts:       ()                  => [..._alerts],
+      dismissAlert:          (alertId)           => _dismissAlert(alertId),
+      clearAllAlerts:        ()                  => _clearAllAlerts(),
+      syncPushSchedules:     ()                  => _syncPushSchedules(),
+      createReminder:        (data, targetId)    => createReminder(data, targetId),
+      // [v5.1.0] Phase 2 additions
+      requestPushPermission: ()                  => requestPushPermission(),
+      isQuietHours:          ()                  => _isQuietHours(),
+      adaptiveSnooze:        (r)                 => _adaptiveSnoozeMinutes(r),
     };
   },
 };

@@ -205,6 +205,31 @@ function _buildModal(existing, targetEnt, prefill) {
         <textarea id="rf-notes" rows="2" placeholder="Optional…"
           style="${_inp()}resize:vertical;">${_esc(d.notes || '')}</textarea>
       </div>
+
+      <!-- [v5.1.0] CONDITION (Phase 2) — only fire if target entity meets criteria -->
+      <div id="rf-cond-section" style="border:1px solid var(--color-border,#e2e8f0);border-radius:8px;padding:12px;background:var(--color-surface-2,rgba(0,0,0,0.03));">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <label style="${_lbl()}margin-bottom:0;">🔍 Condition (optional)</label>
+          <select id="rf-cond-mode" style="font-size:0.8rem;padding:3px 7px;border:1px solid var(--color-border,#e2e8f0);border-radius:6px;background:var(--color-surface,#fff);color:var(--color-text,#1e293b);">
+            <option value="none"   ${(d.conditionMode||'none')==='none'   ?'selected':''}>No condition</option>
+            <option value="any"    ${(d.conditionMode||'none')==='any'    ?'selected':''}>Fire if ANY condition passes</option>
+            <option value="all"    ${(d.conditionMode||'none')==='all'    ?'selected':''}>Fire if ALL conditions pass</option>
+          </select>
+        </div>
+        <div id="rf-cond-builder" style="display:none;flex-direction:column;gap:6px;margin-top:6px;">
+          <div id="rf-cond-rows"></div>
+          <button id="rf-cond-add" type="button" style="font-size:0.75rem;padding:4px 10px;border:1px dashed var(--color-accent,#4f8ef7);border-radius:6px;background:transparent;color:var(--color-accent,#4f8ef7);cursor:pointer;align-self:flex-start;">
+            + Add condition row
+          </button>
+          <div id="rf-cond-preview" style="font-size:0.72rem;color:var(--color-text-muted,#94a3b8);margin-top:4px;font-style:italic;"></div>
+        </div>
+      </div>
+
+      <!-- [v5.1.0] Template toggle -->
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input id="rf-is-template" type="checkbox" ${d.isTemplate ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--color-accent,#4f8ef7);" />
+        <label for="rf-is-template" style="font-size:0.85rem;cursor:pointer;">Save as template (reusable)</label>
+      </div>
     </div>
 
     <div id="rf-error" style="display:none;color:var(--color-danger,#ef4444);font-size:0.8rem;margin-top:12px;"></div>
@@ -261,6 +286,128 @@ function _buildModal(existing, targetEnt, prefill) {
   });
 
   _modal.querySelector('#rf-save')?.addEventListener('click', () => _save(existing, targetEnt));
+
+  // ── [v5.1.0] Condition builder wiring ───────────────────
+  const condModeEl   = _modal.querySelector('#rf-cond-mode');
+  const condBuilder  = _modal.querySelector('#rf-cond-builder');
+  const condRowsEl   = _modal.querySelector('#rf-cond-rows');
+  const condPreview  = _modal.querySelector('#rf-cond-preview');
+
+  const COND_FIELDS = [
+    { value: 'status',     label: 'Status' },
+    { value: 'priority',   label: 'Priority' },
+    { value: 'dueDate',    label: 'Due Date' },
+    { value: 'title',      label: 'Title' },
+    { value: 'notes',      label: 'Notes' },
+    { value: 'assignedTo', label: 'Assigned to me' },
+    { value: 'type',       label: 'Entity type' },
+    { value: 'context',    label: 'Context' },
+  ];
+  const COND_OPS = [
+    { value: 'equals',       label: 'equals' },
+    { value: 'not_equals',   label: 'not equals' },
+    { value: 'contains',     label: 'contains' },
+    { value: 'is_empty',     label: 'is empty' },
+    { value: 'is_not_empty', label: 'is not empty' },
+    { value: 'before',       label: 'before' },
+    { value: 'after',        label: 'after' },
+    { value: 'is_overdue',   label: 'is overdue' },
+    { value: 'includes',     label: 'includes me' },
+  ];
+  const NO_VALUE_OPS = new Set(['is_empty','is_not_empty','is_overdue','includes']);
+
+  /** Build a single condition row */
+  const _mkCondRow = (condObj = {}) => {
+    const row = document.createElement('div');
+    row.dataset.condRow = '1'; // [v5.1.0] required by _updateCondPreview
+    row.style.cssText = 'display:flex;gap:4px;align-items:center;flex-wrap:wrap;';
+
+    const fieldSel = document.createElement('select');
+    fieldSel.style.cssText = 'font-size:0.8rem;padding:3px 6px;border:1px solid var(--color-border,#e2e8f0);border-radius:6px;flex:1;min-width:100px;background:var(--color-surface,#fff);color:var(--color-text,#1e293b);';
+    COND_FIELDS.forEach(f => {
+      const o = document.createElement('option'); o.value = f.value; o.textContent = f.label;
+      if (condObj.field === f.value) o.selected = true;
+      fieldSel.appendChild(o);
+    });
+
+    const opSel = document.createElement('select');
+    opSel.style.cssText = 'font-size:0.8rem;padding:3px 6px;border:1px solid var(--color-border,#e2e8f0);border-radius:6px;flex:1;min-width:80px;background:var(--color-surface,#fff);color:var(--color-text,#1e293b);';
+    COND_OPS.forEach(o => {
+      const opt = document.createElement('option'); opt.value = o.value; opt.textContent = o.label;
+      if (condObj.op === o.value) opt.selected = true;
+      opSel.appendChild(opt);
+    });
+
+    const valInp = document.createElement('input');
+    valInp.type = 'text'; valInp.placeholder = 'value';
+    valInp.value = condObj.value || '';
+    valInp.style.cssText = 'font-size:0.8rem;padding:3px 6px;border:1px solid var(--color-border,#e2e8f0);border-radius:6px;flex:1;min-width:80px;background:var(--color-surface,#fff);color:var(--color-text,#1e293b);';
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button'; rmBtn.textContent = '✕';
+    rmBtn.style.cssText = 'padding:2px 6px;border:none;background:none;cursor:pointer;color:var(--color-text-muted,#94a3b8);font-size:0.85rem;flex-shrink:0;';
+    rmBtn.addEventListener('click', () => { row.remove(); _updateCondPreview(); });
+
+    const DATE_FIELDS = new Set(['dueDate', 'date', 'startDate', 'endDate', 'createdAt']);
+    const DATE_OPS    = new Set(['before', 'after', 'within_days']);
+
+    const _toggleVal = () => {
+      const noVal = NO_VALUE_OPS.has(opSel.value);
+      valInp.style.display = noVal ? 'none' : '';
+      // [BUG-28 FIX] Use date picker for date-related fields+operators
+      if (!noVal && DATE_FIELDS.has(fieldSel.value) && DATE_OPS.has(opSel.value)) {
+        valInp.type = 'date';
+      } else {
+        valInp.type = 'text';
+      }
+    };
+    opSel.addEventListener('change', () => { _toggleVal(); _updateCondPreview(); });
+    fieldSel.addEventListener('change', _updateCondPreview);
+    valInp.addEventListener('input', _updateCondPreview);
+    _toggleVal();
+
+    row.append(fieldSel, opSel, valInp, rmBtn);
+    return row;
+  };
+
+  const _updateCondPreview = () => {
+    const rows = Array.from(condRowsEl.querySelectorAll('[data-cond-row]'));
+    if (!rows.length) { condPreview.textContent = ''; return; }
+    const parts = rows.map(r => {
+      const f = r.querySelector('select:first-child')?.value;
+      const o = r.querySelectorAll('select')[1]?.value;
+      const v = r.querySelector('input')?.value;
+      if (!f || !o) return '';
+      return NO_VALUE_OPS.has(o) ? `${f} ${o}` : `${f} ${o} "${v}"`;
+    }).filter(Boolean);
+    const mode = condModeEl?.value || 'any';
+    condPreview.textContent = `→ Fire if ${mode === 'all' ? 'ALL' : 'ANY'}: ${parts.join(` ${mode === 'all' ? 'AND' : 'OR'} `)}`;
+  };
+
+  // Show/hide builder based on mode
+  const _toggleCondBuilder = () => {
+    const mode = condModeEl?.value || 'none';
+    condBuilder.style.display = mode === 'none' ? 'none' : 'flex';
+  };
+  condModeEl?.addEventListener('change', () => { _toggleCondBuilder(); _updateCondPreview(); });
+  _toggleCondBuilder();
+
+  // Restore existing conditions from conditionJson
+  if (d.conditionJson && d.conditionMode && d.conditionMode !== 'none') {
+    try {
+      const parsed = typeof d.conditionJson === 'string' ? JSON.parse(d.conditionJson) : d.conditionJson;
+      const conds  = parsed?.conditions || (parsed ? [parsed] : []);
+      conds.forEach(c => { const r = _mkCondRow(c); condRowsEl.appendChild(r); });
+      _updateCondPreview();
+    } catch {}
+  }
+
+  _modal.querySelector('#rf-cond-add')?.addEventListener('click', () => {
+    const row = _mkCondRow();
+    condRowsEl.appendChild(row);
+    _updateCondPreview();
+  });
+
   setTimeout(() => _modal?.querySelector('#rf-title')?.focus(), 50);
 }
 
@@ -320,6 +467,24 @@ async function _save(existing, targetEnt) {
     channelPush:  !!_modal.querySelector('#rf-ch-push')?.checked,
     channelAudio: !!_modal.querySelector('#rf-ch-audio')?.checked,
     timezone:     Intl.DateTimeFormat().resolvedOptions().timeZone,
+    // [v5.1.0] Condition
+    conditionMode:  _modal.querySelector('#rf-cond-mode')?.value || 'none',
+    conditionJson:  (() => {
+      const mode = _modal.querySelector('#rf-cond-mode')?.value || 'none';
+      if (mode === 'none') return null;
+      const rows = Array.from(_modal.querySelector('#rf-cond-rows')?.children || []);
+      const conds = rows.map(r => {
+        const f = r.querySelector('select:first-child')?.value;
+        const o = r.querySelectorAll('select')[1]?.value;
+        const v = r.querySelector('input')?.value;
+        if (!f || !o) return null;
+        return { field: f, op: o, value: v || '' };
+      }).filter(Boolean);
+      if (!conds.length) return null;
+      return JSON.stringify({ op: mode === 'all' ? 'and' : 'or', conditions: conds });
+    })(),
+    // [v5.1.0] Template flag
+    isTemplate:   !!_modal.querySelector('#rf-is-template')?.checked,
     // NEW-H-09 fix: when editing a dismissed/expired reminder, only reactivate if
     // the user explicitly set a new fireAt in the future. Otherwise preserve status.
     status: (() => {

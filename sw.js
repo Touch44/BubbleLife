@@ -4,15 +4,15 @@
  */
 'use strict';
 
-const APP_VERSION   = '5.0.0'; // [MAJOR] Reminder system // [MAJOR] time tracking, status fix, tab renames
+const APP_VERSION   = '5.1.0'; // [minor] Phase 2: condition UI, quiet hours, snooze heuristics, timer in form, templates, badges
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
-  './', './index.html', './manifest.json?v=5.0.0', // 3P-L-02: version-bust manifest
-  './styles/tokens.css?v=5.0.0', './styles/layout.css?v=5.0.0',
-  './styles/components.css?v=5.0.0', './styles/dark.css?v=5.0.0',
+  './', './index.html', './manifest.json?v=5.1.0', // 3P-L-02: version-bust manifest
+  './styles/tokens.css?v=5.1.0', './styles/layout.css?v=5.1.0',
+  './styles/components.css?v=5.1.0', './styles/dark.css?v=5.1.0',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',

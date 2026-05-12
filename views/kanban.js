@@ -105,6 +105,10 @@ let _blockMap   = new Map(); // taskId → true if blocked by incomplete task
 // Edge-resolved relation maps (populated in _loadData for tasks created via entity-form)
 let _taskProjectMap  = new Map(); // taskId → projectId (from 'project' relation edge)
 let _taskAssigneeMap = new Map(); // taskId → personId  (from 'assignedTo' relation edge)
+// [v5.1.0] Reminder badge map: taskId → count of active reminders
+let _taskReminderMap = new Map();
+// [BUG-31 FIX] Dirty flag: only rebuild reminder map when a REMINDER_* event fires
+let _reminderMapDirty = true;
 
 // Filter state
 let _filterProject        = null;   // project ID or null
@@ -211,6 +215,11 @@ async function _loadData() {
   // Build blocker map and edge-resolved relation maps
   await _buildBlockerMap();
   await _buildRelationEdgeMaps();
+  // [v5.1.0] Build reminder badge map (active reminder count per task) — only if dirty
+  if (_reminderMapDirty) {
+    await _buildReminderMap();
+    _reminderMapDirty = false;
+  }
 }
 
 /**
@@ -240,7 +249,28 @@ async function _buildRelationEdgeMaps() {
   });
 }
 
-async function _buildBlockerMap() {
+/**
+ * [v5.1.0] Build taskId → active reminder count map.
+ * Used to show 🔔 badge on kanban cards.
+ * Only counts reminders with status 'active' or 'snoozed'.
+ */
+async function _buildReminderMap() {
+  _taskReminderMap.clear();
+  try {
+    const reminders = await getEntitiesByType('reminder');
+    const active    = reminders.filter(r => !r.deleted && (r.status === 'active' || r.status === 'snoozed') && !r.isTemplate);
+    // Load reminder→task edges in parallel
+    const edges = await Promise.all(active.map(r => getEdgesFrom(r.id, 'reminds').catch(() => [])));
+    active.forEach((r, i) => {
+      for (const edge of edges[i]) {
+        const count = (_taskReminderMap.get(edge.toId) || 0) + 1;
+        _taskReminderMap.set(edge.toId, count);
+      }
+    });
+  } catch (e) { console.warn('[kanban] _buildReminderMap failed:', e); }
+}
+
+
   _blockMap.clear();
   const doneSet   = new Set(['Completed', 'Done', 'done']);
   const taskIndex = new Map(_tasks.map(t => [t.id, t]));
@@ -1253,6 +1283,12 @@ function _buildCard(task) {
         ${dueEl}
         ${deadlineEl}
         ${assigneeEl}
+        ${(_taskReminderMap.get(task.id)||0) > 0
+          ? `<span class="kanban-card-reminder-badge" title="${_taskReminderMap.get(task.id)} active reminder${_taskReminderMap.get(task.id)!==1?'s':''}"
+               style="font-size:0.7rem;padding:1px 5px;border-radius:10px;background:var(--color-accent-muted,#ede9fe);color:var(--color-accent,#4f8ef7);font-weight:600;white-space:nowrap;">
+              🔔${_taskReminderMap.get(task.id)}
+            </span>`
+          : ''}
       </div>
     </div>
   `;
@@ -2707,6 +2743,39 @@ on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
     }
   }
 });
+
+// [v5.1.0] REMINDER badge invalidation — refresh reminder map + re-render badges on REMINDER_* events
+// Only re-renders when kanban view is active; lightweight: only rebuilds reminder map then patches badges.
+const _REMINDER_REFRESH_EVTS = [
+  EVENTS.REMINDER_CREATED, EVENTS.REMINDER_UPDATED,
+  EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_PAUSED, EVENTS.REMINDER_RESUMED,
+];
+for (const evt of _REMINDER_REFRESH_EVTS) {
+  on(evt, async () => {
+    _reminderMapDirty = true; // [BUG-31 FIX] mark dirty so next _loadData rebuilds map
+    if (!document.getElementById('view-kanban')?.classList.contains('active')) return;
+    await _buildReminderMap();
+    _reminderMapDirty = false;
+    // Patch existing badge spans in DOM without full re-render (performance)
+    document.querySelectorAll('.kanban-card[data-task-id]').forEach(card => {
+      const tid   = card.dataset.taskId;
+      const count = _taskReminderMap.get(tid) || 0;
+      let badge   = card.querySelector('.kanban-card-reminder-badge');
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'kanban-card-reminder-badge';
+          badge.style.cssText = 'font-size:0.7rem;padding:1px 5px;border-radius:10px;background:var(--color-accent-muted,#ede9fe);color:var(--color-accent,#4f8ef7);font-weight:600;white-space:nowrap;';
+          card.querySelector('.kanban-card-meta')?.appendChild(badge);
+        }
+        badge.textContent = `🔔${count}`;
+        badge.title = `${count} active reminder${count !== 1 ? 's' : ''}`;
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+  });
+}
 
 // ── Registration ──────────────────────────────────────────── //
 
