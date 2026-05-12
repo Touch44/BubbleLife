@@ -378,7 +378,8 @@ export async function saveEntity(entity, byAccountId) {
       // Existing entity — write one audit entry per changed field
       // Skip internal/structural fields that aren't meaningful to show
       const SKIP_FIELDS = new Set(['updatedAt', 'createdAt', 'createdBy', 'id',
-                                    'deleted', 'dirtyAt', '_authorName', '_authorPersonId']);
+                                    'deleted', 'dirtyAt', '_authorName', '_authorPersonId',
+                                    'timeTracked']); // timer updates handled by timer widget — not change history
       let wroteAny = false;
       for (const key of Object.keys(saved)) {
         if (SKIP_FIELDS.has(key)) continue;

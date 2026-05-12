@@ -75,8 +75,9 @@ export function formatDuration(totalSecs) {
   if (d > 0) parts.push(`${d}d`);
   if (h > 0) parts.push(`${h}h`);
   if (m > 0) parts.push(`${m}m`);
-  parts.push(`${s}s`);
-  return parts.join(' ');
+  // Only show seconds when no hours/days (keeps large durations clean: "1h 23m" not "1h 23m 0s")
+  if (!d && !h && (s > 0 || !m)) parts.push(`${s}s`);
+  return parts.join(' ') || '0s';
 }
 
 export function formatDurationCompact(totalSecs) {

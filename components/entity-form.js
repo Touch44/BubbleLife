@@ -1800,7 +1800,18 @@ let _ftAdjustSession = async () => {};
 let _ftClearAlarm    = () => {};
 let _ftGetElapsed    = () => 0;
 let _ftGetRemaining  = () => null;
-let _ftFmtDuration   = (s) => { if(!s||s<0)return '0s'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=Math.floor(s%60); return [h&&h+'h',m&&m+'m',sc+'s'].filter(Boolean).join(' '); };
+let _ftFmtDuration   = (s) => {
+  if (!s || s < 0) return '0s';
+  const h  = Math.floor(s / 3600);
+  const m  = Math.floor((s % 3600) / 60);
+  const sc = Math.floor(s % 60);
+  const parts = [];
+  if (h) parts.push(h + 'h');
+  if (m) parts.push(m + 'm');
+  // Show seconds only when no hours (keeps display compact for long sessions)
+  if (!h && (sc || !m)) parts.push(sc + 's');
+  return parts.join(' ') || '0s';
+};
 let _ftFmtCompact    = (s) => { const m=Math.floor((s||0)/60),sc=Math.floor((s||0)%60); return String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0'); };
 let _ftOn            = null;
 let _ftTICK  = 'timer:tick';
@@ -2250,6 +2261,188 @@ async function _buildFormTimeTrackerUI(container, entity) {
 // Operates on _editEntity (the saved entity being edited).
 // ════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════
+// CONNECTIONS TAB — REMINDER SECTION (mirrors entity-panel)
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Render the Add Reminder widget at the top of the Connections tab.
+ * Shows existing reminder chips + quick-set presets (10m / 1h / Tomorrow 9am / Custom).
+ * Self-refreshes on REMINDER_* events while the form is open.
+ */
+async function _renderFormReminderSection(container, entity) {
+  const _esc2 = (s) => !s ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  const wrap = document.createElement('div');
+  wrap.dataset.reminderSection = '1';
+  wrap.style.cssText = 'padding:12px 16px 10px;border-bottom:1px solid var(--color-border);flex-shrink:0;';
+  container.appendChild(wrap);
+
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'font-size:10px;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;';
+  hdr.textContent = '\uD83D\uDD14 Reminders';
+  wrap.appendChild(hdr);
+
+  // Load active reminder chips via graph edges
+  let activeReminders = [];
+  try {
+    const edges = await getEdgesTo(entity.id, 'reminds');
+    const all = await Promise.all(
+      edges.filter(e => e.fromType === 'reminder').map(e => getEntity(e.fromId).catch(() => null))
+    );
+    activeReminders = all.filter(r => r && (r.status === 'active' || r.status === 'snoozed'));
+  } catch {}
+
+  // ── Chip strip ──
+  const chipStrip = document.createElement('div');
+  chipStrip.style.cssText = 'display:flex;flex-direction:column;gap:5px;margin-bottom:8px;';
+
+  const _fmtFire = (iso) => {
+    if (!iso) return '\u2014';
+    try {
+      const ms = new Date(iso.includes('T') ? iso : iso + 'T00:00:00') - Date.now();
+      if (ms < 0) return 'overdue';
+      const m = Math.floor(ms / 60000);
+      if (m < 60)   return 'in ' + m + 'm';
+      if (m < 1440) return 'in ' + Math.floor(m / 60) + 'h';
+      return 'in ' + Math.floor(m / 1440) + 'd';
+    } catch { return ''; }
+  };
+
+  const _pColor = (p) => ({ Urgent: '#ef4444', High: '#f59e0b', Normal: '#3b82f6', Low: '#94a3b8' }[p] || '#94a3b8');
+
+  activeReminders.forEach(r => {
+    const chip = document.createElement('div');
+    chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;border:1px solid var(--color-border);font-size:0.75rem;background:var(--color-surface);flex-wrap:wrap;';
+    const dot     = `<span style="width:8px;height:8px;border-radius:50%;background:${_pColor(r.priority)};flex-shrink:0;display:inline-block;"></span>`;
+    const title2  = `<span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc2(r.title || 'Reminder')}</span>`;
+    const fire    = `<span style="color:var(--color-text-muted);white-space:nowrap;">${_fmtFire(r.nextFireAt)}</span>`;
+    const recur   = r.rrule ? `<span style="color:var(--color-text-muted);">\uD83D\uDD01</span>` : '';
+    const editB   = `<button data-edit-rid="${_esc2(r.id)}" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-text-muted);">\u270F\uFE0F</button>`;
+    const dismissB= `<button data-dismiss-rid="${_esc2(r.id)}" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-danger);">\u2715</button>`;
+    chip.innerHTML = dot + title2 + fire + recur + editB + dismissB;
+    chipStrip.appendChild(chip);
+  });
+
+  if (activeReminders.length > 3) {
+    const more = document.createElement('button');
+    more.style.cssText = 'font-size:0.73rem;color:var(--color-accent);background:none;border:none;cursor:pointer;text-align:left;';
+    more.textContent = '+' + (activeReminders.length - 3) + ' more\u2026';
+    more.addEventListener('click', () => import('../core/router.js').then(m => m.navigate('reminders')).catch(() => {}));
+    chipStrip.appendChild(more);
+  }
+  wrap.appendChild(chipStrip);
+
+  // ── Add Reminder toggle button ──
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.style.cssText = 'font-size:0.8rem;padding:6px 14px;border-radius:20px;border:1px dashed var(--color-border);cursor:pointer;background:transparent;color:var(--color-text-muted);display:flex;align-items:center;gap:6px;width:100%;justify-content:center;';
+  addBtn.textContent = '\uD83D\uDD14 Add Reminder';
+  wrap.appendChild(addBtn);
+
+  // ── Quick-set section ──
+  const quickSet = document.createElement('div');
+  quickSet.style.cssText = 'display:none;margin-top:8px;';
+
+  const presetRow = document.createElement('div');
+  presetRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;';
+
+  let _selectedOffset = 3600000;
+  const _PRESETS = [
+    { label: 'In 10m', offset: 600000 },
+    { label: 'In 1h',  offset: 3600000 },
+    { label: 'Tomorrow 9am', tomorrow: true },
+    { label: 'Custom\u2026', custom: true },
+  ];
+
+  _PRESETS.forEach(p => {
+    const pb = document.createElement('button');
+    pb.type = 'button';
+    pb.textContent = p.label;
+    pb.style.cssText = 'font-size:0.75rem;padding:5px 12px;border-radius:20px;border:1px solid var(--color-border);cursor:pointer;background:transparent;';
+    pb.addEventListener('click', () => {
+      if (p.custom) {
+        import('./reminder-form.js').then(m => m.openReminderForm({ targetEntity: entity })).catch(() => {});
+        return;
+      }
+      _selectedOffset = p.tomorrow ? null : p.offset;
+      presetRow.querySelectorAll('button').forEach(b => b.style.background = 'transparent');
+      pb.style.background = 'var(--color-accent-muted,#eff6ff)';
+    });
+    presetRow.appendChild(pb);
+  });
+  quickSet.appendChild(presetRow);
+
+  const _eLabel = (entity.title || entity.name || 'this').slice(0, 30);
+  const saveReminderBtn = document.createElement('button');
+  saveReminderBtn.type = 'button';
+  saveReminderBtn.style.cssText = 'width:100%;padding:7px;border-radius:8px;border:none;cursor:pointer;background:var(--color-accent);color:#fff;font-size:0.85rem;font-weight:600;';
+  saveReminderBtn.textContent = '\uD83D\uDD14 Set reminder for "' + _eLabel + '"';
+  quickSet.appendChild(saveReminderBtn);
+  wrap.appendChild(quickSet);
+
+  // ── Event subscriptions (auto-unsub when wrap removed from DOM) ──
+  const _unsubs = [];
+  const _refresh = () => {
+    _unsubs.forEach(fn => { try { fn(); } catch {} });
+    if (!wrap.isConnected) return;
+    wrap.remove();
+    if (container.isConnected) _renderFormReminderSection(container, entity);
+  };
+  [EVENTS.REMINDER_CREATED, EVENTS.REMINDER_UPDATED,
+   EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_SNOOZED].forEach(evt => _unsubs.push(on(evt, _refresh)));
+
+  // ── Delegated click handler for chip buttons ──
+  wrap.addEventListener('click', async (e) => {
+    const editRid    = e.target.closest('[data-edit-rid]')?.dataset.editRid;
+    const dismissRid = e.target.closest('[data-dismiss-rid]')?.dataset.dismissRid;
+    if (editRid) {
+      e.stopPropagation();
+      import('./reminder-form.js').then(m => m.openReminderForm({ reminderId: editRid })).catch(() => {});
+    }
+    if (dismissRid) {
+      e.stopPropagation();
+      const svc = window._fhEnv?.services?.reminder;
+      if (svc) { await svc.dismiss(dismissRid); _refresh(); }
+    }
+  });
+
+  addBtn.addEventListener('click', () => {
+    quickSet.style.display = quickSet.style.display === 'none' ? 'block' : 'none';
+  });
+
+  saveReminderBtn.addEventListener('click', async () => {
+    saveReminderBtn.disabled = true;
+    saveReminderBtn.textContent = '\u2026saving';
+    try {
+      const { createReminder } = await import('../services/reminder.js');
+      const now = new Date();
+      let fireAt;
+      if (_selectedOffset === null) {
+        const tom = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0);
+        const p = n => String(n).padStart(2, '0');
+        fireAt = tom.getFullYear() + '-' + p(tom.getMonth() + 1) + '-' + p(tom.getDate()) + 'T09:00:00';
+      } else {
+        const d = new Date(now.getTime() + _selectedOffset);
+        const p = n => String(n).padStart(2, '0');
+        fireAt = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':00';
+      }
+      await createReminder({
+        title: entity.title || entity.name || 'Reminder',
+        fireAt, status: 'active', nextFireAt: fireAt,
+      }, entity.id);
+      toast.success('Reminder set \u2713');
+      _refresh();
+    } catch (err) {
+      console.error('[entity-form] Reminder save failed:', err);
+      toast.error('Failed to save reminder');
+      saveReminderBtn.disabled = false;
+      saveReminderBtn.textContent = '\uD83D\uDD14 Set reminder for "' + _eLabel + '"';
+    }
+  });
+}
+
+
 async function _buildRelationsTab(container) {
   if (!_editEntity) return;
 
@@ -2535,6 +2728,11 @@ async function _buildRelationsTab(container) {
     }
 
     if (toolbar.children.length > 0) container.appendChild(toolbar);
+  }
+
+  // ── Reminder section (mirrors entity-panel quick-set, shown for all non-reminder types) ──
+  if (!['reminder', 'reminderLog'].includes(entity.type)) {
+    _renderFormReminderSection(container, entity).catch(e => console.warn('[entity-form] reminder section error:', e));
   }
 
   // ── Section 1: Add Connection ────────────────────────── //

@@ -1404,6 +1404,7 @@ function _renderPropertiesTab(container) {
 
   for (const field of _config.fields) {
     if (field.isTitle) continue; // Title is in header
+    if (field.hidden)  continue; // Hidden fields (e.g. timeTracked) handled by dedicated widgets
     const row = _createFieldRow(field);
     list.appendChild(row);
   }
