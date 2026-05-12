@@ -2050,6 +2050,9 @@ async function _buildFormTimeTrackerUI(container, entity) {
   });
 
   startBlockBtn.addEventListener('click', async () => {
+    if (!_ftLoaded || _ftStartBlock === (async () => {})) {
+      toast.error('Timer not ready — please try again'); return;
+    }
     const blockSecs = parseInt(blockSelect.value, 10);
     if (!blockSecs) return;
     _ftClearAlarm(taskId);
@@ -2108,9 +2111,26 @@ async function _buildRelationsTab(container) {
   if (!_editEntity) return;
 
   const entity = _editEntity;
+
+  // [BUG-12 FIX] Dispatch cleanup FIRST before clearing content, then show Loading
+  // (replaces the previous pattern where Loading showed for 0ms before being cleared)
+  container.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: false }));
   container.innerHTML = '<div style="padding:16px;font-size:var(--text-xs);color:var(--color-text-muted);">Loading…</div>';
 
   // ── Pre-load all entities (needed for relations section below) ─
+  // We await this early so the Loading indicator is actually visible during the IDB reads.
+  let _allEntities = [];
+  try {
+    const allTypes = getAllEntityTypes();
+    const buckets = await Promise.all(allTypes.map(t => getEntitiesByType(t.key).catch(() => [])));
+    _allEntities = buckets.flat()
+      .filter(e => !e.deleted && e.id !== entity.id)
+      .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  } catch (err) {
+    console.warn('[entity-form] relations: load all failed', err);
+  }
+
+  // ── Now clear and build (Loading was visible during the await above) ──────
   const _escR = (s) => !s ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const _relTime = (iso) => {
     if (!iso) return '';
@@ -2131,9 +2151,6 @@ async function _buildRelationsTab(container) {
     return e.title || e.name || 'Untitled';
   };
 
-  // [v5.1.0] BUG-5 FIX: Signal any existing timer widget to clean up event subscriptions
-  // before rebuilding. The timer widget listens for this event to unsubscribe its tick handlers.
-  container.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: false }));
   container.innerHTML = '';
 
   // ═══════════════════════════════════════════════════════════
@@ -2433,18 +2450,6 @@ async function _buildRelationsTab(container) {
     'max-height: 260px; overflow-y: auto; margin-top: 2px;',
   ].join(' ');
   searchWrap.appendChild(resultsList);
-
-  // Load all entities
-  let _allEntities = [];
-  try {
-    const allTypes = getAllEntityTypes();
-    const buckets = await Promise.all(allTypes.map(t => getEntitiesByType(t.key).catch(() => [])));
-    _allEntities = buckets.flat()
-      .filter(e => !e.deleted && e.id !== entity.id)
-      .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
-  } catch (err) {
-    console.warn('[entity-form] relations: load all failed', err);
-  }
 
   // Track linked IDs
   const _getLinkedIds = async () => {

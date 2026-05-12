@@ -1,6 +1,6 @@
 /**
- * FamilyHub v4.9.4 — Service Worker (sw.js)
- * [MAJOR] Status options, time tracker, tab renames, action buttons in Details
+ * FamilyHub v5.1.0 — Service Worker (sw.js)
+ * [minor] Phase 2: condition UI, quiet hours, timer in form, reminder badges, template library
  */
 'use strict';
 

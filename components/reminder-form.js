@@ -216,7 +216,7 @@ function _buildModal(existing, targetEnt, prefill) {
             <option value="all"    ${(d.conditionMode||'none')==='all'    ?'selected':''}>Fire if ALL conditions pass</option>
           </select>
         </div>
-        <div id="rf-cond-builder" style="display:none;flex-direction:column;gap:6px;margin-top:6px;">
+        <div id="rf-cond-builder" style="display:none;flex-direction:column;gap:6px;margin-top:6px;max-height:200px;overflow-y:auto;">
           <div id="rf-cond-rows"></div>
           <button id="rf-cond-add" type="button" style="font-size:0.75rem;padding:4px 10px;border:1px dashed var(--color-accent,#4f8ef7);border-radius:6px;background:transparent;color:var(--color-accent,#4f8ef7);cursor:pointer;align-self:flex-start;">
             + Add condition row
@@ -350,6 +350,8 @@ function _buildModal(existing, targetEnt, prefill) {
 
     const DATE_FIELDS = new Set(['dueDate', 'date', 'startDate', 'endDate', 'createdAt']);
     const DATE_OPS    = new Set(['before', 'after', 'within_days']);
+    // Fields that have a fixed semantic operator (hide value input when auto-selected)
+    const AUTO_OP_FIELDS = { assignedTo: 'includes' };
 
     const _toggleVal = () => {
       const noVal = NO_VALUE_OPS.has(opSel.value);
@@ -361,8 +363,20 @@ function _buildModal(existing, targetEnt, prefill) {
         valInp.type = 'text';
       }
     };
+
+    // [BUG-34 FIX] Auto-select semantic operator when field changes
+    const _onFieldChange = () => {
+      const autoOp = AUTO_OP_FIELDS[fieldSel.value];
+      if (autoOp) {
+        opSel.value = autoOp;
+        valInp.value = fieldSel.value === 'assignedTo' ? 'me' : '';
+      }
+      _toggleVal();
+      _updateCondPreview();
+    };
+
     opSel.addEventListener('change', () => { _toggleVal(); _updateCondPreview(); });
-    fieldSel.addEventListener('change', _updateCondPreview);
+    fieldSel.addEventListener('change', _onFieldChange);
     valInp.addEventListener('input', _updateCondPreview);
     _toggleVal();
 

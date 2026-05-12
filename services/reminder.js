@@ -626,12 +626,13 @@ export async function requestPushPermission() {
 //   - Claude API NLP input        (services/claude-nlp.js — parse natural language fireAt)
 //   - Person-routed delivery      (per-account push token table in MySQL)
 //   - Export / CSV audit trail    (api/reminder-export.php)
-// Export stubs so importing code doesn't break when Phase 3 files are added:
+//
+// [BUG-36 FIX] Stubs are async so callers can safely await them without try-catch surprises.
 export const phase3Stubs = {
-  autoRulesEngine:  () => { throw new Error('[Phase 3] Auto-rules engine not yet implemented'); },
-  chainedReminders: () => { throw new Error('[Phase 3] Chained reminders not yet implemented'); },
-  nlpInput:         () => { throw new Error('[Phase 3] NLP input not yet implemented'); },
-  geofence:         () => { throw new Error('[Phase 3] Geofencing not yet implemented'); },
+  autoRulesEngine:  async () => Promise.reject(new Error('[Phase 3] Auto-rules engine not yet implemented')),
+  chainedReminders: async () => Promise.reject(new Error('[Phase 3] Chained reminders not yet implemented')),
+  nlpInput:         async () => Promise.reject(new Error('[Phase 3] NLP input not yet implemented')),
+  geofence:         async () => Promise.reject(new Error('[Phase 3] Geofencing not yet implemented')),
 };
 
 export const reminderServiceDescriptor = {
