@@ -270,7 +270,7 @@ async function _buildReminderMap() {
   } catch (e) { console.warn('[kanban] _buildReminderMap failed:', e); }
 }
 
-
+async function _buildBlockerMap() {
   _blockMap.clear();
   const doneSet   = new Set(['Completed', 'Done', 'done']);
   const taskIndex = new Map(_tasks.map(t => [t.id, t]));
