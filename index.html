@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v4.9.4 [MAJOR] Status options, time tracker, tab renames, action buttons in Details -->
+  <!-- Build: v5.0.0 [MAJOR] Reminder system: scheduler, alert drawer, recurrence engine -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=4.7.8" />
-  <link rel="stylesheet" href="./styles/layout.css?v=4.7.8" />
-  <link rel="stylesheet" href="./styles/components.css?v=4.7.8" />
-  <link rel="stylesheet" href="./styles/dark.css?v=4.7.8" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=5.0.0" />
+  <link rel="stylesheet" href="./styles/layout.css?v=5.0.0" />
+  <link rel="stylesheet" href="./styles/components.css?v=5.0.0" />
+  <link rel="stylesheet" href="./styles/dark.css?v=5.0.0" />
 </head>
 <body>
 
@@ -348,6 +348,13 @@
           <span class="nav-item-label">Gallery</span>
         </button>
       </li>
+      <li role="listitem">
+        <button class="nav-item" data-view="reminders"
+                aria-label="Reminders">
+          <span class="nav-item-icon" aria-hidden="true">🔔</span>
+          <span class="nav-item-label">Reminders</span>
+        </button>
+      </li>
 
       <!-- Entity Types (Blueprint §4.2) -->
       <li role="listitem" aria-hidden="true">
@@ -537,6 +544,12 @@
     <div id="view-settings" class="view" role="region" aria-label="Settings"
          aria-hidden="true">
       <!-- Populated by views/settings.js -->
+    </div>
+
+    <!-- [v5.0.0] Reminders view -->
+    <div id="view-reminders" class="view" role="region" aria-label="Reminders"
+         aria-hidden="true">
+      <!-- Populated by views/reminders.js -->
     </div>
 
   </main><!-- /#main -->
@@ -769,6 +782,11 @@
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
   import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
+  // [v5.0.0] Reminder system
+  import { initReminderService,
+           reminderServiceDescriptor }   from './services/reminder.js';
+  import { mountAlertDrawer }           from './components/alert-card.js';
+  import './views/reminders.js';         // registers 'reminders' view
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -963,6 +981,8 @@
       serviceRegistry.add('history',      historyServiceDescriptor);
       // P-11: command (no deps)
       serviceRegistry.add('command',      commandServiceDescriptor);
+      // [v5.0.0] Reminder service (depends on data + notification)
+      serviceRegistry.add('reminder',     reminderServiceDescriptor);
 
       // P-01: Build the shared environment object (registry + services)
       const env = await buildEnv();
@@ -996,6 +1016,25 @@
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
+      initReminderService(); // [v5.0.0] reminder scheduler + SW sync
+      mountAlertDrawer();    // [v5.0.0] alert drawer component
+
+      // [v5.0.0] NEW-C-05 fix: Deep-link handler for push notification taps
+      // SW notificationclick opens /?open=TYPE:ID when no window is open
+      // Must run AFTER navigate(startView) so the app is fully rendered first
+      {
+        const _openParam = new URLSearchParams(window.location.search).get('open');
+        if (_openParam && _openParam.includes(':')) {
+          const [_openType, _openId] = _openParam.split(':');
+          if (_openId) {
+            // Brief defer so app renders before panel opens
+            setTimeout(async () => {
+              const { openPanel } = await import('./components/entity-panel.js');
+              openPanel(_openId).catch(console.error);
+            }, 400);
+          }
+        }
+      }
 
       // CS-02: Wire context switcher buttons
       {
@@ -1146,7 +1185,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=4.7.8', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=5.0.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
@@ -1220,7 +1259,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '4.9.4', emit, on, env: window._fhEnv,
+        version: '5.0.0', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

@@ -28,6 +28,9 @@ import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { mountActivityStream, recordCreated } from './activity-stream.js';
+
+// 3P-L-03: module-scope constant for footer type exclusion
+const _NO_REMINDER_TYPES = new Set(['reminder','reminderLog','post','comment','activity','message','conversation','dailyReview','tag']);
 // [fix] time-tracker loaded dynamically — panel works even before file is deployed
 let getSession    = () => null;
 let startFreeRun  = async () => {};
@@ -106,6 +109,8 @@ const TYPE_VIEW_MAP = {
   medication:   'entity-type/medication',
   // Daily Review → daily view
   dailyReview:  'daily',
+  // [v5.0.0] Reminder → reminders view
+  reminder:     'reminders',
 };
 
 // ── DOM refs (cached once on init) ───────────────────────── //
@@ -1417,6 +1422,204 @@ function _renderPropertiesTab(container) {
 
   container.appendChild(list);
   container.appendChild(meta);
+
+  // [v5.0.0] Reminder strip + quick-set footer
+  // Skip for reminders themselves and reminderLog entries
+  // 3P-L-03 fix: _NO_REMINDER_TYPES is now module-level (not re-created per render)
+  if (_entity && !_NO_REMINDER_TYPES.has(_entity.type)) {
+    // NEW-M-03: async function called from sync context — catch for error visibility
+    _renderReminderFooter(container, _entity).catch(err => console.warn('[entity-panel] reminder footer failed:', err));
+  }
+}
+
+/**
+ * [v5.0.0] Render the reminder quick-set widget + chip strip in the panel footer.
+ * Reads from module-level _entity (not a prop) — consistent with rest of panel.
+ */
+async function _renderReminderFooter(container, entity) {
+  const footer = document.createElement('div');
+  footer.className = 'panel-reminder-footer';
+  footer.style.cssText = 'margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border,#e2e8f0);';
+
+  // Load active reminders for this entity via graph edges
+  // C-07 fix: use already-statically-imported getEdgesTo and getEntity (no dynamic import)
+  let activeReminders = [];
+  try {
+    const edges = await getEdgesTo(entity.id, 'reminds');
+    const all   = await Promise.all(
+      edges.filter(e => e.fromType === 'reminder').map(e => getEntity(e.fromId))
+    );
+    // 3P-M-05 fix: include snoozed reminders in chip strip (user should see them)
+    activeReminders = all.filter(r => r && (r.status === 'active' || r.status === 'snoozed'));
+  } catch {}
+
+  const chipHtml = activeReminders.slice(0, 3).map(r => {
+    const { rruleToHuman: rth } = { rruleToHuman: (x) => x ? '🔁' : '' };
+    const fireLabel = r.nextFireAt ? _formatFireAt(r.nextFireAt) : '—';
+    const pColor   = { Urgent:'#ef4444', High:'#f59e0b', Normal:'#3b82f6', Low:'#94a3b8' }[r.priority] || '#94a3b8';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;
+      border-radius:6px;border:1px solid var(--color-border,#e2e8f0);font-size:0.75rem;
+      background:var(--color-surface-raised,#f8fafc);flex-wrap:wrap;">
+      <span style="width:8px;height:8px;border-radius:50%;background:${pColor};flex-shrink:0;display:inline-block;"></span>
+      <span style="font-weight:500;">${r.title || 'Reminder'}</span>
+      <span style="color:var(--color-text-muted,#94a3b8);">${fireLabel}</span>
+      ${r.rrule ? '<span style="color:var(--color-text-muted,#94a3b8);">🔁</span>' : ''}
+      <button class="rm-chip-edit" data-rid="${r.id}"
+        style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-text-muted,#64748b);">✏️</button>
+      <button class="rm-chip-dismiss" data-rid="${r.id}"
+        style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-danger,#ef4444);">✕</button>
+    </div>`;
+  }).join('');
+
+  const moreCount = activeReminders.length > 3 ? activeReminders.length - 3 : 0;
+
+  footer.innerHTML = `
+    <div style="margin-bottom:8px;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+        ${chipHtml}
+        ${moreCount > 0 ? `<button class="rm-view-all" style="font-size:0.73rem;color:var(--color-primary,#4f8ef7);background:none;border:none;cursor:pointer;">+${moreCount} more…</button>` : ''}
+      </div>
+      <button class="rm-quick-add" style="
+        font-size:0.8rem;padding:6px 14px;border-radius:20px;
+        border:1px dashed var(--color-border,#cbd5e1);cursor:pointer;
+        background:transparent;color:var(--color-text-muted,#64748b);
+        display:flex;align-items:center;gap:6px;width:100%;justify-content:center;">
+        🔔 Add Reminder
+      </button>
+    </div>
+    <div class="rm-quick-set" style="display:none;margin-top:8px;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+        <button class="rm-preset" data-offset="600000" style="${_rmPresetBtn()}">In 10m</button>
+        <button class="rm-preset" data-offset="3600000" style="${_rmPresetBtn()}">In 1h</button>
+        <button class="rm-preset" data-tomorrow="1" style="${_rmPresetBtn()}">Tomorrow 9am</button>
+        <button class="rm-preset" data-custom="1" style="${_rmPresetBtn()}">Custom…</button>
+      </div>
+      <button class="rm-quick-save" style="
+        width:100%;padding:7px;border-radius:8px;border:none;cursor:pointer;
+        background:var(--color-primary,#4f8ef7);color:#fff;font-size:0.85rem;font-weight:600;">
+        🔔 Set reminder for "${(entity.title || entity.name || 'this').slice(0, 30)}${(entity.title || entity.name || '').length > 30 ? '…' : ''}"
+      </button>
+    </div>
+  `;
+
+  container.appendChild(footer);
+
+  // H-08 fix: subscribe to reminder events so chips refresh when a reminder fires/updates
+  // outside the panel (e.g. scheduler fires while entity panel is open).
+  const _footerUnsubs = [];
+  const _refreshFooter = () => {
+    if (!footer.isConnected) {
+      _footerUnsubs.forEach(fn => { try { fn(); } catch {} });
+      return;
+    }
+    footer.remove();
+    _renderReminderFooter(container, entity);
+  };
+  _footerUnsubs.push(on(EVENTS.REMINDER_FIRED,     _refreshFooter));
+  _footerUnsubs.push(on(EVENTS.REMINDER_UPDATED,   _refreshFooter));
+  _footerUnsubs.push(on(EVENTS.REMINDER_CREATED,   _refreshFooter));
+  _footerUnsubs.push(on(EVENTS.REMINDER_DISMISSED, _refreshFooter));
+
+  let _selectedOffset = 3600000; // default 1h
+
+  // Wire quick-add toggle
+  footer.querySelector('.rm-quick-add')?.addEventListener('click', () => {
+    const qs = footer.querySelector('.rm-quick-set');
+    if (qs) qs.style.display = qs.style.display === 'none' ? 'block' : 'none';
+  });
+
+  // Wire preset buttons
+  footer.querySelectorAll('.rm-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.custom) {
+        // Open full form
+        import('./reminder-form.js').then(m => m.openReminderForm({ targetEntity: entity })).catch(console.error);
+        return;
+      }
+      _selectedOffset = btn.dataset.tomorrow ? null : parseInt(btn.dataset.offset, 10);
+      footer.querySelectorAll('.rm-preset').forEach(b => b.style.background = 'transparent');
+      btn.style.background = 'var(--color-primary-light,#eff6ff)';
+    });
+  });
+
+  // Wire save
+  footer.querySelector('.rm-quick-save')?.addEventListener('click', async () => {
+    try {
+      const { createReminder } = await import('../services/reminder.js');
+      const now = new Date();
+      let fireAt;
+      if (_selectedOffset === null) {
+        // Tomorrow 9am
+        const tom = new Date(now.getFullYear(), now.getMonth(), now.getDate()+1, 9, 0, 0);
+        const p = n => String(n).padStart(2,'0');
+        fireAt = `${tom.getFullYear()}-${p(tom.getMonth()+1)}-${p(tom.getDate())}T09:00:00`;
+      } else {
+        const d = new Date(now.getTime() + _selectedOffset);
+        const p = n => String(n).padStart(2,'0');
+        fireAt = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+      }
+      await createReminder({
+        title:      entity.title || entity.name || 'Reminder',
+        fireAt,
+        status:     'active',
+        nextFireAt: fireAt,
+      }, entity.id);
+      // H-08 fix: clean up event subscriptions before refresh
+      _footerUnsubs.forEach(fn => { try { fn(); } catch {} });
+      footer.remove();
+      // L-04 fix: only re-render if container is still attached to DOM
+      if (container.isConnected) _renderReminderFooter(container, entity);
+    } catch (err) {
+      console.error('[entity-panel] Quick reminder save failed:', err);
+    }
+  });
+
+  // Wire chip edit buttons
+  footer.querySelectorAll('.rm-chip-edit').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      import('./reminder-form.js').then(m => m.openReminderForm({ reminderId: btn.dataset.rid })).catch(console.error);
+    });
+  });
+
+  // Wire chip dismiss buttons
+  footer.querySelectorAll('.rm-chip-dismiss').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const svc = window._fhEnv?.services?.reminder;
+      if (svc) {
+        await svc.dismiss(btn.dataset.rid);
+        // H-08 fix: clean up event subscriptions before refresh
+        _footerUnsubs.forEach(fn => { try { fn(); } catch {} });
+        footer.remove();
+        // L-04 fix: only re-render if container is still attached to DOM
+        if (container.isConnected) _renderReminderFooter(container, entity);
+      }
+    });
+  });
+
+  // Wire "view all" → navigate to reminders view
+  footer.querySelector('.rm-view-all')?.addEventListener('click', () => {
+    import('../core/router.js').then(m => m.navigate('reminders')).catch(console.error);
+  });
+}
+
+function _rmPresetBtn() {
+  return 'font-size:0.75rem;padding:5px 12px;border-radius:20px;border:1px solid var(--color-border,#e2e8f0);cursor:pointer;background:transparent;';
+}
+
+function _formatFireAt(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso.includes('T') ? iso : iso + 'T00:00:00');
+    const now = new Date();
+    const ms = d - now;
+    if (ms < 0) return 'overdue';
+    const m = Math.floor(ms / 60000);
+    if (m < 60) return `in ${m}m`;
+    if (m < 1440) return `in ${Math.floor(m/60)}h`;
+    return `in ${Math.floor(m/1440)}d`;
+  } catch { return iso; }
 }
 
 /**

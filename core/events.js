@@ -144,4 +144,21 @@ export const EVENTS = Object.freeze({
 
   // FAB / quick-create
   FAB_CREATE:         'fab:create',
+
+  // ── Reminder lifecycle [v5.0.0] ───────────────────────────
+  // MUST be inside Object.freeze({}) — cannot be appended after freeze
+  REMINDER_CREATED:    'reminder:created',
+  REMINDER_UPDATED:    'reminder:updated',
+  REMINDER_FIRED:      'reminder:fired',
+  REMINDER_SNOOZED:    'reminder:snoozed',
+  REMINDER_DISMISSED:  'reminder:dismissed',
+  REMINDER_EXPIRED:    'reminder:expired',
+  REMINDER_PAUSED:     'reminder:paused',
+  REMINDER_RESUMED:    'reminder:resumed',
+
+  // ── Alert drawer [v5.0.0] ─────────────────────────────────
+  ALERT_ADDED:         'alert:added',
+  ALERT_DISMISSED:     'alert:dismissed',
+  ALERT_CLEARED_ALL:   'alert:clearedAll',
+  ALERT_COUNT_CHANGED: 'alert:countChanged',
 });

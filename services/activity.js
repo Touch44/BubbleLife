@@ -11,7 +11,8 @@ import { getAccount }                   from '../core/auth.js';
 import { getActiveContext }             from '../core/context.js';
 
 // Types to never generate activity for
-const SKIP_TYPES  = new Set(['post', 'comment', 'activity', 'message', 'conversation']);
+// [v5.0.0] 'reminder' + 'reminderLog' added — scheduler saves would flood the activity feed
+const SKIP_TYPES  = new Set(['post', 'comment', 'activity', 'message', 'conversation', 'reminder', 'reminderLog']);
 
 // Types that DO generate activity cards
 const TRACK_TYPES = new Set([

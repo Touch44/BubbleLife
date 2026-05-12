@@ -197,13 +197,17 @@ async function _clearDirtyQueues() {
   ]);
 }
 
+// 3P-C-04 fix: reminderLog entities are local-only audit trail — skip MySQL sync
+// to prevent dirty queue flooding (recurring reminders generate 24-240 logs/day)
+const _SYNC_SKIP_TYPES = new Set(['reminderLog']);
+
 async function _loadDirtyEntities(entityIds) {
   if (!entityIds.length) return [];
   const db      = await _getDb();
   const results = await Promise.all(
     entityIds.map(id => db.getEntity(id).catch(() => null))
   );
-  return results.filter(Boolean);
+  return results.filter(e => e && !_SYNC_SKIP_TYPES.has(e.type));
 }
 
 async function _loadDirtyEdges(edgeIds) {

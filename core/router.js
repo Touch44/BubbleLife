@@ -35,6 +35,8 @@ export const VIEW_KEYS = Object.freeze({
   // Generic entity-type view
   ENTITY_TYPE:      'entity-type',
   MESSAGES:         'messages',
+  // [v5.0.0] Reminder management view
+  REMINDERS:        'reminders',
 });
 
 /** Human-readable labels for breadcrumbs */
@@ -55,6 +57,7 @@ const VIEW_LABELS = {
   'gallery':         'Gallery',
   'settings':        'Settings',
   'messages':        'Messages',
+  'reminders':       'Reminders',
   'entity-type':     'Entities',
 };
 

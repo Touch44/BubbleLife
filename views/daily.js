@@ -2702,6 +2702,7 @@ const _DAILY_REFRESH_TYPES = new Set([
   // if either is renamed the daily view must refresh to reflect the new name.
   'person','project',
   'conversation',   // unread message count changes when message arrives
+  'reminder',       // [v5.0.0] new reminder entities trigger daily refresh
 ]);
 let _dailyRefreshTimer = null;
 on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {

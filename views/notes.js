@@ -261,8 +261,21 @@ function _renderDetail() {
       const account = getAccount();
       _isSaving = true;
       try {
-        note.body = newBody;
-        await saveEntity({ ...note, body: newBody }, account?.id);
+        // 3P-H-04 fix: re-sanitize before save to strip event handlers pasted after load
+        let safeBody = newBody;
+        if (newBody) {
+          const _dp2 = new DOMParser();
+          const _sanitized = _dp2.parseFromString(newBody, 'text/html');
+          _sanitized.querySelectorAll('script,iframe,object,embed').forEach(el => el.remove());
+          _sanitized.querySelectorAll('*').forEach(el => {
+            for (const attr of [...el.attributes]) {
+              if (attr.name.startsWith('on')) el.removeAttribute(attr.name);
+            }
+          });
+          safeBody = _sanitized.body?.innerHTML || newBody;
+        }
+        note.body = safeBody;
+        await saveEntity({ ...note, body: safeBody }, account?.id);
       } finally {
         _isSaving = false;
       }

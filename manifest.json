@@ -81,6 +81,18 @@
           "sizes": "96x96"
         }
       ]
+    },
+    {
+      "name": "Reminders",
+      "short_name": "Reminders",
+      "description": "View and manage reminders",
+      "url": "/#reminders",
+      "icons": [
+        {
+          "src": "./icons/shortcut-daily.png",
+          "sizes": "96x96"
+        }
+      ]
     }
   ],
   "related_applications": [],

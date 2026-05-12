@@ -1855,3 +1855,36 @@ kbd {
 /* ── Tour Engine CSS (duplicate guard) ───────────────────── */
 #fh-tour-tooltip { pointer-events: all; }
 #fh-tour-backdrop { pointer-events: none; }
+
+
+/* ── [v5.0.0] FAB alert badge (REMINDER_COUNT_CHANGED sets data-alerts) ── */
+/* Badge is hidden when data-alerts attribute is absent (removeAttribute called at 0) */
+#fab-main-btn[data-alerts]::after {
+  content: attr(data-alerts);
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  background: var(--color-danger, #ef4444);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Ensure FAB button has position:relative for badge positioning */
+#fab-main-btn {
+  position: relative;
+}
+
+/* ── Alert drawer (injected by alert-card.js) ── */
+#alert-drawer {
+  /* Z-index handled inline; dark mode colors via CSS vars */
+  color-scheme: light dark;
+}

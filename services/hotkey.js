@@ -270,6 +270,8 @@ function _seedBuiltins(add, env, _searchModule, _panelModule) {
     ['k', 'kanban',      'Go to Kanban'],
     ['c', 'calendar',    'Go to Calendar'],
     ['g', 'graph',       'Go to Knowledge Graph'],
+    // [v5.0.0] 3P-H-02: reminders navigation shortcut
+    ['r', 'reminders',   'Go to Reminders'],
   ];
 
   for (const [key, view, description] of NAV) {

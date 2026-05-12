@@ -4,15 +4,15 @@
  */
 'use strict';
 
-const APP_VERSION   = '4.9.4'; // [MAJOR] time tracking, status fix, tab renames
+const APP_VERSION   = '5.0.0'; // [MAJOR] Reminder system // [MAJOR] time tracking, status fix, tab renames
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
-  './', './index.html', './manifest.json',
-  './styles/tokens.css?v=4.9.4', './styles/layout.css?v=4.9.4',
-  './styles/components.css?v=4.9.4', './styles/dark.css?v=4.9.4',
+  './', './index.html', './manifest.json?v=5.0.0', // 3P-L-02: version-bust manifest
+  './styles/tokens.css?v=5.0.0', './styles/layout.css?v=5.0.0',
+  './styles/components.css?v=5.0.0', './styles/dark.css?v=5.0.0',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
@@ -33,6 +33,10 @@ const SHELL_FILES = [
   './views/generic-list.js',
   './views/dashboard.js',
   './views/entity-type.js', './views/graph-view.js', './views/object-studio.js',
+  // [v5.0.0] Reminder system files
+  './views/reminders.js',
+  './services/reminder.js', './services/rrule-lite.js', './services/condition-eval.js',
+  './components/alert-card.js', './components/reminder-form.js',
   './icons/icon-192.png', './icons/icon-192-maskable.png',
   './icons/icon-512.png', './icons/icon-512-maskable.png',
   './icons/shortcut-daily.png', './icons/shortcut-task.png',
@@ -139,14 +143,25 @@ self.addEventListener('push', event => {
   );
 });
 
+// [v5.0.0] Reminder insurance timers — cleared on SW termination (primary = in-page scheduler)
+const _pendingReminders = new Map();
+
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const url = event.notification.data || '/';
+  const { action }      = event;
+  const { reminderId, targetId } = event.notification.data || {};
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
-      const ex = cs.find(c => c.url.includes(self.location.origin));
-      if (ex) { ex.focus(); ex.navigate(url); return; }
-      return self.clients.openWindow(url);
+      const client = cs.find(c => c.focused) || cs[0];
+      if (client) {
+        // Send action back to in-page handler
+        client.postMessage({ type: 'NOTIF_ACTION', action, reminderId, targetId });
+        return client.focus();
+      }
+      // No open window — open with deep link
+      const openUrl = targetId ? `/?open=reminder:${reminderId}` : '/';
+      return self.clients.openWindow(openUrl);
     })
   );
 });
@@ -154,8 +169,58 @@ self.addEventListener('notificationclick', event => {
 // MESSAGE
 self.addEventListener('message', event => {
   if (!event.data) return;
-  if (event.data.type === 'SKIP_WAITING') self.skipWaiting();
-  if (event.data.type === 'CACHE_URLS' && Array.isArray(event.data.urls)) {
+  const { type, reminderId, msUntilFire, title, body, data } = event.data;
+
+  if (type === 'SKIP_WAITING') { self.skipWaiting(); return; }
+
+  if (type === 'CACHE_URLS' && Array.isArray(event.data.urls)) {
     caches.open(CACHE_DYNAMIC).then(c => c.addAll(event.data.urls)).catch(() => {});
+    return;
+  }
+
+  // [v5.0.0] Reminder SW insurance timers
+  if (type === 'SCHEDULE_REMINDER' && reminderId && msUntilFire > 0) {
+    if (_pendingReminders.has(reminderId)) clearTimeout(_pendingReminders.get(reminderId));
+    const tid = setTimeout(() => {
+      self.registration.showNotification(title || 'Reminder', {
+        body:    body || '',
+        icon:    './icons/icon-192.png',
+        badge:   './icons/icon-192.png',
+        tag:     reminderId,
+        data:    data || { reminderId },
+        actions: [
+          { action: 'snooze',  title: 'Snooze 10m' },
+          { action: 'dismiss', title: 'Dismiss' },
+        ],
+        vibrate: [100, 50, 100],
+      });
+      _pendingReminders.delete(reminderId);
+    }, Math.min(msUntilFire, 2147483647)); // clamp to max setTimeout
+    _pendingReminders.set(reminderId, tid);
+    return;
+  }
+
+  if (type === 'CANCEL_REMINDER' && reminderId) {
+    clearTimeout(_pendingReminders.get(reminderId));
+    _pendingReminders.delete(reminderId);
+    return;
+  }
+
+  if (type === 'SHOW_NOTIFICATION' && title) {
+    // H-03 fix: add tag (deduplication) and consistent vibrate; extract reminderId from data
+    const _snTag = (data && data.reminderId) ? data.reminderId : ('fh-notif-' + Date.now());
+    self.registration.showNotification(title, {
+      body:    body || '',
+      icon:    './icons/icon-192.png',
+      badge:   './icons/icon-192.png',
+      tag:     _snTag,
+      data:    data || {},
+      actions: [
+        { action: 'snooze',  title: 'Snooze 10m' },
+        { action: 'dismiss', title: 'Dismiss' },
+      ],
+      vibrate: [100, 50, 100],
+    });
+    return;
   }
 });

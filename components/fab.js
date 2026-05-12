@@ -12,6 +12,15 @@
 import { on, EVENTS }         from '../core/events.js';
 import { getCurrentView }      from '../core/router.js';
 import { openForm }            from './entity-form.js';
+// [v5.0.0] reminder form import — dynamic to avoid circular dependency
+let _openReminderForm = null;
+async function _ensureReminderForm() {
+  if (!_openReminderForm) {
+    const m = await import('./reminder-form.js').catch(() => null);
+    _openReminderForm = m?.openReminderForm || null;
+  }
+  return _openReminderForm;
+}
 
 // ── DOM refs ──────────────────────────────────────────────── //
 let _fab, _fabMainBtn;
@@ -120,6 +129,18 @@ export function initFab() {
     if (_fab?.classList.contains('fab-expanded')) collapseFab();
   });
 
+  // [v5.0.0] Alert badge — removeAttribute when 0 (NOT setAttribute '0')
+  // CSS [data-alerts]::after uses attr(), so attribute must be ABSENT to hide badge
+  on(EVENTS.ALERT_COUNT_CHANGED, (count) => {
+    const btn = document.getElementById('fab-main-btn');
+    if (!btn) return;
+    if (count > 0) {
+      btn.setAttribute('data-alerts', String(count));
+    } else {
+      btn.removeAttribute('data-alerts'); // ← removeAttribute, never setAttribute('data-alerts','0')
+    }
+  });
+
   console.log('[fab] Initialised.');
 }
 
@@ -151,10 +172,16 @@ export function collapseFab() {
  */
 function _handleFabType(type, prefill = {}) {
   if (type === 'more') {
-    // If we're in a Collections view (entity-type), default to that entity type
     const currentView = getCurrentView();
     const viewKey     = currentView?.viewKey || '';
     const entityType  = currentView?.params?.entityType;
+
+    // 3P-H-01 fix: reminders view → open reminder creation form (not entity form)
+    if (viewKey === 'reminders') {
+      _ensureReminderForm().then(fn => fn && fn({})).catch(console.error);
+      return;
+    }
+
     const defaultType = (viewKey === 'entity-type' && entityType)
       ? entityType
       : (VIEW_DEFAULT_TYPE[viewKey] || 'note');

@@ -155,7 +155,10 @@ async function _getEntities() {
 
   try {
     const all    = await queryEntities({ includeDeleted: false });
-    _entityCache = all || [];
+    // 3P-C-02 fix: exclude reminderLog (fire history entries) and internal system types
+    // from search results to prevent noise. reminder entities ARE searchable (users may search for them).
+    const _SEARCH_SKIP = new Set(['reminderLog', 'activity', 'dailyReview']);
+    _entityCache = (all || []).filter(e => !_SEARCH_SKIP.has(e.type));
     _cacheStale  = false;
     console.log(`[search] Cache loaded: ${_entityCache.length} entities.`);
   } catch (err) {
