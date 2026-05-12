@@ -145,7 +145,8 @@ async function renderRemindersView(params, env) {
   });
 
   const refreshOn = [EVENTS.REMINDER_CREATED, EVENTS.REMINDER_UPDATED,
-                     EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_PAUSED, EVENTS.REMINDER_RESUMED];
+                     EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_PAUSED,
+                     EVENTS.REMINDER_RESUMED,   EVENTS.REMINDER_SNOOZED];
   for (const evt of refreshOn) {
     _unsubs.push(on(evt, () => {
       _renderList(gen);
@@ -406,7 +407,7 @@ function _row(r) {
       <div style="font-size:0.73rem;color:var(--color-text-muted,#94a3b8);display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;align-items:center;">
         <span>${fire}</span>${recur}
         ${r.isTemplate ? '<span style="background:#e0e7ff;color:#3730a3;padding:1px 6px;border-radius:4px;font-size:0.65rem;font-weight:600;">TEMPLATE</span>' : ''}
-        ${hasCond ? '<span style="font-size:0.65rem;color:var(--color-text-muted,#94a3b8);">🔍 Condition</span>' : ''}
+        ${r.conditionMode && r.conditionMode !== 'none' ? '<span style="font-size:0.65rem;color:var(--color-accent,#4f8ef7);">🔍 Condition</span>' : ''}
       </div>
     </div>
     <div style="display:flex;gap:4px;flex-shrink:0;">${btns.join('')}</div>

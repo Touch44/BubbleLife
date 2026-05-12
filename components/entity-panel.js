@@ -1209,7 +1209,7 @@ const CONTENT_FIRST_TYPES = new Set([
 const VIEW_DEFS = [
   { key: 'content',    icon: '📄',  title: 'Content' },
   { key: 'properties', icon: '📝',  title: 'Properties' },
-  { key: 'relations',  icon: '🔗',  title: 'Details' },    // [MAJOR] renamed from Relations
+  { key: 'relations',  icon: '🔗',  title: 'Connections' }, // [v5.1.0] renamed to Connections
   { key: 'activity',   icon: '📋',  title: 'Change Log' }, // [MAJOR] renamed from Activity
 ];
 
@@ -3209,7 +3209,7 @@ async function _renderRelationsTab(container) {
       actRow.appendChild(convBtn);
     }
 
-    // Delete: available in header toolbar — not duplicated in Details tab (EP-1 fix)
+    // Delete: available in header toolbar — not duplicated in Connections tab (EP-1 fix)
   }
 
   // ── Section 1: Time Tracker (tasks only) ────────────────────

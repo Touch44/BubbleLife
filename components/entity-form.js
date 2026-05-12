@@ -414,6 +414,7 @@ function _buildAndMount(config) {
     btn.innerHTML = `<span style="font-size:13px">${icon}</span><span>${label}</span>`;
     if (disabled) {
       btn.disabled = true;
+      btn.setAttribute('aria-disabled', 'true');
       btn.style.opacity = '0.35';
       btn.style.cursor = 'default';
       btn.title = 'Save first to unlock';
@@ -421,13 +422,11 @@ function _buildAndMount(config) {
     return btn;
   };
 
-  const tab1Btn = _mkTab('fields',    'Fields',                                        '📝');
-  // [v5.1.0] For tasks: Tab 2 = "Activity" (change log). For others: "Info" (metadata + log).
-  const _tab2Label = (_editEntity?.type === 'task') ? 'Activity' : 'Info';
-  const tab2Btn = _mkTab('details',   _tab2Label,                                      '📋', !_editEntity);
-  // [v5.1.0] Tab 3 = "Details" for all types (actions + relations + time tracker for tasks).
-  const _tab3Label = (_editEntity?.type === 'task') ? 'Details ⏱' : 'Details';
-  const tab3Btn = _mkTab('relations', _tab3Label,                                      '🔗', !_editEntity);
+  const tab1Btn = _mkTab('fields',    'Details',                                       '📋');
+  // Tab 2: "Activity" for ALL types — shows time tracking (tasks) + metadata + change history
+  const tab2Btn = _mkTab('details',   'Activity',                                      '⚡', !_editEntity);
+  // Tab 3: "Connections" — actions + relations to other entities (was "Details"/"Relations")
+  const tab3Btn = _mkTab('relations', 'Connections',                                   '🔗', !_editEntity);
 
   const _applyTabStyles = () => {
     [tab1Btn, tab2Btn, tab3Btn].forEach(b => {
@@ -452,7 +451,7 @@ function _buildAndMount(config) {
       if (key === 'details' && tab2Body && !tab2Body.dataset.loaded) {
         tab2Body.dataset.loaded = '1';
         const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
-        _buildDetailsTab(tab2Body, freshConfig || config);
+        _buildDetailsTab(tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
       }
       // Lazy-load Tab 3 on first open
       if (key === 'relations' && tab3Body && !tab3Body.dataset.loaded) {
@@ -481,11 +480,11 @@ function _buildAndMount(config) {
   }
 
   if (_editEntity) {
-    // Tab 1: Fields (existing form body)
+    // Tab 1: Details (form fields)
     tab1Body = document.createElement('div');
     tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; gap: 0;';
 
-    // ── Tab 1 action bar: status toggle + open graph ────────
+    // ── Details tab (Tab 1) action bar: status toggle + open graph ────────
     let _tab1BarBuilding = false;
     const _buildTab1ActionBar = () => {
       if (_tab1BarBuilding) return;
@@ -597,12 +596,12 @@ function _buildAndMount(config) {
     _buildTab1ActionBar();
     body.appendChild(tab1Body);
 
-    // Tab 2: Details & Activity (lazy — built on first click)
+    // Tab 2: Activity (timer + metadata + change history — lazy, built on first click)
     tab2Body = document.createElement('div');
     tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
     body.appendChild(tab2Body);
 
-    // Tab 3: Relations (lazy — built on first click)
+    // Tab 3: Connections (actions + entity relations — lazy, built on first click)
     tab3Body = document.createElement('div');
     tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
     body.appendChild(tab3Body);
@@ -1806,6 +1805,8 @@ let _ftOn            = null;
 let _ftTICK  = 'timer:tick';
 let _ftALARM = 'timer:alarm';
 let _ftSAVED = 'timer:saved';
+/** True only when time-tracker import SUCCEEDED (not just attempted). Replaces broken === comparison. */
+let _ftServiceReady  = false;
 let _ftLoaded = false;
 
 async function _ensureFormTimeTracker() {
@@ -1827,6 +1828,7 @@ async function _ensureFormTimeTracker() {
     _ftTICK  = tt.TIMER_TICK;
     _ftALARM = tt.TIMER_ALARM;
     _ftSAVED = tt.TIMER_SAVED;
+    _ftServiceReady = true; // import succeeded
   } catch (e) { console.warn('[entity-form] time-tracker not available:', e.message); }
   // [BUG-8 FIX] Use statically-imported `on` from events.js (no dynamic import needed)
   _ftOn = on;
@@ -1887,7 +1889,7 @@ async function _buildFormTimeTrackerUI(container, entity) {
     b.style.cssText = [
       'padding:5px 13px;border-radius:var(--radius-md);font-size:var(--text-sm);',
       'font-weight:var(--weight-semibold);cursor:pointer;border:1px solid var(--color-border);',
-      'transition:opacity 0.12s;',
+      'transition:all 0.12s;',
       accent ? 'background:var(--color-accent);color:#fff;border-color:var(--color-accent);' :
       danger  ? 'background:var(--color-surface);color:var(--color-danger);border-color:var(--color-danger);' :
                 'background:var(--color-surface);color:var(--color-text);',
@@ -1897,10 +1899,10 @@ async function _buildFormTimeTrackerUI(container, entity) {
     return b;
   };
 
-  const startBtn  = _mkBtn('▶ Start', true);
-  const stopBtn   = _mkBtn('⏸ Pause');
+  // Unified toggle button: ▶ Start → ⏸ Pause → ▶ Continue
+  const toggleBtn = _mkBtn('▶ Start', true);
   const resetBtn  = _mkBtn('↺ Reset', false, true);
-  ctrlRow.append(startBtn, stopBtn, resetBtn);
+  ctrlRow.append(toggleBtn, resetBtn);
 
   // ── Time Block section ──
   const blockSec = document.createElement('div');
@@ -1962,7 +1964,7 @@ async function _buildFormTimeTrackerUI(container, entity) {
   const _mkL = (t) => { const s = document.createElement('span'); s.textContent = t; s.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);'; return s; };
 
   const adjD = _mkNI('0d'); const adjH = _mkNI('0h'); const adjM = _mkNI('0m'); const adjS = _mkNI('0s');
-  const adjBtn = _mkBtn('Set & Continue');
+  const adjBtn = _mkBtn('Set Total');
   adjRow.append(adjD, _mkL('d'), adjH, _mkL('h'), adjM, _mkL('m'), adjS, _mkL('s'), adjBtn);
 
   // ── Total saved ──
@@ -1977,27 +1979,39 @@ async function _buildFormTimeTrackerUI(container, entity) {
     const running  = session?.running;
     const alarmed  = session?.alarmed;
     const isBlock  = session?.mode === 'block';
+    const hasSess  = !!session;
 
     display.textContent = _ftFmtCompact(elapsed);
     display.style.color = alarmed ? 'var(--color-danger)' : running ? 'var(--color-accent)' : 'var(--color-text)';
 
-    const d = Math.floor(elapsed / 86400);
-    const h = Math.floor((elapsed % 86400) / 3600);
-    const m = Math.floor((elapsed % 3600) / 60);
-    const s = Math.floor(elapsed % 60);
-    ud.n.textContent = String(d); uh.n.textContent = String(h);
-    um.n.textContent = String(m); us.n.textContent = String(s);
+    const dv = Math.floor(elapsed / 86400);
+    const hv = Math.floor((elapsed % 86400) / 3600);
+    const mv = Math.floor((elapsed % 3600) / 60);
+    const sv = Math.floor(elapsed % 60);
+    ud.n.textContent = String(dv); uh.n.textContent = String(hv);
+    um.n.textContent = String(mv); us.n.textContent = String(sv);
 
-    startBtn.disabled  = running && !alarmed;
-    stopBtn.disabled   = !running;
-    startBtn.textContent = running ? '▶ Running…' : alarmed ? '▶ Restart' : '▶ Start';
+    // Unified toggle button: Start / ⏸ Pause / ▶ Continue / ▶ Restart
+    if (alarmed) {
+      toggleBtn.textContent = '▶ Restart';
+      Object.assign(toggleBtn.style, { background:'var(--color-accent)', color:'#fff', borderColor:'var(--color-accent)' });
+    } else if (running) {
+      toggleBtn.textContent = '⏸ Pause';
+      Object.assign(toggleBtn.style, { background:'var(--color-surface)', color:'var(--color-text)', borderColor:'var(--color-border)' });
+    } else if (hasSess || entity.timeTracked) {
+      toggleBtn.textContent = '▶ Continue';
+      Object.assign(toggleBtn.style, { background:'var(--color-accent)', color:'#fff', borderColor:'var(--color-accent)' });
+    } else {
+      toggleBtn.textContent = '▶ Start';
+      Object.assign(toggleBtn.style, { background:'var(--color-accent)', color:'#fff', borderColor:'var(--color-accent)' });
+    }
 
     if (alarmed) {
       statusBadge.style.color = 'var(--color-danger)';
-      statusBadge.textContent = '🔔 Block complete! Timer stopped.';
+      statusBadge.textContent = '🔔 Block complete! Time saved.';
     } else if (running && isBlock) {
       const rem = _ftGetRemaining(session);
-      statusBadge.style.color = rem && rem <= 60 ? 'var(--color-danger)' : 'var(--color-text-muted)';
+      statusBadge.style.color = rem != null && rem <= 60 ? 'var(--color-danger)' : 'var(--color-text-muted)';
       statusBadge.textContent = rem != null ? `⏲ Block — ${_ftFmtDuration(rem)} remaining` : '⏱ Running';
       if (rem != null) {
         const pct = Math.min(100, (rem / session.blockSecs) * 100);
@@ -2008,32 +2022,34 @@ async function _buildFormTimeTrackerUI(container, entity) {
       statusBadge.style.color = 'var(--color-text-muted)';
       statusBadge.textContent = `⏱ Running — ${_ftFmtDuration(elapsed)} elapsed`;
       blockCountdown.textContent = '';
+    } else if (hasSess && elapsed > 0) {
+      statusBadge.style.color = 'var(--color-text-muted)';
+      statusBadge.textContent = `⏸ Paused — ${_ftFmtDuration(elapsed)} recorded`;
+      blockCountdown.textContent = ''; // always clear countdown when paused
     } else {
-      statusBadge.textContent = entity.timeTracked ? `💾 Saved total: ${_ftFmtDuration(entity.timeTracked)}` : '';
+      statusBadge.textContent = entity.timeTracked ? '' : 'Not started'; // savedRow shows total
       blockCountdown.textContent = '';
     }
 
-    savedRow.textContent = entity.timeTracked
-      ? `Total saved: ${_ftFmtDuration(entity.timeTracked)}`
-      : '';
+    savedRow.textContent = entity.timeTracked ? `Total tracked: ${_ftFmtDuration(entity.timeTracked)}` : '';
   }
 
   // ── Event wiring ──
-  startBtn.addEventListener('click', async () => {
-    // [BUG-22 FIX] Clear alarm state before restarting (in case previous block expired)
-    _ftClearAlarm(taskId);
-    await _ftStartFreeRun(taskId, entity);
-    _upd();
-  });
 
-  stopBtn.addEventListener('click', async () => {
-    await _ftStopSession(taskId);
-    // [BUG-7 FIX] Do NOT read elapsed here — stopSession does not update session.baseSecs,
-    // so _ftGetElapsed would return stale pre-run value. The TIMER_SAVED event handler
-    // above correctly updates entity.timeTracked with the actual elapsed value.
-    if (_draft) _draft.timeTracked = entity.timeTracked; // sync draft after TIMER_SAVED fires
-    _upd();
-    toast.success('Time saved ✓');
+  // Unified toggle: running → Pause, paused/not started → Start/Continue
+  toggleBtn.addEventListener('click', async () => {
+    const sess = _ftGetSession(taskId);
+    if (sess?.running) {
+      const wasBlock = sess.mode === 'block';
+      await _ftStopSession(taskId);
+      if (_draft) _draft.timeTracked = entity.timeTracked;
+      _upd();
+      toast.success(wasBlock ? 'Block paused ⏸ — click Continue to resume' : 'Paused ⏸');
+    } else {
+      _ftClearAlarm(taskId);
+      await _ftStartFreeRun(taskId, entity);
+      _upd();
+    }
   });
 
   resetBtn.addEventListener('click', async () => {
@@ -2050,7 +2066,7 @@ async function _buildFormTimeTrackerUI(container, entity) {
   });
 
   startBlockBtn.addEventListener('click', async () => {
-    if (!_ftLoaded || _ftStartBlock === (async () => {})) {
+    if (!_ftServiceReady) {
       toast.error('Timer not ready — please try again'); return;
     }
     const blockSecs = parseInt(blockSelect.value, 10);
@@ -2058,19 +2074,25 @@ async function _buildFormTimeTrackerUI(container, entity) {
     _ftClearAlarm(taskId);
     await _ftStartBlock(taskId, entity, blockSecs);
     _upd();
+    toast.success(`⏲ ${blockSelect.options[blockSelect.selectedIndex]?.text || 'Block'} started`);
   });
 
   adjBtn.addEventListener('click', async () => {
     const total = (parseInt(adjD.value)||0)*86400 + (parseInt(adjH.value)||0)*3600 +
                   (parseInt(adjM.value)||0)*60   + (parseInt(adjS.value)||0);
     if (total < 0) { toast.error('Time cannot be negative'); return; }
-    // [BUG-21 FIX] Warn if all inputs are 0 (accidental reset of timer to 0s)
     if (total === 0 && !(adjD.value || adjH.value || adjM.value || adjS.value)) {
       toast.error('Enter a time value to adjust'); return;
     }
     await _ftAdjustSession(taskId, total, entity);
     adjD.value = adjH.value = adjM.value = adjS.value = '';
+    // Update placeholders to reflect new adjusted value
+    adjD.placeholder = String(Math.floor(total / 86400));
+    adjH.placeholder = String(Math.floor((total % 86400) / 3600));
+    adjM.placeholder = String(Math.floor((total % 3600) / 60));
+    adjS.placeholder = String(Math.floor(total % 60));
     _upd();
+    toast.success(`Set to ${_ftFmtDuration(total)}`);
   });
 
   // ── Live tick subscriptions (auto-unsub when removed from DOM OR cleanup event) ──
@@ -2079,11 +2101,17 @@ async function _buildFormTimeTrackerUI(container, entity) {
     const _u2 = _ftOn(_ftALARM, ({ taskId: tid }) => { if (tid === taskId) _upd(); });
     const _u3 = _ftOn(_ftSAVED, ({ taskId: tid, elapsed }) => { if (tid === taskId) { entity.timeTracked = elapsed; _upd(); } });
     const _cleanup = () => { _u1(); _u2(); _u3(); _obs.disconnect(); };
-    // [BUG-5 FIX] Explicit cleanup when container is about to be rebuilt (innerHTML cleared)
-    container.addEventListener('fh:timerCleanup', _cleanup, { once: true });
-    // [BUG-5 FIX] Also clean up when container leaves DOM (form closed)
+    // [BUG-29 FIX] Listen on a common ancestor (document) to catch events bubbled
+    // from the overlay or from any tab container (timer can be in tab2 but event dispatched
+    // from tab3 during Connections tab rebuild).
+    const _cleanupHandler = (e) => {
+      // Only respond to events originating from within our overlay
+      if (_overlay && (e.target === _overlay || _overlay.contains(e.target))) _cleanup();
+    };
+    document.addEventListener('fh:timerCleanup', _cleanupHandler, { once: true });
+    // Also clean up when container leaves DOM (form closed)
     const _obs = new MutationObserver(() => {
-      if (!document.contains(container)) _cleanup();
+      if (!document.contains(container)) { _cleanup(); document.removeEventListener('fh:timerCleanup', _cleanupHandler); }
     });
     _obs.observe(document.body, { childList: true, subtree: true });
   }
@@ -2102,7 +2130,7 @@ async function _buildFormTimeTrackerUI(container, entity) {
 }
 
 // ════════════════════════════════════════════════════════════
-// RELATIONS TAB (Tab 3 — edit mode only) [v5.1.0: now called "Details"]
+// CONNECTIONS TAB (Tab 3 — edit mode only) [v5.1.0: renamed to "Connections"]
 // Self-contained port of panel _renderRelationsTab.
 // Operates on _editEntity (the saved entity being edited).
 // ════════════════════════════════════════════════════════════
@@ -2112,9 +2140,12 @@ async function _buildRelationsTab(container) {
 
   const entity = _editEntity;
 
-  // [BUG-12 FIX] Dispatch cleanup FIRST before clearing content, then show Loading
-  // (replaces the previous pattern where Loading showed for 0ms before being cleared)
-  container.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: false }));
+  // [BUG-29 FIX] Dispatch cleanup on the modal overlay so it reaches the timer widget
+  // in the Activity tab (tab2Body), not just tab3Body. Timer widget listens on ttWrap
+  // which is inside tab2Body — dispatching on tab3Body (container) never reaches it.
+  const _overlayEl = container.closest?.('[data-modal]') || _overlay;
+  if (_overlayEl) _overlayEl.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: true }));
+  else container.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: false }));
   container.innerHTML = '<div style="padding:16px;font-size:var(--text-xs);color:var(--color-text-muted);">Loading…</div>';
 
   // ── Pre-load all entities (needed for relations section below) ─
@@ -2149,6 +2180,16 @@ async function _buildRelationsTab(container) {
     const tf = cfg?.fields?.find(f => f.isTitle);
     if (tf) return e[tf.key] || 'Untitled';
     return e.title || e.name || 'Untitled';
+  };
+
+  // Helper: spread _editEntity but capture live timer elapsed to avoid stale timeTracked
+  const _liveEntity = () => {
+    const base = { ..._editEntity };
+    if (_editEntity?.type === 'task' && _ftLoaded && typeof _ftGetSession === 'function') {
+      const liveSess = _ftGetSession(_editEntity.id);
+      if (liveSess) base.timeTracked = _ftGetElapsed(liveSess);
+    }
+    return base;
   };
 
   container.innerHTML = '';
@@ -2196,7 +2237,7 @@ async function _buildRelationsTab(container) {
       completeBtn.style.borderColor   = 'var(--color-success-text,#15803d)';
       completeBtn.addEventListener('click', () => _guardR(async () => {
         const newStatus = isDone ? 'In Progress' : 'Completed';
-        const saved = await saveEntity({ ..._editEntity, status: newStatus }, getAccount()?.id);
+        const saved = await saveEntity({ ..._liveEntity(), status: newStatus }, getAccount()?.id);
         _editEntity = saved;
         _draft.status = newStatus;
         const statusSel = _overlay?.querySelector('#ef-field-status');
@@ -2217,8 +2258,8 @@ async function _buildRelationsTab(container) {
       btn.addEventListener('click', () => _guardR(async () => {
         const hasStatus = config?.fields?.some(f => f.key === 'status');
         const updated = hasStatus
-          ? { ..._editEntity, status: isArchived ? 'Active' : 'Archived' }
-          : { ..._editEntity, archived: !isArchived };
+          ? { ..._liveEntity(), status: isArchived ? 'Active' : 'Archived' }
+          : { ..._liveEntity(), archived: !isArchived };
         const saved = await saveEntity(updated, getAccount()?.id);
         _editEntity = saved;
         emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
@@ -2381,17 +2422,7 @@ async function _buildRelationsTab(container) {
     if (toolbar.children.length > 0) container.appendChild(toolbar);
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // [v5.1.0] SECTION 1: TIME TRACKER (tasks only)
-  // ═══════════════════════════════════════════════════════════
-  if (entity.type === 'task') {
-    const ttWrap = document.createElement('div');
-    ttWrap.style.cssText = 'border-bottom: 1px solid var(--color-border); padding: var(--space-4) var(--space-4);';
-    container.appendChild(ttWrap);
-    _buildFormTimeTrackerUI(ttWrap, entity).catch(e => console.warn('[entity-form] timer UI error:', e));
-  }
-
-  // ── Section 2: Add Connection ────────────────────────── //
+  // ── Section 1: Add Connection ────────────────────────── //
   const addSection = document.createElement('div');
   addSection.style.cssText = 'padding: 14px 16px 12px; border-bottom: 1px solid var(--color-border); flex-shrink: 0;';
   container.appendChild(addSection);
@@ -2765,17 +2796,18 @@ async function _renderFormConnectionsList(container, entity) {
 }
 
 // ════════════════════════════════════════════════════════════
-// DETAILS & ACTIVITY TAB (Tab 2 — edit mode only)
+// ACTIVITY TAB (Tab 2 — edit mode only) — Time tracking (tasks) + Metadata + Change log
 // ════════════════════════════════════════════════════════════
 
 /**
- * Build the "Activity" (for tasks) / "Details" (for others) tab body.
- * [v5.1.0] Actions moved to the Details tab (former Relations tab).
- * Sections:
- *   1. Metadata card   — created / updated timestamps + ID
- *   2. Activity log    — collapsible, reads auditLog from settings
+ * Build the "Activity" tab body (all entity types).
+ * Sections for tasks:
+ *   0. Time Tracker      — at top, tasks only
+ *   1. Metadata card     — created / updated timestamps + ID
+ *   2. Change History    — collapsible audit log
+ * For non-task entities sections 1 & 2 only.
  */
-function _buildDetailsTab(container, config) {
+async function _buildDetailsTab(container, config) {
   if (!_editEntity) return;
   container.innerHTML = '';
 
@@ -2791,7 +2823,19 @@ function _buildDetailsTab(container, config) {
     } catch { return iso; }
   };
 
-  // ─── 1. METADATA CARD ───────────────────────────────────── //
+  // ─── 0. TIME TRACKER (tasks only — at very top) ──────────── //
+  if (entity.type === 'task') {
+    const ttWrap = document.createElement('div');
+    ttWrap.style.cssText = [
+      'border-bottom: 1px solid var(--color-border);',
+      'padding: var(--space-4);',
+      'background: var(--color-surface);',
+    ].join(' ');
+    container.appendChild(ttWrap);
+    _buildFormTimeTrackerUI(ttWrap, entity).catch(e => console.warn('[entity-form] timer UI error:', e));
+  }
+
+  // ─── 1. METADATA CARD ─────────────────────────────────────── //
   const meta = document.createElement('div');
   meta.style.cssText = [
     'padding: 14px 16px;',
@@ -2815,7 +2859,11 @@ function _buildDetailsTab(container, config) {
   meta.appendChild(_metaRow('Created',  _fmtTs(entity.createdAt)));
   meta.appendChild(_metaRow('Updated',  _fmtTs(entity.updatedAt)));
   meta.appendChild(_metaRow('ID',       entity.id || '—'));
-  if (entity.createdBy) meta.appendChild(_metaRow('By',  entity.createdBy));
+  if (entity.createdBy) {
+    // Resolve account ID → display name if possible
+    const _authorName = entity._authorName || entity.createdBy;
+    meta.appendChild(_metaRow('By', _authorName));
+  }
 
   container.appendChild(meta);
 
@@ -2849,8 +2897,11 @@ function _buildDetailsTab(container, config) {
   actSection.appendChild(actBody);
   container.appendChild(actSection);
 
-  // Load activity log async
-  _loadEntityActivityLog(actBody, entity, config);
+  // Load activity log async (non-fatal if it throws)
+  _loadEntityActivityLog(actBody, entity, config).catch(e => {
+    actBody.innerHTML = '<div style="padding:16px;font-size:var(--text-xs);color:var(--color-text-muted);">Could not load activity log.</div>';
+    console.warn('[entity-form] activity log error:', e);
+  });
 }
 
 /**
@@ -3126,6 +3177,15 @@ async function _submitForm() {
     // field.key collision (e.g. event has a 'type' select field for
     // Family/School/Work which would overwrite entity.type).
     entityData.type = _typeKey;
+
+    // ── Capture live timer elapsed (tasks only) ───────────────── //
+    // timeTracked is hidden (not in config.fields loop). If the timer is running
+    // when Save is clicked, _editEntity.timeTracked is stale. Capture current elapsed
+    // so tracked time is never lost on form save.
+    if (_typeKey === 'task' && _ftLoaded && typeof _ftGetSession === 'function') {
+      const liveSess = _ftGetSession(entityData.id);
+      if (liveSess) entityData.timeTracked = _ftGetElapsed(liveSess);
+    }
 
     // ── Save entity ───────────────────────────────────────── //
     const account = getAccount();

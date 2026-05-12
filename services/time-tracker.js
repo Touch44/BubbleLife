@@ -53,6 +53,7 @@ let _sessions = {};
 
 /** Main tick interval handle */
 let _tickInterval = null;
+let _tickRunning  = false; // prevents concurrent tick executions from setInterval overlap
 
 // ── Signals ────────────────────────────────────────────────── //
 /** Set of taskIds currently running (freeRun or block, not alarmed) */
@@ -152,6 +153,9 @@ function _stopTickIfIdle() {
 }
 
 async function _tick() {
+  if (_tickRunning) return; // prevent overlap if IDB is slow
+  _tickRunning = true;
+  try {
   let dirty = false;
   for (const [taskId, session] of Object.entries(_sessions)) {
     if (!session.running) continue;
@@ -163,9 +167,14 @@ async function _tick() {
     if (session.mode === 'block' && session.blockSecs) {
       const remaining = session.blockSecs - elapsed;
       if (remaining <= 0 && !session.alarmed) {
-        session.alarmed = true;
-        session.running = false;
+        // Record the completed block time before marking alarmed
+        // (baseSecs = blockSecs means "block fully elapsed")
+        session.baseSecs = session.blockSecs;
+        session.alarmed  = true;
+        session.running  = false;
         dirty = true;
+        // Persist completed block time to entity (async, non-blocking)
+        _saveElapsedToEntity(taskId, session.blockSecs);
         _fireAlarm(session);
       }
     }
@@ -177,9 +186,29 @@ async function _tick() {
   }
   // Refresh signals every tick for live display
   _refreshSignals();
+  } finally {
+    _tickRunning = false;
+  }
 }
 
 // ── Alarm ──────────────────────────────────────────────────── //
+
+/**
+ * Persist elapsed seconds to entity.timeTracked and emit TIMER_SAVED.
+ * Used by alarm handler and reconnect logic so block completions are never lost.
+ */
+async function _saveElapsedToEntity(taskId, elapsed) {
+  try {
+    const entity = await getEntity(taskId);
+    if (entity) {
+      const updated = { ...entity, timeTracked: elapsed };
+      await saveEntity(updated);
+      emit(TIMER_SAVED, { taskId, elapsed, entity: updated });
+    }
+  } catch (err) {
+    console.error('[time-tracker] Failed to save elapsed to entity:', err);
+  }
+}
 
 function _fireAlarm(session) {
   const title = session.taskTitle || 'Task';
@@ -215,7 +244,21 @@ export function getSession(taskId) {
 
 export async function startFreeRun(taskId, task) {
   const existing = _sessions[taskId];
-  const baseSecs = existing ? getElapsed(existing) : (task?.timeTracked || 0);
+  // baseSecs = accumulated time before this run:
+  // - If existing session: use its elapsed (getElapsed returns baseSecs since running=false after stop)
+  // - After block alarm: existing.baseSecs = blockSecs (set by alarm handler). entity.timeTracked
+  //   may have been saved BEFORE the block started. Use the larger of the two so no time is lost.
+  let baseSecs;
+  if (existing) {
+    const sessElapsed  = getElapsed(existing);
+    const entitySaved  = task?.timeTracked || 0;
+    // After block alarm, entity.timeTracked = blockSecs (saved by alarm handler).
+    // After pause, entity.timeTracked = full elapsed (saved by stopSession).
+    // Either way, take the maximum to ensure no time is lost.
+    baseSecs = Math.max(sessElapsed, entitySaved);
+  } else {
+    baseSecs = task?.timeTracked || 0;
+  }
   _sessions[taskId] = {
     taskId,
     taskTitle: task?.title || 'Untitled',
@@ -233,14 +276,22 @@ export async function startFreeRun(taskId, task) {
 
 export async function startBlock(taskId, task, blockSecs) {
   const existing = _sessions[taskId];
-  // If block already alarmed or different size, reset elapsed for the new block
-  const baseSecs = existing && !existing.alarmed ? getElapsed(existing) : (task?.timeTracked || 0);
+
+  // FIX: if a freeRun is currently running, stop and save it to entity.timeTracked
+  // before starting the block. This prevents the accumulated freeRun time from
+  // consuming the block countdown immediately (e.g. 10m freeRun + 5m block = alarm fires instantly).
+  if (existing?.running && existing.mode === 'freeRun') {
+    await stopSession(taskId); // saves elapsed to entity, updates baseSecs
+  }
+
+  // Block countdown ALWAYS starts fresh from 0 elapsed (counts down from blockSecs).
+  // Previously accumulated time is already saved in entity.timeTracked via the stopSession above.
   _sessions[taskId] = {
     taskId,
     taskTitle: task?.title || 'Untitled',
     mode:      'block',
     startedAt: new Date().toISOString(),
-    baseSecs,
+    baseSecs:  0,      // fresh countdown — not carry-over from freeRun
     blockSecs,
     running:   true,
     alarmed:   false,
@@ -255,7 +306,10 @@ export async function stopSession(taskId) {
   if (!session) return;
 
   const elapsed = getElapsed(session);
-  session.running = false;
+  // FIX: update baseSecs BEFORE clearing running, so subsequent getElapsed()
+  // and startFreeRun() both see the full accumulated time (not stale pre-run value).
+  session.baseSecs = elapsed;
+  session.running  = false;
   _refreshSignals();
   _stopTickIfIdle();
   await _persist();
@@ -283,9 +337,10 @@ export async function resetSession(taskId) {
 }
 
 export async function adjustSession(taskId, newSecs, task) {
+  const clamped = Math.max(0, newSecs);
   const session = _sessions[taskId];
   if (session) {
-    session.baseSecs  = Math.max(0, newSecs);
+    session.baseSecs  = clamped;
     session.startedAt = session.running ? new Date().toISOString() : session.startedAt;
     session.alarmed   = false;
   } else {
@@ -295,7 +350,7 @@ export async function adjustSession(taskId, newSecs, task) {
       taskTitle: task?.title || 'Untitled',
       mode:      'freeRun',
       startedAt: null,
-      baseSecs:  Math.max(0, newSecs),
+      baseSecs:  clamped,
       blockSecs: null,
       running:   false,
       alarmed:   false,
@@ -303,6 +358,8 @@ export async function adjustSession(taskId, newSecs, task) {
   }
   _refreshSignals();
   await _persist();
+  // Also save to entity so value persists if form is closed without pausing
+  _saveElapsedToEntity(taskId, clamped);
 }
 
 export function clearAlarm(taskId) {
@@ -344,8 +401,11 @@ export async function initTimeTracker() {
     if (session.mode === 'block' && session.running && session.blockSecs) {
       const elapsed = getElapsed(session);
       if (elapsed >= session.blockSecs) {
-        session.alarmed = true;
-        session.running = false;
+        session.baseSecs = session.blockSecs; // record completed block time
+        session.alarmed  = true;
+        session.running  = false;
+        // Persist completed block time to entity (same as live alarm handler)
+        _saveElapsedToEntity(taskId, session.blockSecs);
         _fireAlarm(session);
       }
     }
