@@ -687,6 +687,7 @@ function _rebuildBodyInto(config, container) {
   container.innerHTML = '';
   const fields = config.fields;
   for (const field of fields) {
+    if (field.hidden) continue; // never render hidden fields (e.g. timeTracked handled by timer widget)
     const group = _buildFieldGroup(field, config);
     if (group) container.appendChild(group);
   }
@@ -1849,26 +1850,38 @@ async function _buildFormTimeTrackerUI(container, entity) {
   hdr.textContent = '⏱️ Time Tracking';
   container.appendChild(hdr);
 
-  // ── Main display (MM:SS or HH:MM:SS) ──
+  // ── Main display — friendly duration ──────────────────────
+  // Shows the primary duration in human-readable form: e.g. "1h 23m 45s", "2d 4h", "47s"
   const display = document.createElement('div');
-  display.style.cssText = 'font-size:2rem;font-weight:var(--weight-bold);color:var(--color-text);font-variant-numeric:tabular-nums;letter-spacing:-0.02em;margin-bottom:var(--space-2);line-height:1;';
+  display.style.cssText = [
+    'font-size:1.75rem;font-weight:var(--weight-bold);color:var(--color-text);',
+    'font-variant-numeric:tabular-nums;letter-spacing:-0.01em;',
+    'margin-bottom:var(--space-1);line-height:1.1;',
+  ].join('');
   container.appendChild(display);
 
-  // ── Breakdown (days / hrs / min / sec) ──
+  // ── Breakdown row — individual unit chips ──────────────────
   const breakdown = document.createElement('div');
-  breakdown.style.cssText = 'display:flex;gap:var(--space-3);margin-bottom:var(--space-4);';
+  breakdown.style.cssText = 'display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
+
   const _mkUnit = (label) => {
-    const w = document.createElement('div');
-    w.style.cssText = 'display:flex;flex-direction:column;align-items:center;min-width:30px;';
+    const chip = document.createElement('div');
+    chip.style.cssText = [
+      'display:flex;flex-direction:column;align-items:center;',
+      'background:var(--color-surface-2,rgba(0,0,0,0.04));',
+      'border-radius:var(--radius-sm);padding:4px 10px;min-width:44px;',
+    ].join('');
     const n = document.createElement('span');
-    n.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-bold);color:var(--color-text);font-variant-numeric:tabular-nums;';
+    n.style.cssText = 'font-size:var(--text-base);font-weight:var(--weight-bold);color:var(--color-text);font-variant-numeric:tabular-nums;line-height:1.2;';
     const l = document.createElement('span');
-    l.style.cssText = 'font-size:10px;color:var(--color-text-muted);margin-top:1px;';
+    l.style.cssText = 'font-size:10px;color:var(--color-text-muted);margin-top:1px;text-transform:uppercase;letter-spacing:0.04em;';
     l.textContent = label;
-    w.append(n, l);
-    return { w, n };
+    chip.append(n, l);
+    return { w: chip, n };
   };
-  const ud = _mkUnit('days'); const uh = _mkUnit('hrs'); const um = _mkUnit('min'); const us = _mkUnit('sec');
+
+  const ud = _mkUnit('days'); const uh = _mkUnit('hrs');
+  const um = _mkUnit('min');  const us = _mkUnit('sec');
   breakdown.append(ud.w, uh.w, um.w, us.w);
   container.appendChild(breakdown);
 
@@ -1901,8 +1914,105 @@ async function _buildFormTimeTrackerUI(container, entity) {
 
   // Unified toggle button: ▶ Start → ⏸ Pause → ▶ Continue
   const toggleBtn = _mkBtn('▶ Start', true);
-  const resetBtn  = _mkBtn('↺ Reset', false, true);
-  ctrlRow.append(toggleBtn, resetBtn);
+  ctrlRow.append(toggleBtn);
+
+  // ── Reset button — lives in its own row with two-step inline confirm ─
+  const resetRow = document.createElement('div');
+  resetRow.style.cssText = 'display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-3);';
+  container.appendChild(resetRow);
+
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.textContent = '↺ Reset to 0';
+  resetBtn.style.cssText = [
+    'padding:4px 12px;border-radius:var(--radius-md);font-size:var(--text-xs);',
+    'font-weight:var(--weight-semibold);cursor:pointer;',
+    'background:var(--color-surface);color:var(--color-text-muted);',
+    'border:1px solid var(--color-border);transition:all 0.12s;',
+  ].join('');
+
+  // Confirm label (hidden until first click)
+  const resetConfirmLabel = document.createElement('span');
+  resetConfirmLabel.style.cssText = 'font-size:var(--text-xs);color:var(--color-danger);display:none;';
+  resetConfirmLabel.textContent = '⚠ This will clear ALL tracked time from the database.';
+
+  const resetCancelBtn = document.createElement('button');
+  resetCancelBtn.type = 'button';
+  resetCancelBtn.textContent = 'Cancel';
+  resetCancelBtn.style.cssText = [
+    'padding:4px 10px;border-radius:var(--radius-md);font-size:var(--text-xs);',
+    'cursor:pointer;background:none;border:1px solid var(--color-border);',
+    'color:var(--color-text-muted);display:none;',
+  ].join('');
+
+  resetRow.append(resetBtn, resetConfirmLabel, resetCancelBtn);
+
+  let _resetPending = false;
+  let _resetTimer   = null;
+
+  const _cancelReset = () => {
+    _resetPending = false;
+    clearTimeout(_resetTimer);
+    resetBtn.textContent  = '↺ Reset to 0';
+    resetBtn.style.color  = 'var(--color-text-muted)';
+    resetBtn.style.borderColor = 'var(--color-border)';
+    resetBtn.style.background  = 'var(--color-surface)';
+    resetConfirmLabel.style.display = 'none';
+    resetCancelBtn.style.display    = 'none';
+  };
+
+  resetCancelBtn.addEventListener('click', _cancelReset);
+
+  resetBtn.addEventListener('click', async () => {
+    if (!_resetPending) {
+      // Step 1 — arm the reset
+      _resetPending = true;
+      resetBtn.textContent  = '⚠ Tap again to confirm';
+      resetBtn.style.color  = 'var(--color-danger)';
+      resetBtn.style.borderColor = 'var(--color-danger)';
+      resetBtn.style.background  = 'var(--color-surface)';
+      resetConfirmLabel.style.display = '';
+      resetCancelBtn.style.display    = '';
+      // Auto-cancel after 5 seconds
+      _resetTimer = setTimeout(_cancelReset, 5000);
+      return;
+    }
+
+    // Step 2 — execute reset
+    _cancelReset();
+    resetBtn.disabled = true;
+    resetBtn.textContent = '…resetting';
+
+    try {
+      // Stop any running session in memory
+      const liveSess = _ftGetSession(taskId);
+      if (liveSess?.running) await _ftStopSession(taskId);
+
+      // Delete in-memory session
+      await _ftResetSession(taskId);
+
+      // Zero out local references
+      entity.timeTracked = 0;
+      if (_draft) _draft.timeTracked = 0;
+
+      // Persist 0 to IDB entity and emit TIMER_SAVED so all listeners update
+      const fresh = await getEntity(taskId);
+      if (fresh) {
+        const zeroed = { ...fresh, timeTracked: 0 };
+        await saveEntity(zeroed);
+        emit(_ftSAVED, { taskId, elapsed: 0, entity: zeroed });
+      }
+
+      _upd();
+      toast.success('Time tracking reset to 0 ✓');
+    } catch (err) {
+      console.error('[entity-form] Reset failed:', err);
+      toast.error('Reset failed — please try again');
+    } finally {
+      resetBtn.disabled = false;
+      resetBtn.textContent = '↺ Reset to 0';
+    }
+  });
 
   // ── Time Block section ──
   const blockSec = document.createElement('div');
@@ -1981,15 +2091,31 @@ async function _buildFormTimeTrackerUI(container, entity) {
     const isBlock  = session?.mode === 'block';
     const hasSess  = !!session;
 
-    display.textContent = _ftFmtCompact(elapsed);
-    display.style.color = alarmed ? 'var(--color-danger)' : running ? 'var(--color-accent)' : 'var(--color-text)';
-
+    // ── Friendly duration display ─────────────────────────────
     const dv = Math.floor(elapsed / 86400);
     const hv = Math.floor((elapsed % 86400) / 3600);
     const mv = Math.floor((elapsed % 3600) / 60);
     const sv = Math.floor(elapsed % 60);
-    ud.n.textContent = String(dv); uh.n.textContent = String(hv);
-    um.n.textContent = String(mv); us.n.textContent = String(sv);
+
+    // Main display: compact human-readable (e.g. "1d 4h", "23m 05s", "47s", "0s")
+    let friendlyMain;
+    if (dv > 0)      friendlyMain = `${dv}d ${hv}h`;
+    else if (hv > 0) friendlyMain = `${hv}h ${mv}m`;
+    else if (mv > 0) friendlyMain = `${mv}m ${String(sv).padStart(2,'0')}s`;
+    else             friendlyMain = `${sv}s`;
+
+    display.textContent = friendlyMain;
+    display.style.color = alarmed ? 'var(--color-danger)' : running ? 'var(--color-accent)' : 'var(--color-text)';
+
+    // Breakdown chips — dim zero values for visual clarity
+    ud.n.textContent = String(dv);
+    uh.n.textContent = String(hv);
+    um.n.textContent = String(mv);
+    us.n.textContent = String(sv).padStart(2, '0');
+    ud.w.style.opacity = dv > 0 ? '1' : '0.3';
+    uh.w.style.opacity = hv > 0 ? '1' : (dv > 0 ? '0.5' : '0.3');
+    um.w.style.opacity = mv > 0 ? '1' : (hv > 0 ? '0.5' : '0.3');
+    us.w.style.opacity = '1'; // seconds always visible
 
     // Unified toggle button: Start / ⏸ Pause / ▶ Continue / ▶ Restart
     if (alarmed) {
@@ -2031,7 +2157,9 @@ async function _buildFormTimeTrackerUI(container, entity) {
       blockCountdown.textContent = '';
     }
 
-    savedRow.textContent = entity.timeTracked ? `Total tracked: ${_ftFmtDuration(entity.timeTracked)}` : '';
+    savedRow.textContent = entity.timeTracked
+      ? `💾 Total saved: ${_ftFmtDuration(entity.timeTracked)}`
+      : '';
   }
 
   // ── Event wiring ──
@@ -2050,19 +2178,6 @@ async function _buildFormTimeTrackerUI(container, entity) {
       await _ftStartFreeRun(taskId, entity);
       _upd();
     }
-  });
-
-  resetBtn.addEventListener('click', async () => {
-    if (!window.confirm('Reset timer? Current session will be discarded.')) return;
-    await _ftResetSession(taskId);
-    entity.timeTracked = 0;
-    if (_draft) _draft.timeTracked = 0;
-    try {
-      const fresh = await getEntity(taskId);
-      if (fresh) await saveEntity({ ...fresh, timeTracked: 0 });
-    } catch {}
-    _upd();
-    toast.success('Timer reset');
   });
 
   startBlockBtn.addEventListener('click', async () => {
@@ -3096,6 +3211,7 @@ async function _submitForm() {
   let valid = true;
 
   for (const field of config.fields) {
+    if (field.hidden) continue; // hidden fields never validated (not in DOM)
     const group = _overlay?.querySelector(`[data-field="${field.key}"]`);
     const errEl = group?.querySelector('.ef-field-error');
 
@@ -3372,6 +3488,7 @@ function _saveDraftFromForm() {
   if (!config) return;
 
   for (const field of config.fields) {
+    if (field.hidden) continue; // hidden fields not in DOM — skip
     if (['relation', 'tags', 'multiselect', 'richtext', 'checkbox', 'checklist', 'rating'].includes(field.type)) continue;
 
     const el = _overlay.querySelector(`#ef-field-${field.key}`);
