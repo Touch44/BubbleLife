@@ -117,6 +117,12 @@ async function renderReminderAnalytics() {
   el.innerHTML = `
     <div style="max-width:900px;margin:0 auto;padding:var(--space-6) var(--space-4);">
       <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-6);">
+        <button id="ra-back-btn" style="
+          padding:6px 12px;font-size:var(--text-xs);font-weight:600;
+          background:var(--color-surface);color:var(--color-text-muted);
+          border:1px solid var(--color-border);border-radius:var(--radius-md);cursor:pointer;">
+          ← Reminders
+        </button>
         <h2 style="font-size:var(--text-xl);font-weight:var(--weight-bold);color:var(--color-text);margin:0;flex:1;">
           📊 Reminder Analytics
         </h2>
@@ -156,6 +162,8 @@ async function renderReminderAnalytics() {
   `;
 
   // ── Fill summary cards ──────────────────────────────────────────
+  el.querySelector('#ra-back-btn')?.addEventListener('click', () =>
+    import('../core/router.js').then(m => m.navigate('reminders')).catch(() => {}));
   el.querySelector('#ra-refresh-btn')?.addEventListener('click', () => renderReminderAnalytics());
   const summaryEl = el.querySelector('#ra-summary');
   const _card = (label, value, sub = '', color = 'var(--color-accent)') => {

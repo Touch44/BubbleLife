@@ -90,9 +90,12 @@ function _buildModal(existing, targetEnt, prefill) {
   const rruleHuman     = currentRrule ? rruleToHuman(currentRrule) : 'Does not repeat';
 
   const targetChip = targetEnt
-    ? `<div style="padding:6px 12px;background:var(--color-surface-raised,#f1f5f9);border-radius:6px;
-        font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;">
+    ? `<div id="rf-target-chip" data-entity-id="${_esc(targetEnt.id)}" style="padding:6px 12px;background:var(--color-surface-raised,#f1f5f9);border-radius:6px;
+        font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+        border:1px solid transparent;transition:border-color 0.12s;"
+        title="Click to open entity form" tabindex="0" role="button">
         📎 ${_esc(targetEnt.title || targetEnt.name || 'Entity')}
+        <span style="color:var(--color-accent,#4f8ef7);font-size:0.7rem;">↗</span>
        </div>`
     : `<span style="font-size:0.8rem;color:var(--color-text-muted,#94a3b8);">No entity linked</span>`;
 
@@ -278,6 +281,22 @@ function _buildModal(existing, targetEnt, prefill) {
 
   // Wire
   _modal.querySelector('#rf-x')?.addEventListener('click', closeReminderForm);
+
+  // ── Linked entity chip → open entity form (reminder form stays open) ──────
+  const targetChipEl = _modal.querySelector('#rf-target-chip');
+  if (targetChipEl) {
+    targetChipEl.addEventListener('mouseenter', () => targetChipEl.style.borderColor = 'var(--color-accent,#4f8ef7)');
+    targetChipEl.addEventListener('mouseleave', () => targetChipEl.style.borderColor = 'transparent');
+    targetChipEl.addEventListener('click', () => {
+      const entityId = targetChipEl.dataset.entityId;
+      if (!entityId) return;
+      // Open entity form on top of reminder form — reminder form stays in DOM
+      import('./entity-form.js')
+        .then(m => m.openEditForm ? m.openEditForm(entityId)
+                                  : import('./entity-panel.js').then(p => p.openPanel(entityId)))
+        .catch(() => import('./entity-panel.js').then(p => p.openPanel(entityId)).catch(() => {}));
+    });
+  }
   _modal.querySelector('#rf-cancel')?.addEventListener('click', closeReminderForm);
 
   _modal.querySelectorAll('.rf-quick').forEach(btn => {

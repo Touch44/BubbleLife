@@ -6,7 +6,7 @@
 
 import { registerView }                from '../core/router.js';
 import { getEntitiesByType, getEntity,
-         deleteEntity, saveEntity }    from '../core/db.js';
+         deleteEntity, saveEntity, getEdgesFrom } from '../core/db.js';
 import { on, emit, EVENTS }            from '../core/events.js';
 import { getAccount }                  from '../core/auth.js';
 import { toast }                       from '../core/toast.js';
@@ -314,6 +314,22 @@ async function _renderList(gen) {
 
   let all = await getEntitiesByType('reminder');
 
+  // Enrich each reminder with its linked entity info for the row display
+  all = await Promise.all(all.map(async r => {
+    try {
+      const edges = await getEdgesFrom(r.id, 'reminds').catch(() => []);
+      if (edges.length > 0) {
+        const linked = await getEntity(edges[0].toId).catch(() => null);
+        if (linked) {
+          r._linkedEntityId    = linked.id;
+          r._linkedEntityTitle = linked.title || linked.name || linked.type;
+          r._linkedEntityType  = linked.type;
+        }
+      }
+    } catch {}
+    return r;
+  }));
+
   if (_searchQ.trim()) {
     const q = _searchQ.toLowerCase();
     all = all.filter(r => (r.title||'').toLowerCase().includes(q) || (r.notes||'').toLowerCase().includes(q));
@@ -406,15 +422,20 @@ function _row(r) {
 
   return `<div class="rm-row" data-id="${_esc(r.id)}" style="
     display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;
-    border:1px solid var(--color-border,#e2e8f0);margin-bottom:6px;cursor:pointer;
+    border:1px solid var(--color-border,#e2e8f0);margin-bottom:6px;
     background:var(--color-surface,#fff);">
     <span title="${_esc(r.priority||'Normal')}" style="font-size:0.9rem;flex-shrink:0;">${dot}</span>
     <div style="flex:1;min-width:0;">
-      <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+      <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;"
+           data-act="open-entity" data-id="${_esc(r.id)}" title="Open reminder details">
         ${_esc(r.title||'Untitled Reminder')}
       </div>
       <div style="font-size:0.73rem;color:var(--color-text-muted,#94a3b8);display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;align-items:center;">
         <span>${fire}</span>${recur}
+        ${r._linkedEntityId ? `<span class="rm-open-entity" data-entity-id="${_esc(r._linkedEntityId)}" title="Open linked entity"
+          style="color:var(--color-accent,#4f8ef7);cursor:pointer;text-decoration:underline dotted;">
+          📎 ${_esc(r._linkedEntityTitle || 'Linked entity')}
+        </span>` : ''}
         ${r.isTemplate ? '<span style="background:#e0e7ff;color:#3730a3;padding:1px 6px;border-radius:4px;font-size:0.65rem;font-weight:600;">TEMPLATE</span>' : ''}
         ${r.conditionMode && r.conditionMode !== 'none' ? '<span style="font-size:0.65rem;color:var(--color-accent,#4f8ef7);">🔍 Condition</span>' : ''}
       </div>
@@ -434,14 +455,18 @@ function _wireRows(body, gen) {
     btn.addEventListener('click', async e => {
       e.stopPropagation();
       const skipRerender = await _action(btn.dataset.act, btn.dataset.id);
-      // [BUG-30 FIX] apply-template returns true to signal no re-render needed (modal handles it)
       if (!skipRerender) _renderList(gen);
     });
   });
-  body.querySelectorAll('.rm-row').forEach(row => {
-    row.addEventListener('click', e => {
-      if (e.target.closest('[data-act]')) return;
-      openReminderForm({ reminderId: row.dataset.id });
+  // Click linked entity chip → open entity form
+  body.querySelectorAll('.rm-open-entity').forEach(chip => {
+    chip.addEventListener('click', e => {
+      e.stopPropagation();
+      const entityId = chip.dataset.entityId;
+      if (!entityId) return;
+      import('../components/entity-form.js')
+        .then(m => m.openEditForm ? m.openEditForm(entityId) : import('../components/entity-panel.js').then(p => p.openPanel(entityId)))
+        .catch(() => import('../components/entity-panel.js').then(p => p.openPanel(entityId)).catch(() => {}));
     });
   });
 }
@@ -449,6 +474,14 @@ function _wireRows(body, gen) {
 async function _action(act, id) {
   const svc = window._fhEnv?.services?.reminder;
   switch (act) {
+    case 'open-entity': {
+      // Open the reminder entity in the center form (full entity-form modal)
+      import('../components/entity-form.js')
+        .then(m => m.openEditForm ? m.openEditForm(id)
+          : import('../components/entity-panel.js').then(p => p.openPanel(id)))
+        .catch(() => {});
+      return true; // skip re-render
+    }
     case 'edit':    openReminderForm({ reminderId: id }); break;
     case 'pause':   await svc?.pause(id); break;
     case 'resume':  await svc?.resume(id); break;

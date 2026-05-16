@@ -361,7 +361,9 @@ function _buildAndMount(config) {
 
     _relationValues.clear();
     _tagValues.clear();
-    _rebuildBody(newConfig, body);
+    // Target the scrollable fields container inside tab1Body, not the outer body
+    const fieldsTarget = body.querySelector('.ef-fields-scroll') || body;
+    _rebuildBody(newConfig, fieldsTarget);
     _updateHeader(header, newConfig, typeSelect);
   });
 
@@ -392,6 +394,7 @@ function _buildAndMount(config) {
   let tab1Body = null;
   let tab2Body = null;
   let tab3Body = null;
+  let tab4Body = null;
 
   // Show tab strip in both create and edit modes for visual consistency
   tabStrip = document.createElement('div');
@@ -423,13 +426,15 @@ function _buildAndMount(config) {
   };
 
   const tab1Btn = _mkTab('fields',    'Details',                                       '📋');
-  // Tab 2: "Activity" for ALL types — shows time tracking (tasks) + metadata + change history
-  const tab2Btn = _mkTab('details',   'Activity',                                      '⚡', !_editEntity);
-  // Tab 3: "Connections" — actions + relations to other entities (was "Details"/"Relations")
-  const tab3Btn = _mkTab('relations', 'Connections',                                   '🔗', !_editEntity);
+  // Tab 2: Activity — time tracking (tasks) + metadata + change history
+  const tab2Btn = _mkTab('details',   'Activity',                                      '⚡');
+  // Tab 3: Connections — action buttons + entity relations
+  const tab3Btn = _mkTab('relations', 'Connections',                                   '🔗');
+  // Tab 4: Reminders — all reminder management for this entity [v5.2.0]
+  const tab4Btn = _mkTab('reminders', 'Reminders',                                     '🔔');
 
   const _applyTabStyles = () => {
-    [tab1Btn, tab2Btn, tab3Btn].forEach(b => {
+    [tab1Btn, tab2Btn, tab3Btn, tab4Btn].forEach(b => {
       const active = b.dataset.tabKey === _activeFormTab;
       b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
       b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
@@ -437,54 +442,69 @@ function _buildAndMount(config) {
     });
   };
 
-  if (_editEntity) {
-    const _switchTab = (key) => {
-      _activeFormTab = key;
-      _applyTabStyles();
-      if (tab1Body) tab1Body.style.display = key === 'fields'    ? 'flex' : 'none';
-      if (tab2Body) tab2Body.style.display = key === 'details'   ? 'flex' : 'none';
-      if (tab3Body) tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
-      // Hide footer (Save button) on Details and Relations tabs
-      const footerEl = modal.querySelector('.modal-footer');
-      if (footerEl) footerEl.style.display = (key === 'details' || key === 'relations') ? 'none' : '';
-      // Lazy-load Tab 2 on first open
-      if (key === 'details' && tab2Body && !tab2Body.dataset.loaded) {
-        tab2Body.dataset.loaded = '1';
-        const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
-        _buildDetailsTab(tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
-      }
-      // Lazy-load Tab 3 on first open
-      if (key === 'relations' && tab3Body && !tab3Body.dataset.loaded) {
-        tab3Body.dataset.loaded = '1';
-        _buildRelationsTab(tab3Body);
-      }
-    };
+  // Always wire tab switching — all tabs accessible in both create and edit mode.
+  // Individual tab builders handle the create-mode "save first" messaging internally.
+  const _switchTab = (key) => {
+    _activeFormTab = key;
+    _applyTabStyles();
+    if (tab1Body) tab1Body.style.display = key === 'fields'    ? 'flex' : 'none';
+    if (tab2Body) tab2Body.style.display = key === 'details'   ? 'flex' : 'none';
+    if (tab3Body) tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
+    if (tab4Body) tab4Body.style.display = key === 'reminders' ? 'flex' : 'none';
+    // Hide footer (Save button) only in EDIT mode on non-fields tabs.
+    // In CREATE mode, always show footer so user can save from any tab.
+    const footerEl = modal.querySelector('.modal-footer');
+    if (footerEl) {
+      const hideFooter = !!_editEntity && (key === 'details' || key === 'relations' || key === 'reminders');
+      footerEl.style.display = hideFooter ? 'none' : '';
+    }
+    // Lazy-load Tab 2 on first open
+    if (key === 'details' && tab2Body && !tab2Body.dataset.loaded) {
+      tab2Body.dataset.loaded = '1';
+      const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
+      _buildDetailsTab(tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
+    }
+    // Lazy-load Tab 3 on first open
+    if (key === 'relations' && tab3Body && !tab3Body.dataset.loaded) {
+      tab3Body.dataset.loaded = '1';
+      _buildRelationsTab(tab3Body);
+    }
+    if (key === 'reminders' && tab4Body && !tab4Body.dataset.loaded) {
+      tab4Body.dataset.loaded = '1';
+      _buildRemindersTab(tab4Body);
+    }
+  };
 
-    tab1Btn.addEventListener('click', () => _switchTab('fields'));
-    tab2Btn.addEventListener('click', () => _switchTab('details'));
-    tab3Btn.addEventListener('click', () => _switchTab('relations'));
-  }
+  tab1Btn.addEventListener('click', () => _switchTab('fields'));
+  tab2Btn.addEventListener('click', () => _switchTab('details'));
+  tab3Btn.addEventListener('click', () => _switchTab('relations'));
+  tab4Btn.addEventListener('click', () => _switchTab('reminders'));
 
   tabStrip.appendChild(tab1Btn);
   tabStrip.appendChild(tab2Btn);
   tabStrip.appendChild(tab3Btn);
+  tabStrip.appendChild(tab4Btn);
   _applyTabStyles();
 
   // ── Body ─────────────────────────────────────────────── //
   const body = document.createElement('div');
-  // In edit mode, tabs handle their own padding/scrolling.
-  // Remove the .modal-body CSS padding to avoid double-padding the tab contents.
-  body.className = _editEntity ? 'ef-body' : 'modal-body ef-body';
-  if (_editEntity) {
-    body.style.cssText = 'display:flex;flex-direction:column;flex:1;overflow:hidden;padding:0;';
-  }
+  // Always use tabbed layout — tab bodies handle their own padding/scrolling.
+  body.className = 'ef-body';
+  body.style.cssText = 'display:flex;flex-direction:column;flex:1;overflow:hidden;padding:0;';
+
+  // ── Tab 1: Details (form fields) — always built immediately ──
+  tab1Body = document.createElement('div');
+  tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; gap: 0;';
+
+  // Fields scroll container (padded, scrollable) — same in both modes
+  const fieldsScroll = document.createElement('div');
+  fieldsScroll.className = 'ef-fields-scroll';
+  fieldsScroll.style.cssText = 'flex: 1; overflow-y: auto; padding: var(--space-4) var(--space-5);';
+  _rebuildBodyInto(config, fieldsScroll);
+  tab1Body.appendChild(fieldsScroll);
 
   if (_editEntity) {
-    // Tab 1: Details (form fields)
-    tab1Body = document.createElement('div');
-    tab1Body.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; gap: 0;';
-
-    // ── Details tab (Tab 1) action bar: status toggle + open graph ────────
+    // ── Edit-mode action bar: status toggle + open graph ────────
     let _tab1BarBuilding = false;
     const _buildTab1ActionBar = () => {
       if (_tab1BarBuilding) return;
@@ -502,8 +522,8 @@ function _buildAndMount(config) {
       ].join(' ');
 
       // ── Status toggle: In Progress <> Complete (tasks only) ──
-      if (_editEntity.type === 'task') {
-        const isDone = _editEntity.status === 'Completed' || _editEntity.status === 'Done'; // SYS-01
+      if (_editEntity?.type === 'task') {
+        const isDone = _editEntity.status === 'Completed' || _editEntity.status === 'Done';
         const statusBtn = document.createElement('button');
         statusBtn.style.cssText = [
           'display: inline-flex; align-items: center; gap: 6px;',
@@ -516,20 +536,18 @@ function _buildAndMount(config) {
         statusBtn.innerHTML = isDone
           ? '<span>✓</span><span>Mark in progress</span>'
           : '<span style="opacity:0.5">○</span><span>Mark complete</span>';
-        statusBtn.title = isDone ? 'Switch back to In Progress' : 'Mark as completed'; // SYS-02b
+        statusBtn.title = isDone ? 'Switch back to In Progress' : 'Mark as completed';
         statusBtn.addEventListener('click', async () => {
           try {
-            const newStatus = isDone ? 'In Progress' : 'Completed'; // SYS-02
+            const newStatus = isDone ? 'In Progress' : 'Completed';
             const updated = { ..._editEntity, status: newStatus };
             const saved = await saveEntity(updated, getAccount()?.id);
             _editEntity = saved;
-            // Sync draft AND the live SELECT element so _saveDraftFromForm
-            // doesn't revert the status when the user later hits Save.
             _draft.status = newStatus;
             const statusSelect = _overlay?.querySelector('#ef-field-status');
             if (statusSelect) statusSelect.value = newStatus;
             emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
-            toast.success(newStatus === 'Completed' ? 'Marked complete ✓' : 'Marked in progress'); // SYS-03
+            toast.success(newStatus === 'Completed' ? 'Marked complete ✓' : 'Marked in progress');
             _buildTab1ActionBar();
           } catch (err) {
             console.error('[entity-form] status toggle failed:', err);
@@ -554,14 +572,11 @@ function _buildAndMount(config) {
           const eid = _editEntity?.id;
           if (!eid) return;
           closeForm();
-          // Open panel bypassing form-first, then trigger graph view
           try {
             const { openPanel } = await import('./entity-panel.js');
-            // Set skipFormFirst so panel renders (not form) before clicking graph btn
             openPanel._skipFormFirst = true;
             await openPanel(eid);
             openPanel._skipFormFirst = false;
-            // Wait for panel graph button to exist (retries for up to 1s to handle slow IDB)
             let _retries = 0;
             const _clickGraph = () => {
               const panelGraphBtn = document.querySelector('[aria-label="Open Graph"]');
@@ -580,41 +595,35 @@ function _buildAndMount(config) {
         actionBar.appendChild(graphBtn);
       }
 
-      // Only insert if at least one button was added
       if (actionBar.children.length > 0) {
         tab1Body.insertBefore(actionBar, tab1Body.firstChild);
       }
       _tab1BarBuilding = false;
     };
 
-    // Fields scroll container (padded, scrollable)
-    const fieldsScroll = document.createElement('div');
-    fieldsScroll.style.cssText = 'flex: 1; overflow-y: auto; padding: var(--space-4) var(--space-5);';
-    _rebuildBodyInto(config, fieldsScroll);
-    tab1Body.appendChild(fieldsScroll);
-
     _buildTab1ActionBar();
-    body.appendChild(tab1Body);
-
-    // Tab 2: Activity (timer + metadata + change history — lazy, built on first click)
-    tab2Body = document.createElement('div');
-    tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
-    body.appendChild(tab2Body);
-
-    // Tab 3: Connections (actions + entity relations — lazy, built on first click)
-    tab3Body = document.createElement('div');
-    tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
-    body.appendChild(tab3Body);
-
-    // Apply initial visibility
-    tab1Body.style.display = _activeFormTab === 'fields'    ? 'flex' : 'none';
-    tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
-    tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
-  } else {
-    // Create mode — no tabs, just the form body.
-    // .modal-body CSS class provides padding; no inline override needed.
-    _rebuildBodyInto(config, body);
   }
+
+  body.appendChild(tab1Body);
+
+  // ── Tabs 2–4: always create so switching works in both create and edit mode ──
+  tab2Body = document.createElement('div');
+  tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
+  body.appendChild(tab2Body);
+
+  tab3Body = document.createElement('div');
+  tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
+  body.appendChild(tab3Body);
+
+  tab4Body = document.createElement('div');
+  tab4Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
+  body.appendChild(tab4Body);
+
+  // Apply initial tab visibility
+  tab1Body.style.display = _activeFormTab === 'fields'    ? 'flex' : 'none';
+  tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
+  tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
+  tab4Body.style.display = _activeFormTab === 'reminders' ? 'flex' : 'none';
 
   // ── Footer ───────────────────────────────────────────── //
   // Single Save button — Cancel is redundant (✕ header, Esc, backdrop click all close).
@@ -2283,7 +2292,7 @@ async function _renderFormReminderSection(container, entity) {
   hdr.textContent = '\uD83D\uDD14 Reminders';
   wrap.appendChild(hdr);
 
-  // Load active reminder chips via graph edges
+  // Load active reminder chips via graph edges, sorted earliest first
   let activeReminders = [];
   try {
     const edges = await getEdgesTo(entity.id, 'reminds');
@@ -2291,6 +2300,12 @@ async function _renderFormReminderSection(container, entity) {
       edges.filter(e => e.fromType === 'reminder').map(e => getEntity(e.fromId).catch(() => null))
     );
     activeReminders = all.filter(r => r && (r.status === 'active' || r.status === 'snoozed'));
+    // Sort ascending by nextFireAt (earliest first); no-date entries go last
+    activeReminders.sort((a, b) => {
+      const ta = a.nextFireAt || a.fireAt || 'Z';
+      const tb = b.nextFireAt || b.fireAt || 'Z';
+      return ta.localeCompare(tb);
+    });
   } catch {}
 
   // ── Chip strip ──
@@ -2318,19 +2333,20 @@ async function _renderFormReminderSection(container, entity) {
     const title2  = `<span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc2(r.title || 'Reminder')}</span>`;
     const fire    = `<span style="color:var(--color-text-muted);white-space:nowrap;">${_fmtFire(r.nextFireAt)}</span>`;
     const recur   = r.rrule ? `<span style="color:var(--color-text-muted);">\uD83D\uDD01</span>` : '';
-    const editB   = `<button data-edit-rid="${_esc2(r.id)}" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-text-muted);">\u270F\uFE0F</button>`;
-    const dismissB= `<button data-dismiss-rid="${_esc2(r.id)}" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-danger);">\u2715</button>`;
-    chip.innerHTML = dot + title2 + fire + recur + editB + dismissB;
+    const editB   = `<button data-edit-rid="${_esc2(r.id)}" title="Edit reminder" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-text-muted);">\u270F\uFE0F</button>`;
+    // X = delete reminder + orphan cleanup (not just dismiss)
+    const deleteB = `<button data-delete-rid="${_esc2(r.id)}" title="Remove reminder" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-danger);">\u2715</button>`;
+    chip.innerHTML = dot + title2 + fire + recur + editB + deleteB;
     chipStrip.appendChild(chip);
   });
 
-  if (activeReminders.length > 3) {
-    const more = document.createElement('button');
-    more.style.cssText = 'font-size:0.73rem;color:var(--color-accent);background:none;border:none;cursor:pointer;text-align:left;';
-    more.textContent = '+' + (activeReminders.length - 3) + ' more\u2026';
-    more.addEventListener('click', () => import('../core/router.js').then(m => m.navigate('reminders')).catch(() => {}));
-    chipStrip.appendChild(more);
+  if (activeReminders.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:12px 0 4px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
+    empty.textContent = 'No reminders set for this entity.';
+    chipStrip.appendChild(empty);
   }
+
   wrap.appendChild(chipStrip);
 
   // ── Add Reminder toggle button ──
@@ -2394,16 +2410,35 @@ async function _renderFormReminderSection(container, entity) {
 
   // ── Delegated click handler for chip buttons ──
   wrap.addEventListener('click', async (e) => {
-    const editRid    = e.target.closest('[data-edit-rid]')?.dataset.editRid;
-    const dismissRid = e.target.closest('[data-dismiss-rid]')?.dataset.dismissRid;
+    const editRid   = e.target.closest('[data-edit-rid]')?.dataset.editRid;
+    const deleteRid = e.target.closest('[data-delete-rid]')?.dataset.deleteRid;
     if (editRid) {
       e.stopPropagation();
       import('./reminder-form.js').then(m => m.openReminderForm({ reminderId: editRid })).catch(() => {});
     }
-    if (dismissRid) {
+    if (deleteRid) {
       e.stopPropagation();
-      const svc = window._fhEnv?.services?.reminder;
-      if (svc) { await svc.dismiss(dismissRid); _refresh(); }
+      try {
+        // Orphan check: delete reminder if this is its only entity connection
+        const allEdges = await getEdgesFrom(deleteRid, 'reminds').catch(() => []);
+        const toEdges  = await getEdgesTo(deleteRid).catch(() => []);
+        const totalLinks = allEdges.length + toEdges.filter(ed => ed.toId !== entity.id).length;
+        if (totalLinks <= 1) {
+          // Only connected to this entity — delete the reminder entirely
+          await deleteEntity(deleteRid).catch(() => {});
+        } else {
+          // Still connected elsewhere — just remove the edge to this entity
+          const edge = toEdges.find(ed => ed.toId === entity.id);
+          if (edge) await deleteEdge(edge.id || `${deleteRid}:reminds:${entity.id}`).catch(() => {});
+        }
+        toast.success('Reminder removed');
+        _unsubs.forEach(fn => { try { fn(); } catch {} });
+        wrap.remove();
+        if (container.isConnected) _renderFormReminderSection(container, entity);
+      } catch (err) {
+        console.error('[entity-form] Delete reminder failed:', err);
+        toast.error('Could not remove reminder');
+      }
     }
   });
 
@@ -2443,8 +2478,64 @@ async function _renderFormReminderSection(container, entity) {
 }
 
 
+// ════════════════════════════════════════════════════════════
+// REMINDERS TAB (Tab 4) — dedicated reminder management
+// Moved from Connections tab to its own tab in v5.2.0
+// ════════════════════════════════════════════════════════════
+
+async function _buildRemindersTab(container) {
+  container.innerHTML = '';
+
+  const entity = _editEntity;
+
+  // ── Create mode: entity not yet saved ─────────────────────────
+  if (!entity) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px 24px;gap:12px;';
+    msg.innerHTML = `
+      <div style="font-size:1.8rem;opacity:0.4;">🔔</div>
+      <div style="font-weight:600;color:var(--color-text);font-size:var(--text-sm);">Save first to add reminders</div>
+      <div style="color:var(--color-text-muted);font-size:var(--text-xs);text-align:center;">
+        Fill in the details above, save the entity, then open the Reminders tab to manage reminders.
+      </div>
+      <button class="btn btn-primary ef-save-btn" style="margin-top:8px;padding:8px 20px;" onclick="document.querySelector('.ef-save-btn')?.click()">
+        Save now
+      </button>`;
+    container.appendChild(msg);
+    return;
+  }
+
+  // ── Render reminder section (full feature set) ─────────────────
+  if (['reminder','reminderLog','rule'].includes(entity.type)) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'padding:24px;color:var(--color-text-muted);font-size:var(--text-sm);text-align:center;';
+    msg.textContent = 'Reminders are not available for this entity type.';
+    container.appendChild(msg);
+    return;
+  }
+
+  await _renderFormReminderSection(container, entity);
+}
+
 async function _buildRelationsTab(container) {
-  if (!_editEntity) return;
+  // Create mode: show add-connection form but disable connection list (needs entity ID)
+  if (!_editEntity) {
+    container.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px 24px;gap:12px;';
+    msg.innerHTML = `
+      <div style="font-size:1.8rem;opacity:0.4;">🔗</div>
+      <div style="font-weight:600;color:var(--color-text);font-size:var(--text-sm);">Save first to add connections</div>
+      <div style="color:var(--color-text-muted);font-size:var(--text-xs);text-align:center;">
+        Fill in the details above and save — then you can link this entity to others.
+      </div>
+      <button style="margin-top:8px;padding:8px 20px;border-radius:var(--radius-md);background:var(--color-accent);color:#fff;border:none;cursor:pointer;font-size:var(--text-sm);font-weight:600;"
+        onclick="document.querySelector('.ef-save-btn')?.click()">
+        Save now
+      </button>`;
+    container.appendChild(msg);
+    return;
+  }
 
   const entity = _editEntity;
 
@@ -2730,10 +2821,7 @@ async function _buildRelationsTab(container) {
     if (toolbar.children.length > 0) container.appendChild(toolbar);
   }
 
-  // ── Reminder section (mirrors entity-panel quick-set, shown for all non-reminder types) ──
-  if (!['reminder', 'reminderLog'].includes(entity.type)) {
-    _renderFormReminderSection(container, entity).catch(e => console.warn('[entity-form] reminder section error:', e));
-  }
+  // Reminder section has moved to the dedicated Reminders tab (tab4) — see _buildRemindersTab()
 
   // ── Section 1: Add Connection ────────────────────────── //
   const addSection = document.createElement('div');
@@ -2986,11 +3074,17 @@ async function _renderFormConnectionsList(container, entity) {
     for (const edge of outgoing) {
       const linked = await getEntity(edge.toId).catch(() => null);
       if (!linked || linked.deleted) continue;
+      // Reminders are managed in the dedicated Reminders tab — skip here
+      if (linked.type === 'reminder') continue;
+      if (edge.relation === 'reminds') continue;
       items.push({ edge, linked, direction: 'out', sortKey: linked.updatedAt || linked.createdAt || '' });
     }
     for (const edge of incoming) {
       const linked = await getEntity(edge.fromId).catch(() => null);
       if (!linked || linked.deleted) continue;
+      // Reminders are managed in the dedicated Reminders tab — skip here
+      if (linked.type === 'reminder') continue;
+      if (edge.relation === 'reminds') continue;
       items.push({ edge, linked, direction: 'in', sortKey: linked.updatedAt || linked.createdAt || '' });
     }
     items.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
@@ -3121,8 +3215,25 @@ async function _renderFormConnectionsList(container, entity) {
  * For non-task entities sections 1 & 2 only.
  */
 async function _buildDetailsTab(container, config) {
-  if (!_editEntity) return;
   container.innerHTML = '';
+
+  // Create mode: show metadata fields available but no timer (needs entity ID)
+  if (!_editEntity) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px 24px;gap:12px;';
+    msg.innerHTML = `
+      <div style="font-size:1.8rem;opacity:0.4;">⚡</div>
+      <div style="font-weight:600;color:var(--color-text);font-size:var(--text-sm);">Activity is tracked after saving</div>
+      <div style="color:var(--color-text-muted);font-size:var(--text-xs);text-align:center;">
+        Time tracking, change history, and metadata appear here once the entity is saved.
+      </div>
+      <button style="margin-top:8px;padding:8px 20px;border-radius:var(--radius-md);background:var(--color-accent);color:#fff;border:none;cursor:pointer;font-size:var(--text-sm);font-weight:600;"
+        onclick="document.querySelector('.ef-save-btn')?.click()">
+        Save now
+      </button>`;
+    container.appendChild(msg);
+    return;
+  }
 
   const entity   = _editEntity;
 
@@ -3228,8 +3339,11 @@ async function _loadEntityActivityLog(container, entity, config) {
       getSetting('auditLog').catch(() => []),
       getSetting('auth').catch(() => null),
     ]);
+    // Filter out timer fields (timeTracked, lastFiredAt, fireCount) — handled by timer widget
+    const TIMER_FIELDS = new Set(['timeTracked','lastFiredAt','fireCount','reminderTitle']);
     const entries = Array.isArray(log)
-      ? log.filter(e => e.entityId === entity.id).reverse().slice(0, 100)
+      ? log.filter(e => e.entityId === entity.id && !TIMER_FIELDS.has(e.field))
+           .reverse().slice(0, 100)
       : [];
 
     // Build account ID → display name map

@@ -94,6 +94,32 @@ export function initReminderService() {
   // Sync upcoming reminders to SW as insurance timers
   _syncPushSchedules().catch(console.error);
 
+  // [v5.2.0] Cascade: when an entity is deleted, delete any reminders that are
+  // ONLY connected to that entity (orphan cleanup)
+  on(EVENTS.ENTITY_DELETED, async ({ entity, id }) => {
+    const deletedId = id || entity?.id;
+    if (!deletedId) return;
+    try {
+      const allReminders = await getEntitiesByType('reminder');
+      for (const r of allReminders) {
+        if (r.deleted) continue;
+        // Get all edges connecting this reminder to entities
+        const edges = await getEdgesFrom(r.id, 'reminds').catch(() => []);
+        const linkedIds = edges.map(e => e.toId);
+        if (!linkedIds.includes(deletedId)) continue; // not connected to deleted entity
+        const remaining = linkedIds.filter(tid => tid !== deletedId);
+        if (remaining.length === 0) {
+          // Only connection was to the deleted entity — delete the reminder
+          await deleteEntity(r.id).catch(err => console.warn('[reminder] cascade delete failed:', err));
+          console.log(`[reminder] Cascade-deleted orphaned reminder "${r.title}" (${r.id})`);
+        }
+        // If still has other connections, leave it intact
+      }
+    } catch (err) {
+      console.warn('[reminder] Entity deletion cascade check failed:', err);
+    }
+  });
+
   console.log('[reminder] initReminderService — 30s scheduler active');
 }
 
