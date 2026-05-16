@@ -193,10 +193,20 @@ function _refreshRelationChips(control, field) {
 
 /**
  * Open the form to edit an existing entity.
- * @param {object}   entity
- * @param {Function} [onSave]
+ * @param {object|string} entityOrId  — full entity object OR entity ID string
+ * @param {Function}      [onSave]
  */
-export function openEditForm(entity, onSave = null) {
+export async function openEditForm(entityOrId, onSave = null) {
+  // Accept either a full entity object or a bare string ID
+  let entity = entityOrId;
+  if (typeof entityOrId === 'string') {
+    entity = await getEntity(entityOrId).catch(() => null);
+    if (!entity) {
+      console.warn(`[entity-form] openEditForm: entity "${entityOrId}" not found`);
+      return;
+    }
+  }
+
   _activeFormTab = 'fields'; // reset tab on fresh open
   const config = getEntityTypeConfig(entity.type);
   if (!config) {
