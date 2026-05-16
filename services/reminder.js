@@ -17,7 +17,7 @@
 
 import { getEntitiesByType, getEntity, saveEntity, deleteEntity,
          getEdgesFrom, getEdgesTo, saveEdge, deleteEdge, uid,
-         getSetting } from '../core/db.js';
+         getSetting, logActivity } from '../core/db.js';
 import { emit, on, EVENTS }          from '../core/events.js';
 import { getAccount }                from '../core/auth.js';
 import { nextDate, rruleToHuman }    from './rrule-lite.js';
@@ -221,6 +221,7 @@ async function _fireReminder(reminder, now) {
 
   // ── Fan out ─────────────────────────────────────────────
   emit(EVENTS.REMINDER_FIRED, { reminder, targets, alert });
+  _logReminderActivity(reminder, 'reminder:fired').catch(() => {});
   await _fanOut(reminder, alert);
 
   // ── Alert drawer ────────────────────────────────────────
@@ -367,6 +368,67 @@ async function _writeLog(reminder, alert, outcome) {
 // CRUD
 // ════════════════════════════════════════════════════════════
 
+// ── Reminder activity logging ────────────────────────────────── //
+// Writes entries to linked entities' Activity tab Change History.
+
+async function _logReminderActivity(reminder, action, targetId) {
+  const acct  = getAccount();
+  const title = reminder?.title || 'Reminder';
+  try {
+    let entityIds = [];
+    if (targetId) {
+      entityIds = [targetId];
+    } else if (reminder?.id) {
+      const edges = await getEdgesFrom(reminder.id, 'reminds').catch(() => []);
+      entityIds = edges.map(e => e.toId);
+    }
+    if (!entityIds.length) return;
+    await Promise.all(entityIds.map(async (eid) => {
+      const ent = await getEntity(eid).catch(() => null);
+      if (!ent) return;
+      await logActivity({
+        action,
+        entityType:  ent.type,
+        entityId:    eid,
+        entityTitle: ent.title || ent.name || eid,
+        field:       null,
+        newValue:    title,
+        byAccountId: acct?.id || null,
+      });
+    }));
+  } catch (err) {
+    console.warn('[reminder] activity log failed:', err);
+  }
+}
+
+// ── Mark reminder done (recurrence-aware) ─────────────────────── //
+export async function markReminderDone(reminderId) {
+  const r = await getEntity(reminderId).catch(() => null);
+  if (!r) return;
+  const acct = getAccount();
+
+  if (r.rrule) {
+    // Recurring: advance to next occurrence, stay active
+    const next = nextDate(r.rrule, r.nextFireAt, r.fireAt);
+    if (next) {
+      const updated = await saveEntity({
+        ...r, status: 'active', nextFireAt: next,
+        snoozeUntil: null, lastFiredAt: _localISO(new Date()),
+      }, acct?.id);
+      emit(EVENTS.REMINDER_UPDATED, { reminder: updated });
+      await _logReminderActivity(updated, 'reminder:dismissed');
+      return updated;
+    }
+  }
+
+  // Non-recurring or exhausted recurrence: delete + remove edges
+  await _logReminderActivity(r, 'reminder:removed');
+  const edges = await getEdgesFrom(reminderId, 'reminds').catch(() => []);
+  await Promise.all(edges.map(e => deleteEdge(e.id).catch(() => {})));
+  await deleteEntity(reminderId).catch(() => {});
+  emit(EVENTS.REMINDER_DISMISSED, { reminderId });
+}
+
 export async function createReminder(data, targetId) {
   const acct   = getAccount();
   const fireAt = data.fireAt || _localISO(new Date(Date.now() + 3600000));
@@ -422,6 +484,8 @@ export async function createReminder(data, targetId) {
 
   // L-06 fix: emit REMINDER_CREATED after edge is saved so listeners see the edge
   emit(EVENTS.REMINDER_CREATED, { reminder: saved });
+  // Log to linked entity's activity tab
+  if (targetId) _logReminderActivity(saved, 'reminder:added', targetId).catch(() => {});
 
   _scheduleSWTimer(saved, targetId);
   return saved;
@@ -439,10 +503,9 @@ async function _dismiss(reminderId, by) {
   }, getAccount()?.id);
   _cancelSWTimer(reminderId);
   emit(EVENTS.REMINDER_DISMISSED, { reminderId });
+  _logReminderActivity(r, 'reminder:dismissed').catch(() => {});
 
-  // [v5.2.0] Phase 3: Chained reminder — fire the next in chain after dismiss
-  // Fires if chainedTo (template ID) OR chainTitle (fresh reminder) is set.
-  // Zero delays are valid — _fireChainedReminder enforces a 60s minimum.
+  // [v5.2.0] Phase 3: Chained reminder
   if (r.chainedTo || r.chainTitle) {
     _fireChainedReminder(r).catch(err => console.warn('[reminder] Chain fire failed:', err));
   }
@@ -497,7 +560,6 @@ async function _fireChainedReminder(dismissed) {
 async function _snooze(reminderId, minutes) {
   const r = await getEntity(reminderId);
   if (!r) return;
-  // [v5.1.0] Use adaptive snooze minutes if caller didn't specify explicit duration
   const ms          = ((minutes != null ? minutes : _adaptiveSnoozeMinutes(r)) || 10) * 60000;
   const snoozeUntil = _localISO(new Date(Date.now() + ms));
   const updated     = await saveEntity({
@@ -506,6 +568,7 @@ async function _snooze(reminderId, minutes) {
   _scheduleSWTimer(updated);
   emit(EVENTS.REMINDER_SNOOZED, { reminderId, snoozeUntil });
   _writeLog(r, { firedAt: new Date().toISOString(), fireCount: r.fireCount || 0, targets: [] }, 'snoozed').catch(console.error);
+  _logReminderActivity(r, 'reminder:snoozed').catch(() => {});
 }
 
 async function _pause(reminderId) {
@@ -514,6 +577,7 @@ async function _pause(reminderId) {
   await saveEntity({ ...r, status: 'paused' }, getAccount()?.id);
   _cancelSWTimer(reminderId);
   emit(EVENTS.REMINDER_PAUSED, { reminderId });
+  _logReminderActivity(r, 'reminder:paused').catch(() => {});
 }
 
 async function _resume(reminderId) {
@@ -528,6 +592,7 @@ async function _resume(reminderId) {
   }, getAccount()?.id);
   _scheduleSWTimer(updated);
   emit(EVENTS.REMINDER_RESUMED, { reminderId });
+  _logReminderActivity(r, 'reminder:resumed').catch(() => {});
 }
 
 async function _duplicate(reminderId, newTargetId, overrides = {}) {
@@ -736,6 +801,7 @@ export const reminderServiceDescriptor = {
       snooze:                (id, mins)          => _snooze(id, mins),
       pause:                 (id)                => _pause(id),
       resume:                (id)                => _resume(id),
+      markDone:              (id)                => markReminderDone(id),
       duplicate:             (id, tId, ovr)      => _duplicate(id, tId, ovr),
       applyTemplate:         (tId, type, cJson)  => _applyTemplate(tId, type, cJson),
       getActiveAlerts:       ()                  => [..._alerts],

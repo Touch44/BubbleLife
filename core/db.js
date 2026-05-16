@@ -542,7 +542,24 @@ export async function getEdgesTo(entityId, relation) {
 }
 
 /**
- * Save (create or update) an edge.
+ * Write a single activity/audit entry for an entity — usable from any service.
+ * @param {{ action, entityType, entityId, entityTitle, field?, oldValue?, newValue?, byAccountId?, at? }} entry
+ */
+export async function logActivity(entry) {
+  try {
+    const db  = await _getDB();
+    const now = new Date().toISOString();
+    const tx  = db.transaction([STORES.SETTINGS], 'readwrite');
+    await _appendAuditLog(tx, {
+      ...entry,
+      at: entry.at || now,
+    });
+    await tx.done;
+  } catch (err) {
+    console.error('[db] logActivity failed:', err);
+  }
+}
+
  * - Adds id to dirtyEdges queue
  * - Fires 'edge:saved' event
  * Blueprint §10.1 — saveEdge(edge)

@@ -440,11 +440,12 @@ function _buildAndMount(config) {
   const tab2Btn = _mkTab('details',   'Activity',                                      '⚡');
   // Tab 3: Connections — action buttons + entity relations
   const tab3Btn = _mkTab('relations', 'Connections',                                   '🔗');
-  // Tab 4: Reminders — all reminder management for this entity [v5.2.0]
-  const tab4Btn = _mkTab('reminders', 'Reminders',                                     '🔔');
+  // Tab 4: Reminders — not shown for reminder/reminderLog entities (no sub-reminders)
+  const _noRemindersTab = ['reminder', 'reminderLog'].includes(_typeKey);
+  const tab4Btn = _noRemindersTab ? null : _mkTab('reminders', 'Reminders',            '🔔');
 
   const _applyTabStyles = () => {
-    [tab1Btn, tab2Btn, tab3Btn, tab4Btn].forEach(b => {
+    [tab1Btn, tab2Btn, tab3Btn, tab4Btn].filter(Boolean).forEach(b => {
       const active = b.dataset.tabKey === _activeFormTab;
       b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
       b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
@@ -493,7 +494,7 @@ function _buildAndMount(config) {
   tabStrip.appendChild(tab1Btn);
   tabStrip.appendChild(tab2Btn);
   tabStrip.appendChild(tab3Btn);
-  tabStrip.appendChild(tab4Btn);
+  if (tab4Btn) tabStrip.appendChild(tab4Btn);
   _applyTabStyles();
 
   // ── Body ─────────────────────────────────────────────── //
@@ -530,6 +531,79 @@ function _buildAndMount(config) {
         'border-bottom: 1px solid var(--color-border);',
         'background: var(--color-surface); flex-shrink: 0;',
       ].join(' ');
+
+      // ── Reminder status actions (reminder entities only) ──────────────
+      if (_editEntity?.type === 'reminder') {
+        const svc = window._fhEnv?.services?.reminder;
+        const r   = _editEntity;
+        const isPaused   = r.status === 'paused';
+        const isInactive = r.status === 'dismissed' || r.status === 'expired';
+
+        const _rBtn = (label, bg, fg, handler) => {
+          const b = document.createElement('button');
+          b.style.cssText = `display:inline-flex;align-items:center;gap:5px;padding:5px 11px;
+            border-radius:var(--radius-md);cursor:pointer;font-size:var(--text-sm);
+            font-family:var(--font-body);transition:all 0.15s;
+            background:${bg};color:${fg};border:1px solid ${bg};`;
+          b.innerHTML = label;
+          b.addEventListener('click', async () => {
+            b.disabled = true;
+            try { await handler(); } catch (e) { console.error(e); toast.error('Action failed'); }
+            b.disabled = false;
+          });
+          return b;
+        };
+
+        if (!isInactive) {
+          // ✓ Done — delete one-shot, advance recurrence for recurring
+          actionBar.appendChild(_rBtn('✓ Done',
+            'var(--color-success-bg,#f0fdf4)', 'var(--color-success-text,#15803d)',
+            async () => {
+              await svc?.markDone(r.id);
+              toast.success(r.rrule ? 'Advanced to next occurrence ✓' : 'Reminder removed ✓');
+              closeForm();
+            }
+          ));
+
+          // ⏰ Snooze
+          actionBar.appendChild(_rBtn('⏰ Snooze',
+            'var(--color-surface-2,#f1f5f9)', 'var(--color-text)',
+            async () => {
+              await svc?.snooze(r.id);
+              const fresh = await getEntity(r.id).catch(() => null);
+              if (fresh) { _editEntity = fresh; _draft = { ...fresh }; }
+              toast.success('Snoozed');
+              _buildTab1ActionBar();
+            }
+          ));
+
+          // ⏸ Pause / ▶ Resume
+          actionBar.appendChild(_rBtn(isPaused ? '▶ Resume' : '⏸ Pause',
+            'var(--color-surface-2,#f1f5f9)', 'var(--color-text)',
+            async () => {
+              if (isPaused) await svc?.resume(r.id); else await svc?.pause(r.id);
+              const fresh = await getEntity(r.id).catch(() => null);
+              if (fresh) { _editEntity = fresh; _draft = { ...fresh }; }
+              toast.success(isPaused ? 'Resumed' : 'Paused');
+              _buildTab1ActionBar();
+            }
+          ));
+        }
+
+        if (isInactive) {
+          actionBar.appendChild(_rBtn('↻ Re-activate',
+            'var(--color-surface-2,#f1f5f9)', 'var(--color-text)',
+            async () => {
+              const fresh = await getEntity(r.id).catch(() => null);
+              if (!fresh) return;
+              const saved = await saveEntity({ ...fresh, status: 'active', dismissedAt: null, nextFireAt: fresh.fireAt }, getAccount()?.id);
+              _editEntity = saved; _draft = { ...saved };
+              toast.success('Reminder re-activated');
+              _buildTab1ActionBar();
+            }
+          ));
+        }
+      }
 
       // ── Status toggle: In Progress <> Complete (tasks only) ──
       if (_editEntity?.type === 'task') {
@@ -3414,11 +3488,23 @@ async function _loadEntityActivityLog(container, entity, config) {
         'font-size: var(--text-xs);',
       ].join(' ');
 
-      const icon = entry.action === 'create' ? '✨'
-                 : entry.action === 'delete' ? '🗑️'
-                 : entry.action === 'link'   ? '🔗'
-                 : entry.action === 'unlink' ? '🔓'
+      const icon = entry.action === 'create'             ? '✨'
+                 : entry.action === 'delete'             ? '🗑️'
+                 : entry.action === 'link'               ? '🔗'
+                 : entry.action === 'unlink'             ? '🔓'
+                 : entry.action?.startsWith('reminder:') ? '🔔'
                  : '✏️';
+
+      // Reminder activity entries — rendered directly from newValue (reminder title)
+      const REMINDER_LABELS = {
+        'reminder:added':     'Reminder added',
+        'reminder:fired':     'Reminder fired',
+        'reminder:dismissed': 'Reminder done',
+        'reminder:snoozed':   'Reminder snoozed',
+        'reminder:removed':   'Reminder removed',
+        'reminder:paused':    'Reminder paused',
+        'reminder:resumed':   'Reminder resumed',
+      };
 
       // Use pre-resolved values
       let oldVal = entry._resolvedOld;
@@ -3426,7 +3512,10 @@ async function _loadEntityActivityLog(container, entity, config) {
 
       // Build description
       let desc = `${icon} `;
-      if (entry.action === 'create') {
+      if (REMINDER_LABELS[entry.action]) {
+        desc += `${REMINDER_LABELS[entry.action]}`;
+        if (entry.newValue) desc += `: "${_efTruncate(entry.newValue, 40)}"`;
+      } else if (entry.action === 'create') {
         desc += `${config.label} created`;
       } else if (entry.action === 'delete') {
         desc += `${config.label} deleted`;

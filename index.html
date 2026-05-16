@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v5.2.1 [minor] bugfix2: reminder status filter, tab create-mode, openEditForm string ID, orphan delete -->
+  <!-- Build: v5.2.2 [minor] bugfix2: reminder status filter, tab create-mode, openEditForm string ID, orphan delete -->
 
   <title>FamilyHub</title>
 
@@ -546,13 +546,13 @@
       <!-- Populated by views/settings.js -->
     </div>
 
-    <!-- [v5.2.1] Reminders view -->
+    <!-- [v5.2.2] Reminders view -->
     <div id="view-reminders" class="view" role="region" aria-label="Reminders"
          aria-hidden="true">
       <!-- Populated by views/reminders.js -->
     </div>
 
-    <!-- [v5.2.1] Reminder Analytics view -->
+    <!-- [v5.2.2] Reminder Analytics view -->
     <div id="view-reminder-analytics" class="view" role="region" aria-label="Reminder Analytics"
          aria-hidden="true">
       <!-- Populated by views/reminder-analytics.js -->
@@ -788,14 +788,14 @@
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
   import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
-  // [v5.2.1] Reminder system
+  // [v5.2.2] Reminder system
   import { initReminderService,
            reminderServiceDescriptor }   from './services/reminder.js';
   import { mountAlertDrawer }           from './components/alert-card.js';
   import './views/reminders.js';         // registers 'reminders' view
-  // [v5.2.1] Phase 3 services
+  // [v5.2.2] Phase 3 services
   import { initAutoRulesEngine }        from './services/auto-reminder-rules.js';
-  import './views/reminder-analytics.js'; // [v5.2.1] registers 'reminder-analytics' view
+  import './views/reminder-analytics.js'; // [v5.2.2] registers 'reminder-analytics' view
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -990,7 +990,7 @@
       serviceRegistry.add('history',      historyServiceDescriptor);
       // P-11: command (no deps)
       serviceRegistry.add('command',      commandServiceDescriptor);
-      // [v5.2.1] Reminder service (depends on data + notification)
+      // [v5.2.2] Reminder service (depends on data + notification)
       serviceRegistry.add('reminder',     reminderServiceDescriptor);
 
       // P-01: Build the shared environment object (registry + services)
@@ -1025,11 +1025,11 @@
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
-      initReminderService(); // [v5.2.1] reminder scheduler + SW sync
-      mountAlertDrawer();    // [v5.2.1] alert drawer component
-      initAutoRulesEngine(); // [v5.2.1] auto-rules engine — triggers reminders on entity events
+      initReminderService(); // [v5.2.2] reminder scheduler + SW sync
+      mountAlertDrawer();    // [v5.2.2] alert drawer component
+      initAutoRulesEngine(); // [v5.2.2] auto-rules engine — triggers reminders on entity events
 
-      // [v5.2.1] NEW-C-05 fix: Deep-link handler for push notification taps
+      // [v5.2.2] NEW-C-05 fix: Deep-link handler for push notification taps
       // SW notificationclick opens /?open=TYPE:ID when no window is open
       // Must run AFTER navigate(startView) so the app is fully rendered first
       {
