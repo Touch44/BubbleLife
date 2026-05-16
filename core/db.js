@@ -379,8 +379,13 @@ export async function saveEntity(entity, byAccountId) {
       // Skip internal/structural fields that aren't meaningful to show
       const SKIP_FIELDS = new Set(['updatedAt', 'createdAt', 'createdBy', 'id',
                                     'deleted', 'dirtyAt', '_authorName', '_authorPersonId',
-                                    'timeTracked']); // timer updates handled by timer widget — not change history
+                                    'timeTracked',              // timer updates handled by timer widget
+                                    'lastFiredAt', 'fireCount', // rule stats — high-frequency, internal
+                                    'reminderTitle']);           // reminderLog denormalized field
+      // Skip audit for internal system types (rule stats, reminder logs flood history)
+      const SKIP_AUDIT_TYPES = new Set(['rule', 'reminderLog', 'activityLog']);
       let wroteAny = false;
+      if (!SKIP_AUDIT_TYPES.has(saved.type)) {
       for (const key of Object.keys(saved)) {
         if (SKIP_FIELDS.has(key)) continue;
         const oldVal = oldEntity[key];
@@ -400,13 +405,16 @@ export async function saveEntity(entity, byAccountId) {
         });
         wroteAny = true;
       }
+      } // end SKIP_AUDIT_TYPES check
       // If nothing changed (e.g. touch-save), skip audit entry — avoids polluting activity log
       // with meaningless 'updated' records that have no field delta to show.
     }
 
     await tx.done;
 
-    await _emit('entity:saved', { entity: saved, isNew });
+    // Include prevStatus so auto-rules engine can detect real status changes
+    const prevStatus = (!isNew && oldEntity) ? (oldEntity.status || null) : null;
+    await _emit('entity:saved', { entity: saved, isNew, prevStatus });
     // P-14: notify other tabs via sync service
     window._fhEnv?.services?.sync?.broadcast(saved.type || 'entity', saved.id, isNew ? 'create' : 'update');
     return saved;

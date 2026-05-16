@@ -2460,7 +2460,7 @@ async function _buildRelationsTab(container) {
   // We await this early so the Loading indicator is actually visible during the IDB reads.
   let _allEntities = [];
   try {
-    const allTypes = getAllEntityTypes();
+    const allTypes = getAllEntityTypes().filter(t => !t.hidden);
     const buckets = await Promise.all(allTypes.map(t => getEntitiesByType(t.key).catch(() => [])));
     _allEntities = buckets.flat()
       .filter(e => !e.deleted && e.id !== entity.id)
@@ -2676,7 +2676,7 @@ async function _buildRelationsTab(container) {
           'padding: 8px; min-width: 180px; max-height: 260px;',
           'overflow-y: auto; display: flex; flex-wrap: wrap; gap: 6px;',
         ].join(' ');
-        const types = getAllEntityTypes();
+        const types = getAllEntityTypes().filter(t => !t.hidden && !t.archived);
         for (const t of types) {
           if (t.key === entity.type) continue;
           const row = document.createElement('button');

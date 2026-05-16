@@ -147,6 +147,7 @@ function _buildModal(existing, targetEnt, prefill) {
     </div>` : ''}
 
     <div style="display:flex;flex-direction:column;gap:14px;">
+
       <!-- Title -->
       <div>
         <label style="${_lbl()}">Title</label>
@@ -224,6 +225,32 @@ function _buildModal(existing, targetEnt, prefill) {
           <div id="rf-cond-preview" style="font-size:0.72rem;color:var(--color-text-muted,#94a3b8);margin-top:4px;font-style:italic;"></div>
         </div>
       </div>
+
+      <!-- [v5.2.0] Phase 3: Chained reminder -->
+      <details id="rf-chain-section" ${d.chainTitle || d.chainedTo ? 'open' : ''} style="border:1px solid var(--color-border,#e2e8f0);border-radius:8px;padding:0;">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:0.8rem;font-weight:600;color:var(--color-text-muted);user-select:none;list-style:none;display:flex;align-items:center;gap:6px;">
+          🔗 Chain: automatically create a follow-up when dismissed
+        </summary>
+        <div style="padding:0 12px 12px;display:flex;flex-direction:column;gap:10px;margin-top:4px;">
+          <div>
+            <label style="${_lbl()}">Follow-up title</label>
+            <input id="rf-chain-title" type="text" value="${_esc(d.chainTitle || '')}"
+              placeholder="Follow-up: call the doctor" style="${_inp()}" />
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:0.8rem;color:var(--color-text-muted);">Fire after</span>
+            <input id="rf-chain-days"  type="number" min="0" max="365" value="${d.chainDelayDays  || 0}"
+              style="width:60px;padding:5px 8px;border:1px solid var(--color-border,#e2e8f0);border-radius:var(--radius-md);font-size:var(--text-sm);background:var(--color-surface);color:var(--color-text);" />
+            <span style="font-size:0.8rem;color:var(--color-text-muted);">days</span>
+            <input id="rf-chain-hours" type="number" min="0" max="8760" value="${d.chainDelayHours || 0}"
+              style="width:60px;padding:5px 8px;border:1px solid var(--color-border,#e2e8f0);border-radius:var(--radius-md);font-size:var(--text-sm);background:var(--color-surface);color:var(--color-text);" />
+            <span style="font-size:0.8rem;color:var(--color-text-muted);">hours</span>
+          </div>
+          <div style="font-size:0.72rem;color:var(--color-text-muted);line-height:1.4;">
+            Leave title blank to disable chaining. The follow-up fires automatically when this reminder is dismissed.
+          </div>
+        </div>
+      </details>
 
       <!-- [v5.1.0] Template toggle -->
       <div style="display:flex;align-items:center;gap:8px;">
@@ -499,6 +526,10 @@ async function _save(existing, targetEnt) {
     })(),
     // [v5.1.0] Template flag
     isTemplate:   !!_modal.querySelector('#rf-is-template')?.checked,
+    // [v5.2.0] Chained reminder fields
+    chainTitle:      _modal.querySelector('#rf-chain-title')?.value?.trim() || null,
+    chainDelayDays:  parseInt(_modal.querySelector('#rf-chain-days')?.value  || '0', 10) || 0,
+    chainDelayHours: parseInt(_modal.querySelector('#rf-chain-hours')?.value || '0', 10) || 0,
     // NEW-H-09 fix: when editing a dismissed/expired reminder, only reactivate if
     // the user explicitly set a new fireAt in the future. Otherwise preserve status.
     status: (() => {

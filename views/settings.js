@@ -256,7 +256,7 @@ async function renderSettings() {
 
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v5.1.0</div>
+          <div><strong>FamilyHub</strong> v5.2.0</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -606,6 +606,7 @@ async function renderSettings() {
   });
 
   // Restart Tour
+
   el.querySelector('#settings-tour-btn')?.addEventListener('click', () => {
     startTour('onboarding', window._fhEnv, true);
   });

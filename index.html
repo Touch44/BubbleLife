@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v5.1.0 [minor] Phase 2: condition UI, quiet hours, timer in form, badges, templates -->
+  <!-- Build: v5.2.0 [MAJOR] Phase 3: NLP reminders, auto-rules engine, chained reminders, analytics -->
 
   <title>FamilyHub</title>
 
@@ -546,10 +546,16 @@
       <!-- Populated by views/settings.js -->
     </div>
 
-    <!-- [v5.1.0] Reminders view -->
+    <!-- [v5.2.0] Reminders view -->
     <div id="view-reminders" class="view" role="region" aria-label="Reminders"
          aria-hidden="true">
       <!-- Populated by views/reminders.js -->
+    </div>
+
+    <!-- [v5.2.0] Reminder Analytics view -->
+    <div id="view-reminder-analytics" class="view" role="region" aria-label="Reminder Analytics"
+         aria-hidden="true">
+      <!-- Populated by views/reminder-analytics.js -->
     </div>
 
   </main><!-- /#main -->
@@ -782,11 +788,14 @@
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
   import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
-  // [v5.1.0] Reminder system
+  // [v5.2.0] Reminder system
   import { initReminderService,
            reminderServiceDescriptor }   from './services/reminder.js';
   import { mountAlertDrawer }           from './components/alert-card.js';
   import './views/reminders.js';         // registers 'reminders' view
+  // [v5.2.0] Phase 3 services
+  import { initAutoRulesEngine }        from './services/auto-reminder-rules.js';
+  import './views/reminder-analytics.js'; // [v5.2.0] registers 'reminder-analytics' view
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -981,7 +990,7 @@
       serviceRegistry.add('history',      historyServiceDescriptor);
       // P-11: command (no deps)
       serviceRegistry.add('command',      commandServiceDescriptor);
-      // [v5.1.0] Reminder service (depends on data + notification)
+      // [v5.2.0] Reminder service (depends on data + notification)
       serviceRegistry.add('reminder',     reminderServiceDescriptor);
 
       // P-01: Build the shared environment object (registry + services)
@@ -1016,10 +1025,11 @@
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
-      initReminderService(); // [v5.1.0] reminder scheduler + SW sync
-      mountAlertDrawer();    // [v5.1.0] alert drawer component
+      initReminderService(); // [v5.2.0] reminder scheduler + SW sync
+      mountAlertDrawer();    // [v5.2.0] alert drawer component
+      initAutoRulesEngine(); // [v5.2.0] auto-rules engine — triggers reminders on entity events
 
-      // [v5.1.0] NEW-C-05 fix: Deep-link handler for push notification taps
+      // [v5.2.0] NEW-C-05 fix: Deep-link handler for push notification taps
       // SW notificationclick opens /?open=TYPE:ID when no window is open
       // Must run AFTER navigate(startView) so the app is fully rendered first
       {
@@ -1259,7 +1269,7 @@
       // ── Expose minimal global for inter-module debugging ──
       // Blueprint §13.1: ONLY window.FH is allowed on window.*
       window.FH = Object.assign(window.FH || {}, {
-        version: '5.1.0', emit, on, env: window._fhEnv,
+        version: '5.2.0', emit, on, env: window._fhEnv,
         startTour: (name) => startTour(name, window._fhEnv),  // P-32
       });
 

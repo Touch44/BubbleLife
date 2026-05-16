@@ -68,6 +68,12 @@ async function renderRemindersView(params, env) {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px;">
         <h1 style="margin:0;font-size:1.4rem;font-weight:700;">🔔 Reminders</h1>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="rm-analytics-btn"
+            style="padding:8px 14px;border:1px solid var(--color-border,#e2e8f0);border-radius:8px;
+            cursor:pointer;font-size:0.875rem;background:var(--color-surface,#fff);
+            color:var(--color-text,#1e293b);">
+            📊 Analytics
+          </button>
           <button id="rm-templates-btn"
             style="padding:8px 14px;border:1px solid var(--color-border,#e2e8f0);border-radius:8px;
             cursor:pointer;font-size:0.875rem;background:var(--color-surface,#fff);
@@ -125,6 +131,9 @@ async function renderRemindersView(params, env) {
 
   // Wire buttons
   _container.querySelector('#rm-new')?.addEventListener('click', () => openReminderForm({}));
+  _container.querySelector('#rm-analytics-btn')?.addEventListener('click', () => {
+    import('../core/router.js').then(m => m.navigate('reminder-analytics')).catch(() => {});
+  });
   _container.querySelector('#rm-search')?.addEventListener('input', e => { _searchQ = e.target.value; _renderList(gen); });
   _container.querySelector('#rm-filter')?.addEventListener('change', e => { _filterStatus = e.target.value; _renderList(gen); });
 
