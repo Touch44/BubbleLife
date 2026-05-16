@@ -2302,16 +2302,17 @@ async function _renderFormReminderSection(container, entity) {
   hdr.textContent = '\uD83D\uDD14 Reminders';
   wrap.appendChild(hdr);
 
-  // Load active reminder chips via graph edges, sorted earliest first
-  let activeReminders = [];
+  // Load ALL non-dismissed reminder chips via graph edges, sorted earliest first
+  let allReminders = [];
   try {
     const edges = await getEdgesTo(entity.id, 'reminds');
-    const all = await Promise.all(
+    const fetched = await Promise.all(
       edges.filter(e => e.fromType === 'reminder').map(e => getEntity(e.fromId).catch(() => null))
     );
-    activeReminders = all.filter(r => r && (r.status === 'active' || r.status === 'snoozed'));
+    // Show everything except explicitly dismissed — expired/paused still relevant
+    allReminders = fetched.filter(r => r && r.status !== 'dismissed');
     // Sort ascending by nextFireAt (earliest first); no-date entries go last
-    activeReminders.sort((a, b) => {
+    allReminders.sort((a, b) => {
       const ta = a.nextFireAt || a.fireAt || 'Z';
       const tb = b.nextFireAt || b.fireAt || 'Z';
       return ta.localeCompare(tb);
@@ -2336,21 +2337,32 @@ async function _renderFormReminderSection(container, entity) {
 
   const _pColor = (p) => ({ Urgent: '#ef4444', High: '#f59e0b', Normal: '#3b82f6', Low: '#94a3b8' }[p] || '#94a3b8');
 
-  activeReminders.forEach(r => {
+  // Status badge for non-active reminders
+  const _statusBadge = (r) => {
+    if (r.status === 'active')   return '';
+    if (r.status === 'snoozed')  return `<span style="font-size:0.65rem;padding:1px 5px;border-radius:4px;background:#f59e0b22;color:#f59e0b;font-weight:600;">snoozed</span>`;
+    if (r.status === 'paused')   return `<span style="font-size:0.65rem;padding:1px 5px;border-radius:4px;background:#94a3b822;color:#94a3b8;font-weight:600;">paused</span>`;
+    if (r.status === 'expired')  return `<span style="font-size:0.65rem;padding:1px 5px;border-radius:4px;background:#22c55e22;color:#22c55e;font-weight:600;">fired</span>`;
+    return `<span style="font-size:0.65rem;padding:1px 5px;border-radius:4px;background:var(--color-border);color:var(--color-text-muted);font-weight:600;">${r.status}</span>`;
+  };
+
+  allReminders.forEach(r => {
+    const isInactive = r.status === 'expired' || r.status === 'paused';
     const chip = document.createElement('div');
-    chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;border:1px solid var(--color-border);font-size:0.75rem;background:var(--color-surface);flex-wrap:wrap;';
+    chip.style.cssText = `display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;border:1px solid var(--color-border);font-size:0.75rem;background:var(--color-surface);flex-wrap:wrap;${isInactive ? 'opacity:0.7;' : ''}`;
     const dot     = `<span style="width:8px;height:8px;border-radius:50%;background:${_pColor(r.priority)};flex-shrink:0;display:inline-block;"></span>`;
     const title2  = `<span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc2(r.title || 'Reminder')}</span>`;
     const fire    = `<span style="color:var(--color-text-muted);white-space:nowrap;">${_fmtFire(r.nextFireAt)}</span>`;
+    const badge   = _statusBadge(r);
     const recur   = r.rrule ? `<span style="color:var(--color-text-muted);">\uD83D\uDD01</span>` : '';
     const editB   = `<button data-edit-rid="${_esc2(r.id)}" title="Edit reminder" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-text-muted);">\u270F\uFE0F</button>`;
     // X = delete reminder + orphan cleanup (not just dismiss)
     const deleteB = `<button data-delete-rid="${_esc2(r.id)}" title="Remove reminder" style="border:none;background:none;cursor:pointer;padding:2px 4px;font-size:0.7rem;color:var(--color-danger);">\u2715</button>`;
-    chip.innerHTML = dot + title2 + fire + recur + editB + deleteB;
+    chip.innerHTML = dot + title2 + fire + badge + recur + editB + deleteB;
     chipStrip.appendChild(chip);
   });
 
-  if (activeReminders.length === 0) {
+  if (allReminders.length === 0) {
     const empty = document.createElement('div');
     empty.style.cssText = 'padding:12px 0 4px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
     empty.textContent = 'No reminders set for this entity.';
@@ -2416,7 +2428,9 @@ async function _renderFormReminderSection(container, entity) {
     if (container.isConnected) _renderFormReminderSection(container, entity);
   };
   [EVENTS.REMINDER_CREATED, EVENTS.REMINDER_UPDATED,
-   EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_SNOOZED].forEach(evt => _unsubs.push(on(evt, _refresh)));
+   EVENTS.REMINDER_DISMISSED, EVENTS.REMINDER_SNOOZED,
+   EVENTS.REMINDER_PAUSED,   EVENTS.REMINDER_RESUMED,
+   EVENTS.REMINDER_FIRED,    EVENTS.REMINDER_EXPIRED].forEach(evt => _unsubs.push(on(evt, _refresh)));
 
   // ── Delegated click handler for chip buttons ──
   wrap.addEventListener('click', async (e) => {
@@ -2429,17 +2443,16 @@ async function _renderFormReminderSection(container, entity) {
     if (deleteRid) {
       e.stopPropagation();
       try {
-        // Orphan check: delete reminder if this is its only entity connection
-        const allEdges = await getEdgesFrom(deleteRid, 'reminds').catch(() => []);
-        const toEdges  = await getEdgesTo(deleteRid).catch(() => []);
-        const totalLinks = allEdges.length + toEdges.filter(ed => ed.toId !== entity.id).length;
-        if (totalLinks <= 1) {
-          // Only connected to this entity — delete the reminder entirely
+        // Orphan check: how many entities is this reminder linked to?
+        // Edge storage: fromId=reminder → toId=entity, relation='reminds'
+        const remindsEdges = await getEdgesFrom(deleteRid, 'reminds').catch(() => []);
+        if (remindsEdges.length <= 1) {
+          // Only connected to this entity (or none) — delete the reminder entirely
           await deleteEntity(deleteRid).catch(() => {});
         } else {
-          // Still connected elsewhere — just remove the edge to this entity
-          const edge = toEdges.find(ed => ed.toId === entity.id);
-          if (edge) await deleteEdge(edge.id || `${deleteRid}:reminds:${entity.id}`).catch(() => {});
+          // Still linked to other entities — just remove this specific edge
+          const thisEdge = remindsEdges.find(ed => ed.toId === entity.id);
+          if (thisEdge) await deleteEdge(thisEdge.id).catch(() => {});
         }
         toast.success('Reminder removed');
         _unsubs.forEach(fn => { try { fn(); } catch {} });
