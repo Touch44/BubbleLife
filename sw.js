@@ -1,10 +1,10 @@
 /**
- * FamilyHub v5.2.0 — Service Worker (sw.js)
+ * FamilyHub v5.2.1 — Service Worker (sw.js)
  * [minor] Phase 2: condition UI, quiet hours, timer in form, reminder badges, template library
  */
 'use strict';
 
-const APP_VERSION   = '5.2.0'; // [MAJOR] Phase 3: NLP reminders, auto-rules engine, chained reminders, analytics
+const APP_VERSION   = '5.2.1'; // [MAJOR] Phase 3: NLP reminders, auto-rules engine, chained reminders, analytics
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -21,8 +21,8 @@ const SHELL_FILES = [
   './services/history.js', './services/command.js', './services/effects.js',
   './services/theme.js', './services/sync.js', './services/activity.js',
   './services/time-tracker.js',
-  './services/auto-reminder-rules.js', // [v5.2.0] Phase 3: auto-rules engine
-  './views/reminder-analytics.js',     // [v5.2.0] Phase 3: reminder analytics view
+  './services/auto-reminder-rules.js', // [v5.2.1] Phase 3: auto-rules engine
+  './views/reminder-analytics.js',     // [v5.2.1] Phase 3: reminder analytics view
   './components/entity-panel.js', './components/entity-form.js', './components/fab.js',
   './components/search.js', './components/search-bar.js', './components/command-palette.js',
   './components/systray.js', './components/graph-canvas.js',
