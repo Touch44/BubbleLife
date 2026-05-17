@@ -466,7 +466,7 @@ function _wireRows(body, gen) {
       if (!entityId) return;
       import('../components/entity-form.js')
         .then(m => m.openEditForm ? m.openEditForm(entityId) : import('../components/entity-panel.js').then(p => p.openPanel(entityId)))
-        .catch(() => import('../components/entity-panel.js').then(p => p.openPanel(entityId)).catch(() => {}));
+        .catch(() => import('../components/entity-panel.js').then(p => p.openPanel(entityId)).catch(e => console.warn('[reminders] openPanel fallback failed:', e)));
     });
   });
 }
@@ -479,7 +479,7 @@ async function _action(act, id) {
       import('../components/entity-form.js')
         .then(m => m.openEditForm ? m.openEditForm(id)
           : import('../components/entity-panel.js').then(p => p.openPanel(id)))
-        .catch(() => {});
+        .catch(err => console.error('[reminders] open-entity failed:', err));
       return true; // skip re-render
     }
     case 'edit':    openReminderForm({ reminderId: id }); break;

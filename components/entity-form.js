@@ -489,7 +489,7 @@ function _buildAndMount(config) {
   tab1Btn.addEventListener('click', () => _switchTab('fields'));
   tab2Btn.addEventListener('click', () => _switchTab('details'));
   tab3Btn.addEventListener('click', () => _switchTab('relations'));
-  tab4Btn.addEventListener('click', () => _switchTab('reminders'));
+  if (tab4Btn) tab4Btn.addEventListener('click', () => _switchTab('reminders'));
 
   tabStrip.appendChild(tab1Btn);
   tabStrip.appendChild(tab2Btn);
@@ -2474,7 +2474,7 @@ async function _renderFormReminderSection(container, entity) {
     pb.style.cssText = 'font-size:0.75rem;padding:5px 12px;border-radius:20px;border:1px solid var(--color-border);cursor:pointer;background:transparent;';
     pb.addEventListener('click', () => {
       if (p.custom) {
-        import('./reminder-form.js').then(m => m.openReminderForm({ targetEntity: entity })).catch(() => {});
+        import('./reminder-form.js').then(m => m.openReminderForm({ targetEntity: entity })).catch(e => console.error('[entity-form] openReminderForm (custom) failed:', e));
         return;
       }
       _selectedOffset = p.tomorrow ? null : p.offset;
@@ -2512,7 +2512,7 @@ async function _renderFormReminderSection(container, entity) {
     const deleteRid = e.target.closest('[data-delete-rid]')?.dataset.deleteRid;
     if (editRid) {
       e.stopPropagation();
-      import('./reminder-form.js').then(m => m.openReminderForm({ reminderId: editRid })).catch(() => {});
+      import('./reminder-form.js').then(m => m.openReminderForm({ reminderId: editRid })).catch(e => console.error('[entity-form] openReminderForm (edit chip) failed:', e));
     }
     if (deleteRid) {
       e.stopPropagation();
@@ -2522,11 +2522,11 @@ async function _renderFormReminderSection(container, entity) {
         const remindsEdges = await getEdgesFrom(deleteRid, 'reminds').catch(() => []);
         if (remindsEdges.length <= 1) {
           // Only connected to this entity (or none) — delete the reminder entirely
-          await deleteEntity(deleteRid).catch(() => {});
+          await deleteEntity(deleteRid).catch(e => console.warn("[entity-form] deleteEntity failed:", e));
         } else {
           // Still linked to other entities — just remove this specific edge
           const thisEdge = remindsEdges.find(ed => ed.toId === entity.id);
-          if (thisEdge) await deleteEdge(thisEdge.id).catch(() => {});
+          if (thisEdge) await deleteEdge(thisEdge.id).catch(e => console.warn("[entity-form] deleteEdge failed:", e));
         }
         toast.success('Reminder removed');
         _unsubs.forEach(fn => { try { fn(); } catch {} });
@@ -2880,7 +2880,7 @@ async function _buildRelationsTab(container) {
               emit(EVENTS.ENTITY_SAVED, { entity: converted, isNew: false });
               toast.success(`Converted to ${t.label}`);
               closeForm();
-              import('./entity-panel.js').then(({ openPanel }) => openPanel(converted.id)).catch(() => {});
+              import('./entity-panel.js').then(({ openPanel }) => openPanel(converted.id)).catch(e => console.error('[entity-form] openPanel after convert failed:', e));
             } catch (err) {
               console.error('[entity-form] Convert failed:', err);
               toast.error('Conversion failed');

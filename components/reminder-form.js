@@ -294,7 +294,7 @@ function _buildModal(existing, targetEnt, prefill) {
       import('./entity-form.js')
         .then(m => m.openEditForm ? m.openEditForm(entityId)
                                   : import('./entity-panel.js').then(p => p.openPanel(entityId)))
-        .catch(() => import('./entity-panel.js').then(p => p.openPanel(entityId)).catch(() => {}));
+        .catch(() => import('./entity-panel.js').then(p => p.openPanel(entityId)).catch(e => console.warn('[reminder-form] openPanel fallback failed:', e)));
     });
   }
   _modal.querySelector('#rf-cancel')?.addEventListener('click', closeReminderForm);
