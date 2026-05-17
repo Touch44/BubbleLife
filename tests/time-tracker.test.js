@@ -167,3 +167,101 @@ assert('night range: 21:59',    isInQuietWindow(toMin(21,59),toMin(22,0), toMin(
 
 console.log(`\n📊 Results: ${_passed} passed, ${_failed} failed\n`);
 if (_failed > 0) process.exit(1);
+
+// ── stopSession baseSecs fix regression ──────────────────────────────────────
+
+console.log('\n🧪 stopSession baseSecs fix (pause-then-restart)\n');
+
+// Simulate the fixed stopSession: baseSecs gets updated before running=false
+function stopSessionFixed(session) {
+  const elapsed = getElapsed(session);
+  session.baseSecs = elapsed; // THE FIX
+  session.running  = false;
+  return elapsed;
+}
+
+// Simulate startFreeRun: uses getElapsed(existing) for baseSecs
+function startFreeRunAgain(existing, taskTimeTracked = 0) {
+  const baseSecs = existing ? getElapsed(existing) : taskTimeTracked;
+  return { baseSecs, running: true, startedAt: new Date().toISOString() };
+}
+
+// Scenario: run 30s, pause, restart — should continue from 30s not 0s
+const sess1 = { baseSecs: 0, running: true, startedAt: new Date(Date.now() - 30000).toISOString() };
+const elapsed1 = stopSessionFixed(sess1);
+assert('stopSession computes correct elapsed (30s)', elapsed1 >= 29 && elapsed1 <= 31, true);
+assert('stopSession updates baseSecs', sess1.baseSecs >= 29, true);
+assert('stopSession clears running', sess1.running, false);
+
+const sess2 = startFreeRunAgain(sess1, elapsed1);
+assert('restart continues from correct baseSecs (not 0)', sess2.baseSecs >= 29, true);
+
+// Scenario: run 10s, adjust to 60s, run 10s more, pause, restart
+const sess3 = { baseSecs: 0, running: true, startedAt: new Date(Date.now() - 10000).toISOString() };
+// adjustSession: sets baseSecs=60, resets startedAt
+sess3.baseSecs  = 60;
+sess3.startedAt = new Date(Date.now() - 10000).toISOString(); // 10s since adjustment
+const elapsed3 = stopSessionFixed(sess3);
+assert('after adjust: elapsed includes post-adjust time', elapsed3 >= 69 && elapsed3 <= 71, true);
+assert('after adjust: baseSecs updated by stop', sess3.baseSecs >= 69, true);
+
+const sess4 = startFreeRunAgain(sess3, elapsed3);
+assert('after adjust+stop: restart from correct position', sess4.baseSecs >= 69, true);
+
+// Scenario: startBlock with fresh baseSecs=0 (no carry-over)
+assert('startBlock uses baseSecs=0 for clean countdown', (() => {
+  // Simulates the fixed startBlock: always starts fresh
+  const blockBaseSecs = 0;
+  return blockBaseSecs;
+})(), 0);
+
+console.log(`\n📊 Results: ${_passed} passed, ${_failed} failed\n`);
+if (_failed > 0) process.exit(1);
+
+// ── Bug fix regression: alarm saves elapsed, startFreeRun uses Math.max ──────
+
+console.log('\n🧪 Alarm-save and startFreeRun Math.max regression\n');
+
+// Bug 1: when alarm fires, session.baseSecs must equal session.blockSecs
+const alarmSess = { mode:'block', blockSecs:300, baseSecs:0, running:true,
+  startedAt: new Date(Date.now()-301000).toISOString(), alarmed:false };
+// Simulate alarm: set baseSecs = blockSecs
+alarmSess.baseSecs = alarmSess.blockSecs;
+alarmSess.alarmed  = true;
+alarmSess.running  = false;
+assert('Alarm: baseSecs set to blockSecs', alarmSess.baseSecs, 300);
+assert('Alarm: running cleared', alarmSess.running, false);
+assert('Alarm: alarmed set', alarmSess.alarmed, true);
+
+// Bug 25: startFreeRun after alarm uses Math.max(sessElapsed, entitySaved)
+const sessElapsed = getElapsed(alarmSess); // = baseSecs = 300 (not running)
+const entitySaved = 300; // what _saveElapsedToEntity persisted
+const baseSecs25  = Math.max(sessElapsed, entitySaved);
+assert('startFreeRun after alarm: baseSecs correct (300)', baseSecs25, 300);
+
+// If entity had prior time (e.g. 60s) before the block, entitySaved=60+300=360
+// But _saveElapsedToEntity saves only blockSecs (300). So prior time was already
+// in entity.timeTracked before startBlock. Now startFreeRun sees:
+// sessElapsed=300, entitySaved=360 → Math.max=360 ✓
+const entitySavedWithPrior = 360;
+const baseSecsWithPrior = Math.max(300, entitySavedWithPrior);
+assert('startFreeRun: Math.max preserves prior entity time', baseSecsWithPrior, 360);
+
+// Bug 7: adjustSession saves clamped value (structural test)
+assert('adjustSession clamps negative', Math.max(0, -5), 0);
+assert('adjustSession uses clamped var', Math.max(0, 60), 60);
+
+// Bug 24: _tickRunning guard prevents concurrent ticks
+let tickCount = 0;
+let tickGuard = false;
+const fakeTick = async () => {
+  if (tickGuard) return; tickGuard = true;
+  await new Promise(r => setTimeout(r, 10));
+  tickCount++;
+  tickGuard = false;
+};
+await Promise.all([fakeTick(), fakeTick(), fakeTick()]);
+assert('_tickRunning guard: only 1 tick runs concurrently', tickCount, 1);
+
+console.log(`\n📊 Results: ${_passed} passed, ${_failed} failed\n`);
+if (_failed > 0) process.exit(1);

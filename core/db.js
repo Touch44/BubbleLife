@@ -560,6 +560,8 @@ export async function logActivity(entry) {
   }
 }
 
+/**
+ * Save (create or update) an edge.
  * - Adds id to dirtyEdges queue
  * - Fires 'edge:saved' event
  * Blueprint §10.1 — saveEdge(edge)
