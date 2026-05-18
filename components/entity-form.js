@@ -45,9 +45,30 @@ const _tagValues = new Map();
 /** Active tab key in edit-mode form: 'fields' | 'details' | 'relations' */
 let _activeFormTab = 'fields';
 
+/** True while _submitForm is in-flight — prevents ENTITY_SAVED re-entering the form */
+let _formIsSaving = false;
+
+/** Cleanup fns for form-lifetime event subscriptions — called in closeForm */
+let _formEventUnsubs = [];
+
 /** Stack of saved parent form states for stacked (child) forms.
  *  When closeForm runs, if a parent state exists, it is restored. */
 const _parentFormStack = [];
+
+// ── Colorful palette for relation/tag chips — cycles through vibrant hues ── //
+const _CHIP_PALETTE = [
+  { bg: '#6366f1', text: '#fff' }, // indigo
+  { bg: '#8b5cf6', text: '#fff' }, // violet
+  { bg: '#ec4899', text: '#fff' }, // pink
+  { bg: '#f97316', text: '#fff' }, // orange
+  { bg: '#14b8a6', text: '#fff' }, // teal
+  { bg: '#3b82f6', text: '#fff' }, // blue
+  { bg: '#22c55e', text: '#fff' }, // green
+  { bg: '#e11d48', text: '#fff' }, // rose
+];
+function _chipColor(index) {
+  return _CHIP_PALETTE[index % _CHIP_PALETTE.length];
+}
 
 // ════════════════════════════════════════════════════════════
 // INIT
@@ -172,15 +193,19 @@ function _refreshRelationChips(control, field) {
   if (!chipWrap) return;
   chipWrap.innerHTML = '';
   const vals = _relationValues.get(field.key) || [];
-  for (const entity of vals) {
+  for (let i = 0; i < vals.length; i++) {
+    const entity = vals[i];
+    const { bg, text } = _chipColor(i);
     const chip = document.createElement('span');
     chip.className = 'ef-relation-chip';
-    chip.textContent = entity.title || entity.name || entity.label || entity.id;
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:var(--color-accent);color:#fff;border-radius:99px;font-size:var(--text-xs);font-weight:var(--weight-semibold);';
+    chip.style.cssText = `display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:${bg};color:${text};border-radius:99px;font-size:var(--text-sm);font-weight:600;letter-spacing:0.01em;box-shadow:0 1px 3px rgba(0,0,0,0.15);`;
+    const labelEl = document.createElement('span');
+    labelEl.textContent = entity.title || entity.name || entity.label || entity.id;
+    chip.appendChild(labelEl);
     const rm = document.createElement('button');
     rm.type = 'button';
     rm.textContent = '×';
-    rm.style.cssText = 'background:none;border:none;color:inherit;cursor:pointer;padding:0 0 0 4px;font-size:1em;line-height:1;';
+    rm.style.cssText = `background:none;border:none;color:${text};opacity:0.75;cursor:pointer;padding:0 0 0 4px;font-size:1em;line-height:1;`;
     rm.addEventListener('click', () => {
       const arr = _relationValues.get(field.key) || [];
       _relationValues.set(field.key, arr.filter(e => e.id !== entity.id));
@@ -236,6 +261,11 @@ export async function openEditForm(entityOrId, onSave = null) {
  */
 export function closeForm() {
   if (!_overlay) return;
+
+  // Cancel form-lifetime event subscriptions immediately (before the 200ms teardown)
+  _formEventUnsubs.forEach(fn => { try { fn(); } catch {} });
+  _formEventUnsubs = [];
+
   _overlay.classList.add('ef-closing');
   setTimeout(() => {
     _overlay?.remove();
@@ -469,18 +499,18 @@ function _buildAndMount(config) {
       const hideFooter = !!_editEntity && (key === 'details' || key === 'relations' || key === 'reminders');
       footerEl.style.display = hideFooter ? 'none' : '';
     }
-    // Lazy-load Tab 2 on first open
-    if (key === 'details' && tab2Body && !tab2Body.dataset.loaded) {
+    // Lazy-load Tab 2 on first open (or if marked dirty by external save)
+    if (key === 'details' && tab2Body && (!tab2Body.dataset.loaded || tab2Body.dataset.loaded === 'dirty')) {
       tab2Body.dataset.loaded = '1';
       const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
       _buildDetailsTab(tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
     }
-    // Lazy-load Tab 3 on first open
-    if (key === 'relations' && tab3Body && !tab3Body.dataset.loaded) {
+    // Lazy-load Tab 3 on first open (or if marked dirty)
+    if (key === 'relations' && tab3Body && (!tab3Body.dataset.loaded || tab3Body.dataset.loaded === 'dirty')) {
       tab3Body.dataset.loaded = '1';
       _buildRelationsTab(tab3Body);
     }
-    if (key === 'reminders' && tab4Body && !tab4Body.dataset.loaded) {
+    if (key === 'reminders' && tab4Body && (!tab4Body.dataset.loaded || tab4Body.dataset.loaded === 'dirty')) {
       tab4Body.dataset.loaded = '1';
       _buildRemindersTab(tab4Body);
     }
@@ -761,6 +791,45 @@ function _buildAndMount(config) {
     const titleInput = modal.querySelector('.ef-title-field');
     titleInput?.focus();
   }, 60);
+
+  // ── Form-lifetime event subscriptions ────────────────────────
+  // These keep the form in sync when the same entity is changed elsewhere
+  // (panel action, kanban drag, timer, another tab, etc.)
+  // All subscriptions are cleaned up in closeForm().
+
+  // Clear any subscriptions left from a previous form (shouldn't happen, but defensive)
+  _formEventUnsubs.forEach(fn => { try { fn(); } catch {} });
+  _formEventUnsubs = [];
+
+  if (_editEntity) {
+    const entityId = _editEntity.id;
+
+    // 1. ENTITY_SAVED — refresh non-field tabs when entity changes externally
+    _formEventUnsubs.push(on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
+      if (_formIsSaving) return;               // ignore our own saves
+      if (!_editEntity || entity?.id !== entityId) return; // different entity
+      _editEntity = entity;                    // keep _editEntity fresh
+      // Merge non-destructively: only update draft fields the user hasn't dirtied
+      // (Leave _draft as-is so in-progress typing is never lost)
+      _refreshFormTabs(config, false); // false = skip Details tab (preserve typing)
+    }));
+
+    // 2. ENTITY_DELETED — close form if editing entity was deleted
+    _formEventUnsubs.push(on(EVENTS.ENTITY_DELETED, ({ id } = {}) => {
+      if (id !== entityId) return;
+      toast.success('This entity was deleted — form closed');
+      closeForm();
+    }));
+
+    // 3. EDGE_SAVED / EDGE_DELETED — refresh Connections tab when relations change
+    const _onEdgeChange = ({ edge } = {}) => {
+      if (!edge) return;
+      if (edge.fromId !== entityId && edge.toId !== entityId) return;
+      _refreshFormTabs(config, false);
+    };
+    _formEventUnsubs.push(on(EVENTS.EDGE_SAVED,   _onEdgeChange));
+    _formEventUnsubs.push(on(EVENTS.EDGE_DELETED,  _onEdgeChange));
+  }
 }
 
 /** Update header title text when type changes */
@@ -921,6 +990,70 @@ function _buildFieldControl(field, config) {
 
     // ── DATE ─────────────────────────────────────────────── //
     case 'date': {
+      // ── executionDate: combined date+time row with copy-from-dueDate knob ── //
+      if (field.key === 'executionDate') {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+
+        // Sync button — copies current dueDate value into executionDate
+        const syncBtn = document.createElement('button');
+        syncBtn.type = 'button';
+        syncBtn.title = 'Copy current Due Date value to Execution Date';
+        syncBtn.style.cssText = [
+          'width:28px;height:28px;border-radius:50%;border:1px solid var(--color-border);',
+          'background:var(--color-surface);cursor:pointer;display:flex;align-items:center;',
+          'justify-content:center;font-size:14px;flex-shrink:0;transition:all 0.15s;',
+          'color:var(--color-accent);',
+        ].join('');
+        syncBtn.innerHTML = '⇐';
+        syncBtn.addEventListener('mouseenter', () => { syncBtn.style.background = 'var(--color-accent)'; syncBtn.style.color = '#fff'; });
+        syncBtn.addEventListener('mouseleave', () => { syncBtn.style.background = 'var(--color-surface)'; syncBtn.style.color = 'var(--color-accent)'; });
+        syncBtn.addEventListener('click', () => {
+          // Read live from DOM first (draft may be stale before submit)
+          const dueDateInput = _overlay?.querySelector('#ef-field-dueDate');
+          const dueDateVal = dueDateInput?.value || _draft.dueDate;
+          if (dueDateVal) {
+            const dateStr = String(dueDateVal).slice(0, 10);
+            input.value = dateStr;
+            _draft.executionDate = dateStr;
+            // Also sync executionTime from dueTime input if set
+            const dueTimeInput = _overlay?.querySelector('#ef-field-dueTime');
+            const dueTimeVal = dueTimeInput?.value || _draft.dueTime;
+            const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
+            if (execTimeEl && dueTimeVal) {
+              execTimeEl.value = dueTimeVal;
+              _draft.executionTime = dueTimeVal;
+            }
+          } else {
+            const orig = syncBtn.innerHTML;
+            syncBtn.textContent = '⚠';
+            syncBtn.title = 'No Due Date set yet';
+            setTimeout(() => { syncBtn.innerHTML = orig; syncBtn.title = 'Copy current Due Date value to Execution Date'; }, 1200);
+          }
+        });
+        wrap.appendChild(syncBtn);
+
+        const input = document.createElement('input');
+        input.type      = 'date';
+        input.id        = `ef-field-${field.key}`;
+        input.className = 'input';
+        // Auto-inherit dueDate ONLY for brand-new tasks (no _editEntity).
+        // On edit, respect whatever the user last saved (including intentional clear).
+        const isNewTask = !_editEntity;
+        const resolvedExec = existing
+          ? existing.slice(0, 10)
+          : (isNewTask ? (_draft.dueDate?.slice(0, 10) || '') : '');
+        input.value = resolvedExec;
+        if (resolvedExec) _draft.executionDate = resolvedExec;
+        if (field.required) input.required = true;
+        input.addEventListener('change', () => {
+          _draft[field.key] = input.value || null;
+        });
+        wrap.appendChild(input);
+        return wrap;
+      }
+
+      // Standard date field
       const input = document.createElement('input');
       input.type      = 'date';
       input.id        = `ef-field-${field.key}`;
@@ -946,27 +1079,34 @@ function _buildFieldControl(field, config) {
       input.value     = existing || '06:00';
       if (field.placeholder) input.placeholder = field.placeholder;
 
-      // Only save dueTime when dueDate is also set — prevents disappearing from calendar
+      // Only save time when paired date is also set
       input.addEventListener('change', () => {
-        const dateKey = field.key === 'dueTime' ? 'dueDate' : null;
-        if (dateKey && !_draft[dateKey]) {
-          // No date set — don't persist time, show hint
-          hintEl.textContent = '⚠ Set a Due Date first';
-          hintEl.style.color = 'var(--color-warning-text)';
-          input.value = existing || '06:00';
-          return;
+        const dateKey = field.key === 'dueTime' ? 'dueDate'
+                      : field.key === 'executionTime' ? 'executionDate' : null;
+        if (dateKey) {
+          // Check live DOM input first (draft may be stale before submit)
+          const pairedInput = _overlay?.querySelector(`#ef-field-${dateKey}`);
+          const pairedVal = pairedInput?.value || _draft[dateKey];
+          if (!pairedVal) {
+            const hintLabel = dateKey === 'dueDate' ? 'a Due Date' : 'an Execution Date';
+            hintEl.textContent = `⚠ Set ${hintLabel} first`;
+            hintEl.style.color = 'var(--color-warning-text,#b45309)';
+            input.value = existing || '';
+            return;
+          }
         }
         _draft[field.key] = input.value || '06:00';
         hintEl.textContent = field.helpText || '10-min steps';
         hintEl.style.color = 'var(--color-text-muted)';
       });
-      // [minor] BUG-18 fix: init draft only if dueDate exists; clear displayed value
-      // when no dueDate so the input doesn't misleadingly show '06:00'
-      if (!existing && _draft.dueDate) {
+      // init draft: only set time if paired date exists
+      const pairedDateKey = field.key === 'dueTime' ? 'dueDate'
+                          : field.key === 'executionTime' ? 'executionDate' : null;
+      if (!existing && pairedDateKey && _draft[pairedDateKey]) {
         _draft[field.key] = '06:00';
       } else if (!existing) {
-        _draft[field.key] = null; // no date = no time
-        input.value = '';          // clear displayed '06:00' placeholder
+        _draft[field.key] = null;
+        input.value = '';
       }
 
       const hintEl = document.createElement('span');
@@ -1345,30 +1485,37 @@ function _buildTagControl(field) {
   chipRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-1);';
   wrap.appendChild(chipRow);
 
-  // ── Search input ─────────────────────────────────────── //
+  // ── Search input + dropdown wrapper ─────────────────── //
+  const searchWrap = document.createElement('div');
+  searchWrap.style.cssText = 'position: relative;';
+  wrap.appendChild(searchWrap);
+
   const searchInput = document.createElement('input');
   searchInput.type        = 'text';
   searchInput.className   = 'input';
   searchInput.placeholder = 'Search or add tags…';
   searchInput.autocomplete = 'off';
-  wrap.appendChild(searchInput);
+  searchWrap.appendChild(searchInput);
 
   // ── Dropdown results ─────────────────────────────────── //
   const results = document.createElement('div');
   results.style.cssText = [
-    'max-height: 140px; overflow-y: auto;',
-    'border: 1px solid var(--color-border); border-top: none;',
-    'border-radius: 0 0 var(--radius-sm) var(--radius-sm);',
+    'max-height: 180px; overflow-y: auto;',
+    'border: 1px solid var(--color-border);',
+    'border-radius: var(--radius-sm);',
+    'position: absolute; top: 100%; left: 0; right: 0; z-index: 1200;',
     'display: none; background: var(--color-bg);',
+    'box-shadow: 0 8px 24px rgba(0,0,0,0.15);',
+    'margin-top: 2px;',
   ].join(' ');
-  wrap.appendChild(results);
+  searchWrap.appendChild(results);
 
   // ── "+ Create" button ─────────────────────────────────── //
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
   createBtn.className = 'ef-relation-create-btn';
   createBtn.style.display = 'none';
-  wrap.appendChild(createBtn);
+  searchWrap.appendChild(createBtn);
 
   createBtn.addEventListener('click', () => {
     const rawName = searchInput.value.trim();
@@ -1417,15 +1564,18 @@ function _buildTagControl(field) {
     const tags = _tagValues.get(field.key) || [];
     for (let i = 0; i < tags.length; i++) {
       const tagName = tags[i];
+      const { bg, text } = _chipColor(i);
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
-      chip.style.cssText = 'display: inline-flex; align-items: center; gap: 4px;';
+      chip.style.cssText = `display:inline-flex;align-items:center;gap:5px;background:${bg};color:${text};border-radius:99px;padding:4px 10px;font-size:var(--text-sm);font-weight:600;letter-spacing:0.01em;box-shadow:0 1px 3px rgba(0,0,0,0.15);transition:filter 0.15s;`;
       chip.title = 'Click label to open tag · × to remove';
 
       // Clickable label — looks up tag entity by name and opens panel
       const labelEl = document.createElement('span');
       labelEl.textContent = tagName;
       labelEl.style.cursor = 'pointer';
+      labelEl.addEventListener('mouseenter', () => { chip.style.filter = 'brightness(1.1)'; });
+      labelEl.addEventListener('mouseleave', () => { chip.style.filter = ''; });
       labelEl.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
@@ -1445,7 +1595,9 @@ function _buildTagControl(field) {
       // Remove button
       const rm = document.createElement('span');
       rm.textContent = '×';
-      rm.style.cssText = 'cursor: pointer; font-weight: bold; color: var(--color-text-muted); margin-left: 2px;';
+      rm.style.cssText = `cursor:pointer;font-weight:bold;color:${text};opacity:0.75;font-size:1em;line-height:1;`;
+      rm.addEventListener('mouseenter', () => { rm.style.opacity = '1'; });
+      rm.addEventListener('mouseleave', () => { rm.style.opacity = '0.75'; });
       rm.addEventListener('click', (function(idx) {
         return function(e) {
           e.stopPropagation();
@@ -1638,16 +1790,17 @@ function _refreshRelationChipsDom(chipRow, fieldKey) {
   const vals = _relationValues.get(fieldKey) || [];
   for (let i = 0; i < vals.length; i++) {
     const entity = vals[i];
+    const { bg, text } = _chipColor(i);
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;cursor:default;';
+    chip.style.cssText = `display:inline-flex;align-items:center;gap:5px;cursor:default;background:${bg};color:${text};border-radius:99px;padding:4px 10px 4px 10px;font-size:var(--text-sm);font-weight:600;letter-spacing:0.01em;box-shadow:0 1px 3px rgba(0,0,0,0.15);transition:filter 0.15s;`;
     chip.dataset.id = entity.id;
     chip.title = 'Double-click to open · × to remove';
     const label = document.createElement('span');
     label.textContent = entity.label || entity.id;
-    label.style.cssText = 'cursor:pointer;border-bottom:1px dashed transparent;transition:border-color 0.15s;';
-    label.addEventListener('mouseenter', () => { label.style.borderBottomColor = 'var(--color-accent)'; });
-    label.addEventListener('mouseleave', () => { label.style.borderBottomColor = 'transparent'; });
+    label.style.cssText = 'cursor:pointer;';
+    label.addEventListener('mouseenter', () => { chip.style.filter = 'brightness(1.1)'; });
+    label.addEventListener('mouseleave', () => { chip.style.filter = ''; });
     // Double-click → open that entity's edit form (stacked above parent)
     label.addEventListener('dblclick', (e) => {
       e.preventDefault();
@@ -1657,7 +1810,9 @@ function _refreshRelationChipsDom(chipRow, fieldKey) {
     chip.appendChild(label);
     const rm = document.createElement('span');
     rm.textContent = '×';
-    rm.style.cssText = 'cursor:pointer;font-weight:bold;color:var(--color-text-muted);margin-left:2px;';
+    rm.style.cssText = `cursor:pointer;font-weight:bold;color:${text};opacity:0.75;margin-left:2px;font-size:1em;line-height:1;`;
+    rm.addEventListener('mouseenter', () => { rm.style.opacity = '1'; });
+    rm.addEventListener('mouseleave', () => { rm.style.opacity = '0.75'; });
     rm.addEventListener('click', (function(idx) {
       return function() {
         const arr = _relationValues.get(fieldKey) || [];
@@ -1720,27 +1875,34 @@ function _buildRelationControl(field, config) {
   chipRow.style.cssText = 'display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-1);';
   wrap.appendChild(chipRow);
 
+  const relSearchWrap = document.createElement('div');
+  relSearchWrap.style.cssText = 'position: relative;';
+  wrap.appendChild(relSearchWrap);
+
   const searchInput = document.createElement('input');
   searchInput.type        = 'text';
   searchInput.className   = 'input';
   searchInput.placeholder = `Search ${field.relatesTo || 'entities'}…`;
   searchInput.autocomplete = 'off';
-  wrap.appendChild(searchInput);
+  relSearchWrap.appendChild(searchInput);
 
   const results = document.createElement('div');
   results.style.cssText = `
-    max-height: 140px; overflow-y: auto; border: 1px solid var(--color-border);
-    border-top: none; border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    max-height: 180px; overflow-y: auto; border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 1200;
     display: none; background: var(--color-bg);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    margin-top: 2px;
   `;
-  wrap.appendChild(results);
+  relSearchWrap.appendChild(results);
 
   // + Create new entity button (shown when search has text but no results)
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
   createBtn.className = 'ef-relation-create-btn';
   createBtn.style.display = 'none';
-  wrap.appendChild(createBtn);
+  relSearchWrap.appendChild(createBtn);
   createBtn.addEventListener('click', () => {
     // Look up the target type's title field key (not always 'title')
     const _tCfg = getEntityTypeConfig(typeToSearch);
@@ -2146,6 +2308,15 @@ async function _buildFormTimeTrackerUI(container, entity) {
     op.textContent = o.l;
     blockSelect.appendChild(op);
   }
+  // Apply saved default time block setting (items 4 & 5) — only for NEW tasks (no existing sessions)
+  getSetting('taskDefaultTimeBlock').then(defaultSecs => {
+    if (defaultSecs && !_ftGetSession(taskId)) {
+      const val = String(defaultSecs);
+      if ([...blockSelect.options].some(o => o.value === val)) {
+        blockSelect.value = val;
+      }
+    }
+  }).catch(() => {});
   blockRow.appendChild(blockSelect);
 
   const startBlockBtn = _mkBtn('▶ Start Block', true);
@@ -2376,22 +2547,39 @@ async function _renderFormReminderSection(container, entity) {
   hdr.textContent = '\uD83D\uDD14 Reminders';
   wrap.appendChild(hdr);
 
-  // Load ALL non-dismissed reminder chips via graph edges, sorted earliest first
+  // Load ALL non-dismissed reminders linked to this entity.
+  // Uses two complementary queries to handle both edge directions and old data:
+  //   1. getEdgesTo(entity.id, 'reminds')  — standard: reminder→entity incoming edge
+  //   2. getEdgesTo(entity.id) filtered    — fallback: any incoming edge with relation='reminds'
+  // Both filtered by fetched entity type='reminder' (not fromType, which may be absent in old data).
   let allReminders = [];
   try {
-    const edges = await getEdgesTo(entity.id, 'reminds');
+    // Primary query: compound index toId_relation
+    let edges = await getEdgesTo(entity.id, 'reminds').catch(() => []);
+
+    // Fallback: if compound index returned nothing, use simple toId index and filter in JS.
+    // Handles cases where the compound index is unavailable or edges lack fromType.
+    if (!edges.length) {
+      const allIncoming = await getEdgesTo(entity.id).catch(() => []);
+      edges = allIncoming.filter(e => e.relation === 'reminds');
+    }
+
+    // Fetch reminder entities — verify type='reminder' on the fetched entity
+    // (safer than trusting fromType which may be null on edges created by older code)
     const fetched = await Promise.all(
-      edges.filter(e => e.fromType === 'reminder').map(e => getEntity(e.fromId).catch(() => null))
+      edges.map(e => getEntity(e.fromId).catch(() => null))
     );
-    // Show everything except explicitly dismissed — expired/paused still relevant
-    allReminders = fetched.filter(r => r && r.status !== 'dismissed');
+    allReminders = fetched.filter(r => r && r.type === 'reminder' && r.status !== 'dismissed');
+
     // Sort ascending by nextFireAt (earliest first); no-date entries go last
     allReminders.sort((a, b) => {
       const ta = a.nextFireAt || a.fireAt || 'Z';
       const tb = b.nextFireAt || b.fireAt || 'Z';
       return ta.localeCompare(tb);
     });
-  } catch {}
+  } catch (err) {
+    console.warn('[entity-form] _renderFormReminderSection: edge load failed:', err);
+  }
 
   // ── Chip strip ──
   const chipStrip = document.createElement('div');
@@ -3624,9 +3812,13 @@ function _fieldKeyToRelLabel(key, fieldConfig) {
 
 async function _submitForm() {
   if (!_typeKey) return;
+  if (_formIsSaving) return; // prevent double-submit
 
   const config = getEntityTypeConfig(_typeKey);
   if (!config) return;
+
+  _formIsSaving = true;
+  try {
 
   // Sync draft from live form
   _saveDraftFromForm();
@@ -3896,12 +4088,55 @@ async function _submitForm() {
       }
       errBanner.textContent = `Save failed: ${err.message || 'Unknown error'}`;
     }
+  } finally {
+    _formIsSaving = false;
   }
 }
 
-// ════════════════════════════════════════════════════════════
-// HELPERS
-// ════════════════════════════════════════════════════════════
+/**
+ * Refresh the non-Details tabs of the currently open entity form.
+ * Called when an external save/edge change affects the editing entity.
+ * @param {object} config
+ * @param {boolean} includeDetails  — if true also refreshes the Details tab (fields)
+ */
+function _refreshFormTabs(config, includeDetails = false) {
+  if (!_editEntity) return;
+  // Activity tab: reset so it re-loads with latest change history
+  if (tab2Body?.dataset.loaded && (includeDetails || tab2Body.dataset.loaded === 'dirty')) {
+    tab2Body.dataset.loaded = '';
+    if (_activeFormTab === 'details') {
+      const freshConfig = getEntityTypeConfig(_editEntity.type) || config;
+      _buildDetailsTab(tab2Body, freshConfig).catch(e => console.warn('[entity-form] Activity refresh:', e));
+    }
+  } else if (tab2Body?.dataset.loaded) {
+    // Mark dirty so it reloads next time it becomes active
+    tab2Body.dataset.loaded = 'dirty';
+  }
+  // Connections tab
+  if (tab3Body?.dataset.loaded) {
+    tab3Body.dataset.loaded = '';
+    if (_activeFormTab === 'relations') {
+      _buildRelationsTab(tab3Body);
+    }
+  }
+  // Reminders tab
+  if (tab4Body?.dataset.loaded) {
+    tab4Body.dataset.loaded = '';
+    if (_activeFormTab === 'reminders') {
+      _buildRemindersTab(tab4Body);
+    }
+  }
+  // Update modal header title if entity title changed
+  if (_overlay) {
+    const headerTitle = _overlay.querySelector('.ef-entity-label');
+    if (headerTitle) {
+      const name = _editEntity.title || _editEntity.name || '';
+      if (name && headerTitle.textContent !== name) headerTitle.textContent = name;
+    }
+  }
+}
+
+
 
 /**
  * Sync live input values into _draft (for fields not already updating on input).

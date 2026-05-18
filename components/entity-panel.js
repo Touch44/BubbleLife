@@ -1443,16 +1443,19 @@ async function _renderReminderFooter(container, entity) {
   footer.style.cssText = 'margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border,#e2e8f0);';
 
   // Load active reminders for this entity via graph edges
-  // C-07 fix: use already-statically-imported getEdgesTo and getEntity (no dynamic import)
+  // Uses dual-lookup: compound index first, simple index fallback.
+  // Checks entity type='reminder' rather than fromType (may be absent on old edges).
   let activeReminders = [];
   try {
-    const edges = await getEdgesTo(entity.id, 'reminds');
-    const all   = await Promise.all(
-      edges.filter(e => e.fromType === 'reminder').map(e => getEntity(e.fromId))
-    );
-    // 3P-M-05 fix: include snoozed reminders in chip strip (user should see them)
-    activeReminders = all.filter(r => r && (r.status === 'active' || r.status === 'snoozed'));
-  } catch {}
+    let edges = await getEdgesTo(entity.id, 'reminds').catch(() => []);
+    if (!edges.length) {
+      const allIncoming = await getEdgesTo(entity.id).catch(() => []);
+      edges = allIncoming.filter(e => e.relation === 'reminds');
+    }
+    const all = await Promise.all(edges.map(e => getEntity(e.fromId).catch(() => null)));
+    // Show active and snoozed reminders in panel footer
+    activeReminders = all.filter(r => r && r.type === 'reminder' && (r.status === 'active' || r.status === 'snoozed'));
+  } catch (err) { console.warn('[entity-panel] reminder footer load failed:', err); }
 
   const chipHtml = activeReminders.slice(0, 3).map(r => {
     const { rruleToHuman: rth } = { rruleToHuman: (x) => x ? '🔁' : '' };

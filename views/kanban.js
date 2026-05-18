@@ -125,13 +125,14 @@ let _viewMode   = 'list'; // Spec: "default list with the view button on the rig
 // incompatible with kanban status columns force their canonical view.
 // User can always override via the view-mode dropdown.
 const _TAB_CANONICAL_VIEW = {
-  inbox:     'list',    // spec: grouped by creation date
-  today:     'kanban',  // [MAJOR] spec: default to kanban for Today tab
-  scheduled: 'list',    // spec: grouped by date property
-  context:   'list',    // spec: grouped by context
-  open:      'list',    // spec: ordered by priority and status (single group)
-  completed: 'list',    // spec: ordered by completion date
-  all:       'list',    // spec: all tasks, user filter/sort
+  inbox:      'list',    // spec: grouped by creation date
+  today:      'kanban',  // [MAJOR] spec: default to kanban for Today tab
+  scheduled:  'list',    // spec: grouped by execution date
+  byDeadline: 'list',    // spec: grouped by due/deadline date
+  context:    'list',    // spec: grouped by context
+  open:       'list',    // spec: ordered by priority and status (single group)
+  completed:  'list',    // spec: ordered by completion date
+  all:        'list',    // spec: all tasks, user filter/sort
 };
 
 // Track whether user has manually overridden the view for the current session
@@ -145,24 +146,26 @@ const _VIEW_MODES = [
 ];
 
 const _FILTER_TABS = [
-  { key: 'inbox',     label: 'Inbox',     icon: '\uD83D\uDCEC' },
-  { key: 'today',     label: 'Today',     icon: '\u2600\uFE0F' },
-  { key: 'scheduled', label: 'Scheduled', icon: '\uD83D\uDCC5' },
-  { key: 'context',   label: 'Context',   icon: '\uD83C\uDFF7\uFE0F' },
-  { key: 'open',      label: 'Open',      icon: '\u25CB' },
-  { key: 'completed', label: 'Completed', icon: '\u2705' },
-  { key: 'all',       label: 'All',       icon: '\uD83D\uDDC2\uFE0F' },
+  { key: 'inbox',      label: 'Inbox',       icon: '\uD83D\uDCEC' },
+  { key: 'today',      label: 'Today',        icon: '\u2600\uFE0F' },
+  { key: 'scheduled',  label: 'Scheduled',    icon: '\uD83D\uDCC5' },
+  { key: 'byDeadline', label: 'By Deadline',  icon: '\u23F0' },
+  { key: 'context',    label: 'Context',      icon: '\uD83C\uDFF7\uFE0F' },
+  { key: 'open',       label: 'Open',         icon: '\u25CB' },
+  { key: 'completed',  label: 'Completed',    icon: '\u2705' },
+  { key: 'all',        label: 'All',          icon: '\uD83D\uDDC2\uFE0F' },
 ]; // [MAJOR] Removed Status tab — Kanban view with status columns makes it redundant
 
 // User's default view preferences per filter tab (loaded from DB on render)
 let _defaultViewPerTab = {
-  inbox:     'list',
-  today:     'kanban',
-  scheduled: 'list',
-  context:   'list',
-  open:      'list',
-  completed: 'list',
-  all:       'list',
+  inbox:      'list',
+  today:      'kanban',
+  scheduled:  'list',
+  byDeadline: 'list',
+  context:    'list',
+  open:       'list',
+  completed:  'list',
+  all:        'list',
 };
 
 // Sort state per column key
@@ -317,12 +320,17 @@ function _applyFilters(tasks) {
     if (_filterPriority && t.priority !== _filterPriority) return false;
     if (_filterOverdue) {
       const today = _todayStr();
-      const due = _isoToLocalDate(t.dueDate);
-      if (!due || due > today) return false;
+      // byDeadline tab: overdue means past the deadline (dueDate)
+      // all other tabs: overdue means past the execution/scheduled date
+      const overdueDate = _filterTab === 'byDeadline'
+        ? _isoToLocalDate(t.dueDate)
+        : _getExecDate(t);
+      if (!overdueDate || overdueDate > today) return false;
     }
     // Scheduled tab time-context filter (boundaries cached outside loop by closure)
-    if (_filterScheduledRange && _filterTab === 'scheduled') {
-      const dateStr = _isoToLocalDate(t.dueDate);
+    if (_filterScheduledRange && (_filterTab === 'scheduled' || _filterTab === 'byDeadline')) {
+      // byDeadline uses dueDate; scheduled uses executionDate
+      const dateStr = _filterTab === 'byDeadline' ? _isoToLocalDate(t.dueDate) : _getExecDate(t);
       if (!dateStr) return false;
       const bucket = _classifyScheduledDate(dateStr, _scheduledFilterBoundaries);
       if (bucket !== _filterScheduledRange) return false;
@@ -416,32 +424,39 @@ function _collectAssignees() {
  *   Applied after priority and scheduled date.
  */
 
+/** Get the effective execution date for a task — executionDate if set, else dueDate */
+function _getExecDate(task) {
+  return _isoToLocalDate(task.executionDate) || _isoToLocalDate(task.dueDate);
+}
+
 /** Returns the set of tasks that belong to the active filter tab */
 function _applyFilterTab(tasks) {
   const today = _todayStr();
   switch (_filterTab) {
     case 'inbox':
       // Spec: "All tasks without a scheduled date (no due date set)."
-      // A task appears in inbox ONLY if it is missing a dueDate.
-      // It leaves inbox once a due date has been assigned.
+      // A task appears in inbox ONLY if it is missing both executionDate and dueDate.
       return tasks.filter(t => {
-        const hasDate = !!_isoToLocalDate(t.dueDate);
-        return !hasDate; // [MAJOR] Show ONLY tasks without due dates
+        const hasDate = !!_getExecDate(t);
+        return !hasDate; // [MAJOR] Show ONLY tasks without execution/due dates
       });
 
     case 'today': {
-      // Spec: tasks scheduled for today PLUS tasks with overdue or due-today deadlines.
-      // On the task entity, dueDate serves as both the scheduled date and the deadline.
+      // Tasks scheduled for today (by execution date) + overdue execution dates.
       return tasks.filter(t => {
         if (t.status === 'Completed' || t.status === 'Done' || t.status === 'done') return false;
-        const due = _isoToLocalDate(t.dueDate); // dueDate = both schedule and deadline
-        if (!due) return false;
-        return due <= today; // today's tasks + all overdue tasks
+        const exec = _getExecDate(t);
+        if (!exec) return false;
+        return exec <= today; // today's tasks + all overdue execution dates
       });
     }
 
     case 'scheduled':
-      // All tasks with a scheduled date, excluding Done (completed tasks don't need rescheduling)
+      // All tasks with an execution date, excluding Done
+      return tasks.filter(t => !!_getExecDate(t) && t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
+
+    case 'byDeadline':
+      // All tasks with a due/deadline date, excluding Done — grouped by dueDate
       return tasks.filter(t => !!_isoToLocalDate(t.dueDate) && t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
 
     case 'open':
@@ -489,9 +504,9 @@ function _priorityStatusDeadlineSort(a, b) {
   const as_ = STATUS_SORT_ORDER[a.status] ?? 2;
   const bs_ = STATUS_SORT_ORDER[b.status] ?? 2;
   if (as_ !== bs_) return as_ - bs_;
-  // 3. Scheduled date (earlier first)
-  const aDate = _isoToLocalDate(a.dueDate) || '9999-99-99';
-  const bDate = _isoToLocalDate(b.dueDate) || '9999-99-99';
+  // 3. Execution date (earlier first — falls back to dueDate)
+  const aDate = _getExecDate(a) || '9999-99-99';
+  const bDate = _getExecDate(b) || '9999-99-99';
   if (aDate !== bDate) return aDate.localeCompare(bDate);
   // 4. Stable title tie-break
   return (a.title || '').localeCompare(b.title || '');
@@ -589,7 +604,7 @@ const SCHEDULED_BUCKETS = [
   { key: 'later',     label: '🔭 Later',      color: '#6b7280' },
 ];
 
-/** Group tasks for Scheduled tab: time-context buckets (Overdue/Today/Tomorrow/This Week/Next Week/Later) */
+/** Group tasks for Scheduled tab: time-context buckets using EXECUTION DATE */
 function _groupByScheduledDate(tasks) {
   const boundaries = _getScheduledBoundaries();
 
@@ -598,7 +613,7 @@ function _groupByScheduledDate(tasks) {
   for (const b of SCHEDULED_BUCKETS) buckets.set(b.key, []);
 
   for (const t of tasks) {
-    const dateStr = _isoToLocalDate(t.dueDate);
+    const dateStr = _getExecDate(t); // [MAJOR] use execution date (falls back to dueDate)
     if (!dateStr) continue;
     const bucket = _classifyScheduledDate(dateStr, boundaries);
     buckets.get(bucket).push(t);
@@ -607,13 +622,11 @@ function _groupByScheduledDate(tasks) {
   // Sort within each bucket
   for (const [key, group] of buckets) {
     if (key === 'overdue') {
-      // Oldest first so user sees most urgent at top
-      group.sort((a, b) => (_isoToLocalDate(a.dueDate) || '').localeCompare(_isoToLocalDate(b.dueDate) || ''));
+      group.sort((a, b) => (_getExecDate(a) || '').localeCompare(_getExecDate(b) || ''));
     } else {
-      // Earliest date first, then priority+status within same date
       group.sort((a, b) => {
-        const da = _isoToLocalDate(a.dueDate) || '9999-99-99';
-        const db = _isoToLocalDate(b.dueDate) || '9999-99-99';
+        const da = _getExecDate(a) || '9999-99-99';
+        const db = _getExecDate(b) || '9999-99-99';
         if (da !== db) return da.localeCompare(db);
         return _priorityStatusDeadlineSort(a, b);
       });
@@ -628,6 +641,42 @@ function _groupByScheduledDate(tasks) {
   }
   return result;
 }
+
+/** Group tasks for By Deadline tab: time-context buckets using DUE DATE (the deadline) */
+function _groupByDeadlineDate(tasks) {
+  const boundaries = _getScheduledBoundaries();
+
+  const buckets = new Map();
+  for (const b of SCHEDULED_BUCKETS) buckets.set(b.key, []);
+
+  for (const t of tasks) {
+    const dateStr = _isoToLocalDate(t.dueDate); // always use dueDate for deadline
+    if (!dateStr) continue;
+    const bucket = _classifyScheduledDate(dateStr, boundaries);
+    buckets.get(bucket).push(t);
+  }
+
+  for (const [key, group] of buckets) {
+    if (key === 'overdue') {
+      group.sort((a, b) => (_isoToLocalDate(a.dueDate) || '').localeCompare(_isoToLocalDate(b.dueDate) || ''));
+    } else {
+      group.sort((a, b) => {
+        const da = _isoToLocalDate(a.dueDate) || '9999-99-99';
+        const db = _isoToLocalDate(b.dueDate) || '9999-99-99';
+        if (da !== db) return da.localeCompare(db);
+        return _priorityStatusDeadlineSort(a, b);
+      });
+    }
+  }
+
+  const result = new Map();
+  for (const b of SCHEDULED_BUCKETS) {
+    const group = buckets.get(b.key);
+    if (group.length > 0) result.set(b.label, group);
+  }
+  return result;
+}
+
 
 /** Group for Today tab: by status, ordered by priority within each group */
 function _groupTodayByStatus(tasks) {
@@ -698,9 +747,9 @@ function _scheduledPillStyle(isActive, color) {
   return base + color + ';background:transparent;color:' + color + ';';
 }
 
-/** Re-render the scheduled view — triggers full renderKanban for reliable state sync */
+/** Re-render the scheduled/byDeadline view — triggers full renderKanban for reliable state sync */
 function _reRenderScheduled() {
-  if (_filterTab !== 'scheduled') return;
+  if (_filterTab !== 'scheduled' && _filterTab !== 'byDeadline') return;
   renderKanban({ _internal: true });
 }
 
@@ -708,23 +757,22 @@ function _buildFilterBar(container) {
   const bar = document.createElement('div');
   bar.className = 'kanban-filter-bar';
 
-  // ── Scheduled tab: time-context bucket filters (primary row) ──────────────
-  if (_filterTab === 'scheduled') {
+  // ── Scheduled/byDeadline tab: time-context bucket filters ──────────────
+  if (_filterTab === 'scheduled' || _filterTab === 'byDeadline') {
     const timeRow = document.createElement('div');
     timeRow.className = 'kanban-scheduled-time-row';
-    timeRow.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);flex-wrap:nowrap;width:100%;padding-bottom:var(--space-2);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-2);overflow-x:auto;scrollbar-width:thin;'; // B25 fix: scroll instead of wrap
+    timeRow.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);flex-wrap:nowrap;width:100%;padding-bottom:var(--space-2);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-2);overflow-x:auto;scrollbar-width:thin;';
 
     const timeLabel = document.createElement('span');
     timeLabel.textContent = 'Show:';
     timeLabel.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);font-weight:var(--weight-semibold);flex-shrink:0;';
     timeRow.appendChild(timeLabel);
 
-    // "All" pill
     const allPill = document.createElement('button');
     allPill.type = 'button';
     allPill.textContent = 'All';
     const isAllActive = !_filterScheduledRange;
-    const allPillColor = isAllActive ? 'var(--color-accent,#3b82f6)' : '#6b7280'; // B32: accent when active
+    const allPillColor = isAllActive ? 'var(--color-accent,#3b82f6)' : '#6b7280';
     allPill.style.cssText = _scheduledPillStyle(isAllActive, allPillColor);
     allPill.addEventListener('click', () => {
       _filterScheduledRange = null;
@@ -732,16 +780,15 @@ function _buildFilterBar(container) {
     });
     timeRow.appendChild(allPill);
 
-    // Count tasks per bucket — exclude range filter so counts are stable
-    // (users see how many tasks are in each bucket regardless of which pill is active)
     const boundaries = _getScheduledBoundaries();
     const bucketCounts = new Map();
     const savedRange = _filterScheduledRange;
-    _filterScheduledRange = null; // temporarily clear range filter for counting
+    _filterScheduledRange = null;
     const allForCounts = _applyFilters(_applyFilterTab(_tasks));
-    _filterScheduledRange = savedRange; // restore
+    _filterScheduledRange = savedRange;
     for (const t of allForCounts) {
-      const ds = _isoToLocalDate(t.dueDate);
+      // byDeadline uses dueDate; scheduled uses executionDate (falls back to dueDate)
+      const ds = _filterTab === 'byDeadline' ? _isoToLocalDate(t.dueDate) : _getExecDate(t);
       if (!ds) continue;
       const bk = _classifyScheduledDate(ds, boundaries);
       bucketCounts.set(bk, (bucketCounts.get(bk) || 0) + 1);
@@ -763,7 +810,6 @@ function _buildFilterBar(container) {
 
     bar.appendChild(timeRow);
   }
-
   // Project dropdown
   const projSelect = document.createElement('select');
   projSelect.className = 'select kanban-filter-select';
@@ -1219,15 +1265,27 @@ function _buildCard(task) {
     ? `<span class="kanban-card-prio-dot" style="background:${PRIORITY_COLORS[task.priority] || 'var(--color-text-muted)'}" title="${_esc(task.priority)}"></span>`
     : '';
 
-  // Due date — task entity uses dueDate as both scheduled date and deadline
-  // Show with calendar icon for upcoming, clock icon when overdue/today (urgency signal)
+  // Execution date (when the task will be carried out)
+  const execDate   = _isoToLocalDate(task.executionDate) || null;
+  // Only show execution date chip when it differs from dueDate (avoids duplicate display)
+  const showExecSeparate = execDate && execDate !== due;
+  let plannedEl = '';
+  if (showExecSeparate) {
+    const execOverdue = execDate < today && task.status !== 'Done' && task.status !== 'Completed';
+    const execToday   = execDate === today;
+    const execColor   = execOverdue ? 'var(--color-danger)' : execToday ? 'var(--color-warning-text,#b45309)' : 'var(--color-info,#0ea5e9)';
+    const execIcon    = (execOverdue || execToday) ? '⏰' : '🗓';
+    plannedEl = `<span class="kanban-card-due" style="color:${execColor};font-size:0.68rem;" title="Planned for: ${execDate}">${execIcon} <span style="opacity:0.7;font-size:0.62rem;text-transform:uppercase;letter-spacing:0.04em;vertical-align:middle;">Plan</span> ${_formatDue(execDate, today)}</span>`;
+  }
+  // Due/deadline date
   let dueEl = '';
   if (due) {
     const isUrgent = due <= today; // overdue OR due today
-    const dateIcon = isUrgent ? '⏰' : '📅';
-    dueEl = `<span class="kanban-card-due ${dueCls}" title="${isUrgent ? 'Deadline' : 'Scheduled'}">${dateIcon} ${_formatDue(due, today)}</span>`;
+    const deadlineColor = isUrgent ? 'var(--color-danger)' : 'var(--color-text-muted)';
+    const deadlineIcon  = isUrgent ? '⏰' : '📅';
+    const deadlineLabel = showExecSeparate ? '<span style="opacity:0.7;font-size:0.62rem;text-transform:uppercase;letter-spacing:0.04em;vertical-align:middle;">Due</span> ' : '';
+    dueEl = `<span class="kanban-card-due ${dueCls}" style="${showExecSeparate ? 'color:' + deadlineColor + ';font-size:0.68rem;' : ''}" title="Deadline: ${due}">${deadlineIcon} ${deadlineLabel}${_formatDue(due, today)}</span>`;
   }
-  const deadlineEl = ''; // task entity has no separate deadline field; dueDate IS the deadline
 
   // Tags (first 2 + "+N")
   const tags = Array.isArray(task.tags) ? task.tags : [];
@@ -1280,8 +1338,8 @@ function _buildCard(task) {
     <div class="kanban-card-bottom">
       <div class="kanban-card-tags">${tagHtml}</div>
       <div class="kanban-card-meta">
+        ${plannedEl}
         ${dueEl}
-        ${deadlineEl}
         ${assigneeEl}
         ${(_taskReminderMap.get(task.id)||0) > 0
           ? `<span class="kanban-card-reminder-badge" title="${_taskReminderMap.get(task.id)} active reminder${_taskReminderMap.get(task.id)!==1?'s':''}"
@@ -2478,14 +2536,15 @@ function _renderAltView(container, tasks) {
     case 'scheduled':
       grouped = _groupByScheduledDate(tasks);
       break;
+    case 'byDeadline':
+      grouped = _groupByDeadlineDate(tasks);
+      break;
     case 'open': {
-      // Spec: "ordered by priority and status" — sort by priority, then status, then date
       const openSorted = [...tasks].sort(_priorityStatusDeadlineSort);
-      grouped = new Map([['Open Tasks', openSorted]]); // BUG-9 fix: _priorityStatusDeadlineSort now includes status
+      grouped = new Map([['Open Tasks', openSorted]]);
       break;
     }
     case 'completed':
-      // Already sorted by completedAt in _applyFilterTab; single group
       grouped = new Map([['Completed', tasks]]);
       break;
     case 'context':
@@ -2498,29 +2557,75 @@ function _renderAltView(container, tasks) {
       break;
   }
 
+  // ── Tab hint notes (item 10) ──────────────────────────── //
+  const _TAB_HINTS = {
+    inbox:      '📥 Inbox — tasks with no execution/due date. Grouped by creation date.',
+    today:      '☀️ Today — grouped by Execution Date (or Due Date if not set). Shows today + overdue.',
+    scheduled:  '📅 Scheduled — grouped by Execution Date (falls back to Due Date). Use this for planning when tasks will be done.',
+    byDeadline: '⏰ By Deadline — grouped by Due Date (the deadline). Use this to see what must be done by when.',
+    context:    '🏷️ Context — grouped by context tag. Ordered by execution date (or due date).',
+    open:       '○ Open — all incomplete tasks. Ordered by priority → status → execution date.',
+    completed:  '✅ Completed — recently completed tasks, newest first.',
+    all:        '📚 All — every task across all tabs. Filter and sort as needed.',
+  };
+
   const body = document.createElement('div');
   body.className = 'kanban-alt-body'; // FIX-7: scrollable wrapper for alt views
   body.style.cssText = 'padding:0 var(--space-5) var(--space-5);';
 
   // BUG 13: Show empty state when no tasks
   if (tasks.length === 0) {
-    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'open' ? '○' : '🎉'; // BUG-17 fix
+    // Tab hint shown above empty state
+    const hintTextEmpty = _TAB_HINTS[_filterTab];
+    if (hintTextEmpty) {
+      const hintBannerEmpty = document.createElement('div');
+      hintBannerEmpty.style.cssText = [
+        'margin-bottom:var(--space-3);padding:6px 12px;',
+        'background:var(--color-surface-2,rgba(0,0,0,0.03));',
+        'border-left:3px solid var(--color-accent);',
+        'border-radius:0 var(--radius-sm) var(--radius-sm) 0;',
+        'font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;',
+      ].join('');
+      hintBannerEmpty.textContent = hintTextEmpty;
+      body.appendChild(hintBannerEmpty);
+    }
+    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'byDeadline' ? '⏰' : _filterTab === 'open' ? '○' : '🎉';
     const emptyMsg  = _filterTab === 'inbox'
-      ? 'Your inbox is clear! Tasks with no due date (or no status) appear here, grouped by creation date — not deadline.'
+      ? 'Your inbox is clear! Tasks with no due date appear here, grouped by creation date.'
       : _filterTab === 'today'
       ? 'Nothing scheduled for today.'
+      : _filterTab === 'byDeadline'
+      ? 'No tasks with deadlines. Set a Due Date on a task to see it here.'
       : _filterTab === 'completed'
       ? 'No completed tasks yet.'
       : 'No tasks here. Switch tabs or clear filters to see tasks.';
-    body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-6);gap:var(--space-3);color:var(--color-text-muted);text-align:center;"><div style="font-size:2.5rem;">' + emptyIcon + '</div><div style="font-size:var(--text-base);font-weight:var(--weight-semibold);color:var(--color-text);">Empty</div><div style="font-size:var(--text-sm);">' + emptyMsg + '</div></div>';
+    const emptyDiv = document.createElement('div');
+    emptyDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-6);gap:var(--space-3);color:var(--color-text-muted);text-align:center;';
+    emptyDiv.innerHTML = '<div style="font-size:2.5rem;">' + emptyIcon + '</div><div style="font-size:var(--text-base);font-weight:var(--weight-semibold);color:var(--color-text);">Empty</div><div style="font-size:var(--text-sm);">' + emptyMsg + '</div>';
+    body.appendChild(emptyDiv);
     container.appendChild(body);
     return;
+  }
+
+  // Tab hint banner (non-empty state)
+  const hintText = _TAB_HINTS[_filterTab];
+  if (hintText) {
+    const hintBanner = document.createElement('div');
+    hintBanner.style.cssText = [
+      'margin-bottom:var(--space-3);padding:6px 12px;',
+      'background:var(--color-surface-2,rgba(0,0,0,0.03));',
+      'border-left:3px solid var(--color-accent);',
+      'border-radius:0 var(--radius-sm) var(--radius-sm) 0;',
+      'font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;',
+    ].join('');
+    hintBanner.textContent = hintText;
+    body.appendChild(hintBanner);
   }
   // Inbox tab: show helper text explaining how to clear tasks from inbox
   if (_filterTab === 'inbox') {
     const hint = document.createElement('div');
     hint.className = 'kanban-inbox-hint';
-    hint.textContent = 'These tasks have no due date set. Grouped by when they were created — not by deadline. Assign a due date and a status to remove from inbox.';
+    hint.textContent = 'These tasks have no due date set. Grouped by when they were created. Assign a due date to move a task out of inbox.';
     body.appendChild(hint);
   }
 
@@ -2560,15 +2665,28 @@ function _renderAltView(container, tasks) {
         const projId = task.project || _taskProjectMap.get(task.id) || '';
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
         const due = _isoToLocalDate(task.dueDate);
+        const execDate2 = _isoToLocalDate(task.executionDate) || null;
         const today2 = _todayStr();
         const overdue = due && due < today2 && task.status !== 'Done' && task.status !== 'Completed'; // C07
         const dueFormatted = due ? _formatDue(due, today2) : '';
-        const dueIcon = overdue ? '⏰ ' : due === today2 ? '⏰ ' : '';
+        const execFormatted = execDate2 ? _formatDue(execDate2, today2) : '';
+        const execOverdue2 = execDate2 && execDate2 < today2 && task.status !== 'Done' && task.status !== 'Completed';
+        const showExecSep2 = execDate2 && execDate2 !== due;
+        // Build date chips HTML
+        const plannedChip2 = execDate2
+          ? ('<span style="font-size:var(--text-xs);color:' + (execOverdue2 ? 'var(--color-danger)' : execDate2 === today2 ? 'var(--color-warning-text,#b45309)' : 'var(--color-info,#0ea5e9)') + ';white-space:nowrap;">' +
+             (execOverdue2 || execDate2 === today2 ? '⏰' : '🗓') + ' <span style="opacity:0.65;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;">Plan</span> ' + execFormatted + '</span>')
+          : '';
+        const deadlineChip2 = due
+          ? ('<span style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : due === today2 ? 'var(--color-warning-text,#b45309)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || due === today2 ? 'var(--weight-semibold)' : 'normal') + ';white-space:nowrap;">' +
+             (overdue || due === today2 ? '⏰' : '📅') + ' ' + (showExecSep2 ? '<span style="opacity:0.65;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;">Due</span> ' : '') + dueFormatted + '</span>')
+          : '';
         const expandChevron = isEmbed ? '<span style="font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">&#9654;</span>' : '';
         row.innerHTML = expandChevron +
           '<input type="checkbox" ' + ((task.status === 'Completed' || task.status === 'Done') ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
           '<span style="flex:1;font-size:var(--text-sm);color:var(--color-text);' + ((task.status === 'Completed' || task.status === 'Done') ? 'text-decoration:line-through;color:var(--color-text-muted);' : '') + '">' + _esc(task.title || 'Untitled') + '</span>' +
-          (due ? '<span style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : due === today2 ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || due === today2 ? 'var(--weight-semibold)' : 'normal') + ';">' + dueIcon + dueFormatted + '</span>' : '') +
+          plannedChip2 +
+          deadlineChip2 +
           (pName ? '<span style="font-size:var(--text-xs);color:var(--color-accent);background:var(--color-surface-2);padding:1px 8px;border-radius:var(--radius-full);">' + _esc(pName) + '</span>' : '');
         // BUG-14 fix: interactive checkbox in list/embed views
         const listCb = row.querySelector('input[type=checkbox]');
@@ -2613,10 +2731,15 @@ function _renderAltView(container, tasks) {
         card.addEventListener('mouseenter', () => { card.style.boxShadow = 'var(--shadow-md)'; });
         card.addEventListener('mouseleave', () => { card.style.boxShadow = 'none'; });
         const wallDue = _isoToLocalDate(task.dueDate);
+        const wallExec = _isoToLocalDate(task.executionDate) || null;
         const wallToday = _todayStr();
         const overdue = wallDue && wallDue < wallToday && task.status !== 'Done' && task.status !== 'Completed'; // C06
         const dueTodayW = wallDue === wallToday;
-        const wallDueFmt = wallDue ? _formatDue(wallDue, wallToday) : '';
+        const wallDueFmt  = wallDue  ? _formatDue(wallDue,  wallToday) : '';
+        const wallExecFmt = wallExec ? _formatDue(wallExec, wallToday) : '';
+        const wallExecOverdue = wallExec && wallExec < wallToday && task.status !== 'Done' && task.status !== 'Completed';
+        const wallExecToday   = wallExec === wallToday;
+        const wallShowExecSep = wallExec && wallExec !== wallDue;
         const projId = task.project || _taskProjectMap.get(task.id) || '';
         const pName = projId ? (_projectMap.get(projId)?.name || '') : '';
         // BUG-R5 fix: interactive checkbox in wall/gallery cards
@@ -2627,7 +2750,8 @@ function _renderAltView(container, tasks) {
             '<input type="checkbox" ' + ((task.status === 'Completed' || task.status === 'Done') ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;accent-color:var(--color-accent);flex-shrink:0;" />' +
             '<span style="font-size:var(--text-sm);font-weight:var(--weight-semibold);' + wallDoneStyle + '">' + _esc(task.title || 'Untitled') + '</span>' +
           '</div>' +
-          (wallDue ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : dueTodayW ? 'var(--color-warning-text)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || dueTodayW ? 'var(--weight-semibold)' : 'normal') + ';">' + (overdue || dueTodayW ? '\u23F0 ' : '\uD83D\uDCC5 ') + wallDueFmt + '</div>' : '') +
+          (wallExec ? '<div style="font-size:var(--text-xs);color:' + (wallExecOverdue ? 'var(--color-danger)' : wallExecToday ? 'var(--color-warning-text,#b45309)' : 'var(--color-info,#0ea5e9)') + ';font-weight:' + (wallExecOverdue || wallExecToday ? 'var(--weight-semibold)' : 'normal') + ';">' + (wallExecOverdue || wallExecToday ? '⏰' : '🗓') + ' <span style="opacity:0.65;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;">Planned for</span> ' + wallExecFmt + '</div>' : '') +
+          (wallDue ? '<div style="font-size:var(--text-xs);color:' + (overdue ? 'var(--color-danger)' : dueTodayW ? 'var(--color-warning-text,#b45309)' : 'var(--color-text-muted)') + ';font-weight:' + (overdue || dueTodayW ? 'var(--weight-semibold)' : 'normal') + ';">' + (overdue || dueTodayW ? '⏰' : '📅') + ' ' + (wallShowExecSep ? '<span style="opacity:0.65;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;">Deadline</span> ' : '') + wallDueFmt + '</div>' : '') +
           (pName ? '<div style="font-size:var(--text-xs);color:var(--color-text-muted);">&#127760; ' + _esc(pName) + '</div>' : '');
         const wallCb = card.querySelector('input[type=checkbox]');
         if (wallCb) {
@@ -2652,7 +2776,7 @@ function _renderAltView(container, tasks) {
         wrap.style.cssText = 'overflow-x:auto;border:1px solid var(--color-border);border-radius:var(--radius-lg);margin-bottom:var(--space-2);';
         const t = document.createElement('table');
         t.style.cssText = 'width:100%;border-collapse:collapse;font-size:var(--text-sm);min-width:700px;';
-        t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">⏱ Timer</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
+        t.innerHTML = '<thead><tr style="background:var(--color-surface);border-bottom:2px solid var(--color-border);"><th style="padding:8px 12px;text-align:left;font-weight:var(--weight-bold);font-size:var(--text-xs);color:var(--color-text-muted);"></th><th style="padding:8px 12px;text-align:left;">Title</th><th style="padding:8px 12px;text-align:left;">Status</th><th style="padding:8px 12px;text-align:left;">🗓 Planned For</th><th style="padding:8px 12px;text-align:left;">📅 Deadline</th><th style="padding:8px 12px;text-align:left;">Priority</th><th style="padding:8px 12px;text-align:left;">Context</th><th style="padding:8px 12px;text-align:left;">Tags</th><th style="padding:8px 12px;text-align:left;">⏱ Timer</th><th style="padding:8px 12px;text-align:left;">Notes</th></tr></thead>';
         const tbody = document.createElement('tbody');
         groupTasks.forEach((tk, i) => {
           const _rowIdx = i + 1; // row number within this group (1-based)
@@ -2660,13 +2784,24 @@ function _renderAltView(container, tasks) {
           tr.style.cssText = 'border-bottom:1px solid var(--color-border);cursor:pointer;transition:background 0.1s;';
           tr.addEventListener('mouseenter', () => { tr.style.background = 'var(--color-surface)'; });
           tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
-          const _dueLocal = _isoToLocalDate(tk.dueDate); // BUG-6 fix: normalise to local YYYY-MM-DD first
-          const due = _dueLocal ? new Date(_dueLocal + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
-          const ov = _dueLocal && _dueLocal < _todayStr() && tk.status !== 'Completed' && tk.status !== 'Done';
+          const _dueLocal   = _isoToLocalDate(tk.dueDate); // BUG-6 fix: normalise to local YYYY-MM-DD first
+          const _execLocal  = _isoToLocalDate(tk.executionDate) || null;
+          const _todayLocal = _todayStr();
+          const fmtLong = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) : '';
+          const dueDisplay  = fmtLong(_dueLocal);
+          const execDisplay = fmtLong(_execLocal);
+          const ov = _dueLocal && _dueLocal < _todayLocal && tk.status !== 'Completed' && tk.status !== 'Done';
+          const execOv = _execLocal && _execLocal < _todayLocal && tk.status !== 'Completed' && tk.status !== 'Done';
           const tags = Array.isArray(tk.tags) ? tk.tags.join(', ') : '';
           const bodyTxt = tk.details ? String(tk.details).replace(/<[^>]+>/g,' ').trim() : '';
           const wc = bodyTxt ? bodyTxt.split(/\s+/).length : 0;
-          tr.innerHTML = '<td style="padding:8px 12px;color:var(--color-text-muted);">' + _rowIdx + '</td><td style="padding:8px 12px;font-weight:var(--weight-semibold);">' + _esc(tk.title||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.status||'') + '</td><td style="padding:8px 12px;">' + due + (ov ? ' <span style="color:var(--color-danger);font-size:var(--text-xs);">Overdue</span>' : '') + '</td><td style="padding:8px 12px;">' + _esc(tk.priority||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.context||'') + '</td><td style="padding:8px 12px;">' + _esc(tags) + '</td><td class="kanban-table-timer-cell" style="padding:8px 12px;font-variant-numeric:tabular-nums;"></td><td style="padding:8px 12px;">\u270E ' + wc + ' words</td>';
+          const execCell = _execLocal
+            ? (execDisplay + (execOv ? ' <span style="color:var(--color-danger);font-size:var(--text-xs);">Overdue</span>' : (_execLocal === _todayLocal ? ' <span style="color:var(--color-warning-text,#b45309);font-size:var(--text-xs);">Today</span>' : '')))
+            : '<span style="color:var(--color-text-muted);font-size:var(--text-xs);">—</span>';
+          const dueCell = _dueLocal
+            ? (dueDisplay + (ov ? ' <span style="color:var(--color-danger);font-size:var(--text-xs);">Overdue</span>' : (_dueLocal === _todayLocal ? ' <span style="color:var(--color-warning-text,#b45309);font-size:var(--text-xs);">Today</span>' : '')))
+            : '<span style="color:var(--color-text-muted);font-size:var(--text-xs);">—</span>';
+          tr.innerHTML = '<td style="padding:8px 12px;color:var(--color-text-muted);">' + _rowIdx + '</td><td style="padding:8px 12px;font-weight:var(--weight-semibold);">' + _esc(tk.title||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.status||'') + '</td><td style="padding:8px 12px;">' + execCell + '</td><td style="padding:8px 12px;">' + dueCell + '</td><td style="padding:8px 12px;">' + _esc(tk.priority||'') + '</td><td style="padding:8px 12px;">' + _esc(tk.context||'') + '</td><td style="padding:8px 12px;">' + _esc(tags) + '</td><td class="kanban-table-timer-cell" style="padding:8px 12px;font-variant-numeric:tabular-nums;"></td><td style="padding:8px 12px;">\u270E ' + wc + ' words</td>';
           // Wire live timer badge into table cell
           const _timerTd = tr.querySelector('.kanban-table-timer-cell');
           if (_timerTd) {

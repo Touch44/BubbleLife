@@ -1,5 +1,5 @@
 /**
- * FamilyHub v5.2.5 — views/settings.js
+ * FamilyHub v5.3.0 — views/settings.js
  * [minor] Phase 2 additions: Notifications & Reminders section (quiet hours, push, audio tone)
  *
  * Sections:
@@ -63,6 +63,8 @@ async function renderSettings() {
   try { accounts = await getAllAccounts() || []; } catch (e) { /* skip */ }
   try { storageInfo = await getStorageUsage() || { used: 0, quota: 0 }; } catch (e) { /* skip */ }
   try { taskViewPrefs = await getSetting('taskViewPreferences') || {}; } catch (e) { /* skip */ }
+  let taskDefaultTimeBlock = 1800; // default 30 minutes
+  try { taskDefaultTimeBlock = (await getSetting('taskDefaultTimeBlock')) ?? 1800; } catch (e) { /* skip */ }
 
   const usedMB = ((storageInfo.used || 0) / (1024 * 1024)).toFixed(2);
 
@@ -254,9 +256,42 @@ async function renderSettings() {
         </div>
       `)}
 
+      ${_section('Task Settings', '✅', `
+        <div style="display:flex;flex-direction:column;gap:var(--space-3);">
+          <div style="font-size:var(--text-sm);color:var(--color-text-muted);">
+            Set defaults that apply to all <strong>new</strong> tasks going forward. Existing tasks are not affected.
+          </div>
+          <div>
+            <label style="font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);">
+              ⏲ Default Time Block (Activity tab timer)
+            </label>
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-2);">
+              This is the default duration preset shown in the Activity tab time block selector for new tasks.
+            </div>
+            <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
+              <select id="settings-default-time-block" style="padding:6px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);">
+                <option value="300"  ${taskDefaultTimeBlock == 300  ? 'selected' : ''}>5 min</option>
+                <option value="600"  ${taskDefaultTimeBlock == 600  ? 'selected' : ''}>10 min</option>
+                <option value="900"  ${taskDefaultTimeBlock == 900  ? 'selected' : ''}>15 min</option>
+                <option value="1500" ${taskDefaultTimeBlock == 1500 ? 'selected' : ''}>25 min (Pomodoro)</option>
+                <option value="1800" ${taskDefaultTimeBlock == 1800 ? 'selected' : ''}>30 min (default)</option>
+                <option value="2700" ${taskDefaultTimeBlock == 2700 ? 'selected' : ''}>45 min</option>
+                <option value="3600" ${taskDefaultTimeBlock == 3600 ? 'selected' : ''}>1 hr</option>
+                <option value="5400" ${taskDefaultTimeBlock == 5400 ? 'selected' : ''}>1.5 hr</option>
+                <option value="7200" ${taskDefaultTimeBlock == 7200 ? 'selected' : ''}>2 hr</option>
+                <option value="10800" ${taskDefaultTimeBlock == 10800 ? 'selected' : ''}>3 hr</option>
+                <option value="14400" ${taskDefaultTimeBlock == 14400 ? 'selected' : ''}>4 hr</option>
+              </select>
+              <button id="settings-time-block-save" style="padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-md);cursor:pointer;">Save</button>
+              <span id="settings-time-block-status" style="font-size:var(--text-xs);display:none;"></span>
+            </div>
+          </div>
+        </div>
+      `)}
+
       ${_section('About', 'ℹ️', `
         <div style="font-size:var(--text-sm);color:var(--color-text);display:flex;flex-direction:column;gap:var(--space-2);">
-          <div><strong>FamilyHub</strong> v5.2.5</div>
+          <div><strong>FamilyHub</strong> v5.3.0</div>
           <div style="color:var(--color-text-muted);">Multi-context family management PWA</div>
           <button id="settings-tour-btn" style="
             margin-top:var(--space-2);padding:6px 16px;font-size:var(--text-sm);font-weight:var(--weight-semibold);
@@ -601,6 +636,29 @@ async function renderSettings() {
         statusDiv.style.display = 'block';
         statusDiv.textContent = '❌ Import failed: ' + err.message;
         statusDiv.style.color = 'var(--color-danger, #dc2626)';
+      }
+    }
+  });
+
+  // Task Default Time Block
+  el.querySelector('#settings-time-block-save')?.addEventListener('click', async () => {
+    const select = el.querySelector('#settings-default-time-block');
+    const statusEl = el.querySelector('#settings-time-block-status');
+    const val = parseInt(select?.value || '1800', 10);
+    try {
+      await setSetting('taskDefaultTimeBlock', val);
+      if (statusEl) {
+        statusEl.style.display = 'inline';
+        statusEl.textContent = '✅ Saved';
+        statusEl.style.color = 'var(--color-accent)';
+        setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
+      }
+    } catch (err) {
+      if (statusEl) {
+        statusEl.style.display = 'inline';
+        statusEl.textContent = '❌ Failed';
+        statusEl.style.color = 'var(--color-danger)';
+        setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
       }
     }
   });

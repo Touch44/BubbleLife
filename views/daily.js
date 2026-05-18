@@ -227,18 +227,27 @@ async function _loadData(dateStr) {
 }
 
 /**
- * Filter tasks: dueDate = today OR overdue (dueDate < today, status != done).
+ * Get the effective scheduling date for a task in the daily view.
+ * Uses executionDate when set, falls back to dueDate.
+ * This matches the kanban view's _getExecDate logic.
+ */
+function _getTaskExecDate(t) {
+  return _isoToLocalDate(t.executionDate) || _isoToLocalDate(t.dueDate);
+}
+
+/**
+ * Filter tasks: executionDate (or dueDate) = today OR overdue.
  * REVIEW 2: status comparison covers both capitalised ('Done') and lowercase ('done')
- *           using the DONE_STATUSES Set. dueDate comparisons use string compare
+ *           using the DONE_STATUSES Set. Date comparisons use string compare
  *           on local date strings — safe because both sides are "YYYY-MM-DD".
  */
 function _filterTasks(tasks, dateStr) {
   return tasks.filter(t => {
     if (DONE_STATUSES.has(t.status)) return false;
-    const due = _isoToLocalDate(t.dueDate);
-    if (!due) return false;
-    // due === today OR overdue (due < today)
-    return due <= dateStr;
+    const exec = _getTaskExecDate(t);
+    if (!exec) return false;
+    // exec === today OR overdue (exec < today)
+    return exec <= dateStr;
   });
 }
 
@@ -249,10 +258,10 @@ function _filterTasks(tasks, dateStr) {
  */
 function _sortTasks(tasks, dateStr) {
   return [...tasks].sort((a, b) => {
-    const aDue = _isoToLocalDate(a.dueDate) || '';
-    const bDue = _isoToLocalDate(b.dueDate) || '';
-    const aOverdue = aDue < dateStr ? 0 : 1;
-    const bOverdue = bDue < dateStr ? 0 : 1;
+    const aExec = _getTaskExecDate(a) || '';
+    const bExec = _getTaskExecDate(b) || '';
+    const aOverdue = aExec < dateStr ? 0 : 1;
+    const bOverdue = bExec < dateStr ? 0 : 1;
     if (aOverdue !== bOverdue) return aOverdue - bOverdue;
     const aPrio = PRIORITY_ORDER[a.priority] ?? 99;
     const bPrio = PRIORITY_ORDER[b.priority] ?? 99;
@@ -1449,9 +1458,9 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
 
   const account = getAccount();
 
-  // Split into overdue vs today
-  const overdueTasks = filtered.filter(t => (_isoToLocalDate(t.dueDate) || '') < dateStr);
-  const todayTasks   = filtered.filter(t => (_isoToLocalDate(t.dueDate) || '') === dateStr);
+  // Split into overdue vs today — use same date resolution as _filterTasks
+  const overdueTasks = filtered.filter(t => (_getTaskExecDate(t) || '') < dateStr);
+  const todayTasks   = filtered.filter(t => (_getTaskExecDate(t) || '') === dateStr);
 
   /**
    * Calculate human-readable "N days overdue" string.
@@ -1472,6 +1481,8 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
    * @param {boolean} isOverdue
    */
   function _buildTaskRow(task, isOverdue) {
+    // Use execution date for scheduling display; show dueDate as deadline when different
+    const execDate  = _getTaskExecDate(task) || '';
     const due       = _isoToLocalDate(task.dueDate) || '';
     const row       = document.createElement('div');
     row.className   = 'daily-task-row' + (isOverdue ? ' overdue' : '');
@@ -1500,7 +1511,7 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
       : '';
 
     const dueBadge = isOverdue
-      ? `<span class="badge badge-danger daily-overdue-label" title="Overdue">${_esc(_daysOverdue(due))}</span>`
+      ? `<span class="badge badge-danger daily-overdue-label" title="Overdue">${_esc(_daysOverdue(execDate || due))}</span>`
       : `<span class="badge badge-today">Today</span>`;
 
     if (isOverdue) {

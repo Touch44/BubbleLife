@@ -376,16 +376,26 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       // [v5.1.0] Reminder-only filter toggle
       if (_calFilterReminderOnly && !_calReminderMap.has(entity.id)) continue;
 
-      // For tasks: synthesize a datetime ISO from dueDate + dueTime (default 06:00)
+      // For tasks: use executionDate (when the task will be done) as the calendar date,
+      // falling back to dueDate. Synthesize a datetime ISO from the resolved date + time.
       // [minor] BUG-24/44/74 fix: do NOT mutate entity directly — store computed ISO
       // as a local variable passed via the dateMap entry (avoids polluting IDB objects).
       let _taskDateTimeISO = null;
-      if (typeKey === 'task' && entity.dueDate) {
-        const tRaw = (entity.dueTime || '06:00').slice(0, 5);
-        _taskDateTimeISO = `${entity.dueDate}T${tRaw}:00`;
+      let _taskEffectiveDate = null; // the date used for calendar placement
+      if (typeKey === 'task') {
+        // Resolve execution date (falls back to dueDate)
+        _taskEffectiveDate = entity.executionDate
+          ? _isoToLocalDate(entity.executionDate)
+          : (entity.dueDate ? _isoToLocalDate(entity.dueDate) : null);
+        if (_taskEffectiveDate) {
+          // Use executionTime if available, otherwise dueTime, otherwise default 06:00
+          const tRaw = (entity.executionTime || entity.dueTime || '06:00').slice(0, 5);
+          _taskDateTimeISO = `${_taskEffectiveDate}T${tRaw}:00`;
+        }
       }
 
-      const rawDate = entity[reg.dateField];
+      // For tasks, use the resolved execution/due date; for other types use dateField
+      const rawDate = typeKey === 'task' ? _taskEffectiveDate : entity[reg.dateField];
       if (!rawDate) continue;
 
       // ── Recurring types (dateEntity): match by month+day across years ──
@@ -426,7 +436,7 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       }
 
       // ── Standard single-day ──
-      const ds = _isoToLocalDate(rawDate);
+      const ds = typeKey === 'task' ? _taskEffectiveDate : _isoToLocalDate(rawDate);
       const isOverdue = typeKey === 'task' && ds && ds < todayStr;
       _add(ds, entity, typeKey, { isOverdue, _dateTimeISO: _taskDateTimeISO });
     }
@@ -551,7 +561,7 @@ function _buildHeader(container) {
     const dateStr = _toDateStr(_anchorDate);
     emit(EVENTS.FAB_CREATE, {
       entityType: 'task',
-      prefill: { dueDate: dateStr },
+      prefill: { executionDate: dateStr },
     });
   });
 
@@ -1744,10 +1754,11 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
       const hourStr = String(newHour).padStart(2, '0');
       const minStr  = String(newMin).padStart(2, '0');
       if (entityType === 'task') {
-        entity.dueDate = newDateStr;
-        entity.dueTime = `${hourStr}:${minStr}`;
-        // Temporary mutation for drag-drop UX (entity is re-fetched on next load)
-        entity._dateTimeISO = `${newDateStr}T${hourStr}:${minStr}:00`;
+        // Update executionDate (the "planned for" date) when dragging tasks.
+        // dueDate (deadline) is intentionally NOT changed by drag — deadlines are fixed.
+        entity.executionDate = newDateStr;
+        entity.executionTime = `${hourStr}:${minStr}`;
+        entity._dateTimeISO  = `${newDateStr}T${hourStr}:${minStr}:00`;
       } else {
         entity[dateField] = new Date(`${newDateStr}T${hourStr}:${minStr}:00`).toISOString();
         if (entityType === 'event' && entity.endDate && oldValue) {
@@ -1772,8 +1783,8 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
       }
     } else {
       if (entityType === 'task') {
-        entity.dueDate = newDateStr;
-        if (!entity.dueTime) entity.dueTime = '06:00';
+        entity.executionDate = newDateStr;
+        if (!entity.executionTime) entity.executionTime = entity.dueTime || '06:00';
       } else {
         entity[dateField] = newDateStr;
       }
