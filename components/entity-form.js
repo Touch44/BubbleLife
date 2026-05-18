@@ -3818,7 +3818,6 @@ async function _submitForm() {
   if (!config) return;
 
   _formIsSaving = true;
-  try {
 
   // Sync draft from live form
   _saveDraftFromForm();
@@ -3855,7 +3854,7 @@ async function _submitForm() {
     }
   }
 
-  if (!valid) return;
+  if (!valid) { _formIsSaving = false; return; }
 
   // ── Show saving state ─────────────────────────────────── //
   const saveBtn = _overlay?.querySelector('.ef-save-btn');
