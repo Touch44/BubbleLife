@@ -1532,8 +1532,8 @@ function _buildCard(task) {
   // ── Drag start ──
   card.addEventListener('dragstart', (e) => {
     if (!task.id) { e.preventDefault(); return; } // Bug-70: guard missing id
-    // [B4 fix] Instances must not be dragged to columns — use checkbox to complete
-    if (task._isInstance) { e.preventDefault(); return; }
+    // [v5.4.0] Instances can be dragged to change status (Not Started/Next Up/In Progress)
+    // but NOT to Completed — use the checkbox to complete instances.
     _dragTaskId = task.id;
     _dragEl     = card;
     card.classList.add('kanban-card-dragging');
@@ -1870,8 +1870,7 @@ function _clearDropIndicators() {
 // ── Drag and drop: touch ──────────────────────────────────── //
 
 function _wireTouchDrag(card, task) {
-  // [N56 fix] Instances must not be drag-moved — they complete via checkbox only
-  if (task._isInstance) return;
+  // [v5.4.0] Instances can be touch-dragged to change status (non-Completed columns only)
   let touchStartX = 0, touchStartY = 0;
   let isDragging = false;
 
@@ -1954,11 +1953,12 @@ async function _moveTask(taskId, newStatus) {
   try {
     task = await getEntity(taskId);
   } catch {
-    task = _tasks.find(t => t.id === taskId);
+    task = _tasks.find(t => t.id === taskId) || _instances.find(i => i.id === taskId);
   }
   if (!task || task.status === newStatus) return;
-  // [B4 fix] Never drag-move taskInstances — they complete via completeInstance
-  if (task.type === 'taskInstance') return;
+  // [v5.4.0] Instances can be dragged between non-Completed status columns.
+  // Dragging an instance to Completed is blocked — use the checkbox instead.
+  if (task.type === 'taskInstance' && (newStatus === 'Completed' || newStatus === 'Done')) return;
 
   const account = getAccount();
   try {

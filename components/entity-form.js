@@ -428,7 +428,7 @@ function _buildAndMount(config) {
 
     // [G09 fix] Update tab4 (Reminders) visibility when type changes
     // reminder and reminderLog types should not show the Reminders tab
-    const _newNoRemindersTab = ['reminder', 'reminderLog'].includes(_typeKey);
+    const _newNoRemindersTab = ['reminder', 'reminderLog', 'taskInstance'].includes(_typeKey);
     if (tab4Btn) {
       tab4Btn.style.display = _newNoRemindersTab ? 'none' : '';
     }
@@ -502,7 +502,7 @@ function _buildAndMount(config) {
   // Tab 3: Connections — action buttons + entity relations
   const tab3Btn = _mkTab('relations', 'Connections',                                   '🔗');
   // Tab 4: Reminders — not shown for reminder/reminderLog entities (no sub-reminders)
-  const _noRemindersTab = ['reminder', 'reminderLog'].includes(_typeKey);
+  const _noRemindersTab = ['reminder', 'reminderLog', 'taskInstance'].includes(_typeKey);
   const tab4Btn = _noRemindersTab ? null : _mkTab('reminders', 'Reminders',            '🔔');
 
   const _applyTabStyles = () => {
@@ -906,31 +906,92 @@ function _rebuildBodyInto(config, container) {
       wrapper.dataset.fieldPaired = pairedTimeKey;
       wrapper.style.marginBottom = 'var(--space-4)';
 
+      // ── Label row: for executionDate, prepend the copy-from-dueDate sync button ──
+      const lblRow = document.createElement('div');
+      lblRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:var(--space-1);';
+
       // Combined label: "Due Date & Time" / "Planned For & Time"
       const lbl = document.createElement('label');
       lbl.htmlFor = `ef-field-${field.key}`;
-      lbl.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);display:block;margin-bottom:var(--space-1);';
+      lbl.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);';
       lbl.textContent = field.label + ' & Time';
 
-      // Row: [date control] [time input only — hint suppressed in paired mode]
+      if (field.key === 'executionDate') {
+        // Sync button — copies current dueDate → executionDate, shown BEFORE the label
+        const syncBtn = document.createElement('button');
+        syncBtn.type = 'button';
+        syncBtn.title = 'Copy current Due Date value to Planned For';
+        syncBtn.style.cssText = [
+          'width:22px;height:22px;border-radius:50%;border:1px solid var(--color-border);',
+          'background:var(--color-surface);cursor:pointer;display:flex;align-items:center;',
+          'justify-content:center;font-size:12px;flex-shrink:0;transition:all 0.15s;',
+          'color:var(--color-accent);padding:0;',
+        ].join('');
+        syncBtn.innerHTML = '⇐';
+        syncBtn.addEventListener('mouseenter', () => { syncBtn.style.background = 'var(--color-accent)'; syncBtn.style.color = '#fff'; });
+        syncBtn.addEventListener('mouseleave', () => { syncBtn.style.background = 'var(--color-surface)'; syncBtn.style.color = 'var(--color-accent)'; });
+        syncBtn.addEventListener('click', () => {
+          const dueDateInput = _overlay?.querySelector('#ef-field-dueDate');
+          const dueDateVal = dueDateInput?.value || _draft.dueDate;
+          if (dueDateVal) {
+            const dateStr = String(dueDateVal).slice(0, 10);
+            const execDateInput = _overlay?.querySelector('#ef-field-executionDate');
+            if (execDateInput) { execDateInput.value = dateStr; }
+            _draft.executionDate = dateStr;
+            const dueTimeInput = _overlay?.querySelector('#ef-field-dueTime');
+            const dueTimeVal = dueTimeInput?.value || _draft.dueTime;
+            const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
+            if (execTimeEl && dueTimeVal) {
+              execTimeEl.value = dueTimeVal;
+              _draft.executionTime = dueTimeVal;
+            }
+          } else {
+            const orig = syncBtn.innerHTML;
+            syncBtn.textContent = '⚠';
+            syncBtn.title = 'No Due Date set yet';
+            setTimeout(() => { syncBtn.innerHTML = orig; syncBtn.title = 'Copy current Due Date value to Planned For'; }, 1200);
+          }
+        });
+        lblRow.appendChild(syncBtn);
+      }
+
+      lblRow.appendChild(lbl);
+
+      // Row: [date input] [time input] — side by side, matching Due Date row layout
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;gap:var(--space-2);align-items:flex-start;flex-wrap:wrap;';
 
-      // Date part
-      const dateCtrl = _buildFieldControl(field, config);
+      // Date part — for executionDate, build a plain date input (syncBtn moved to label row)
+      let dateCtrl;
+      if (field.key === 'executionDate') {
+        const input = document.createElement('input');
+        input.type      = 'date';
+        input.id        = `ef-field-${field.key}`;
+        input.className = 'input';
+        const isNewTask   = !_editEntity;
+        const existingVal = _draft[field.key];
+        const resolvedExec = existingVal
+          ? String(existingVal).slice(0, 10)
+          : (isNewTask ? (_draft.dueDate?.slice(0, 10) || '') : '');
+        input.value = resolvedExec;
+        if (resolvedExec) _draft.executionDate = resolvedExec;
+        if (field.required) input.required = true;
+        input.addEventListener('change', () => { _draft[field.key] = input.value || null; });
+        dateCtrl = input;
+      } else {
+        dateCtrl = _buildFieldControl(field, config);
+      }
       if (dateCtrl) {
-        dateCtrl.style.flex = '1 1 150px'; // grows to fill available space
+        dateCtrl.style.flex = '1 1 150px';
         row.appendChild(dateCtrl);
       }
 
-      // Time part — build control then suppress verbose hint text (warnings from change event still show)
+      // Time part — build control then suppress verbose hint text
       const timeCtrl = _buildFieldControl(pairedTime, config);
       if (timeCtrl) {
-        timeCtrl.style.cssText = 'flex:0 0 140px;'; // fixed width for time column
-        // Clear the initial verbose helpText but keep the span functional for warnings
+        timeCtrl.style.cssText = 'flex:0 0 140px;';
         const hintSpan = timeCtrl.querySelector?.('span');
         if (hintSpan) hintSpan.textContent = '';
-        // Ensure time input fills its column
         const timeInput = timeCtrl.querySelector?.('input[type="time"]');
         if (timeInput) timeInput.style.width = '100%';
         row.appendChild(timeCtrl);
@@ -942,7 +1003,7 @@ function _rebuildBodyInto(config, container) {
       errEl.dataset.forField = field.key;
       errEl.style.cssText = 'font-size:var(--text-xs);color:var(--color-danger);display:none;margin-top:2px;';
 
-      wrapper.appendChild(lbl);
+      wrapper.appendChild(lblRow);
       wrapper.appendChild(row);
       wrapper.appendChild(errEl);
       container.appendChild(wrapper);
@@ -1266,55 +1327,12 @@ function _buildFieldControl(field, config) {
 
     // ── DATE ─────────────────────────────────────────────── //
     case 'date': {
-      // ── executionDate: combined date+time row with copy-from-dueDate knob ── //
+      // ── executionDate: plain date input (sync button rendered in label row by _rebuildBodyInto) ── //
       if (field.key === 'executionDate') {
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
-
-        // Sync button — copies current dueDate value into executionDate
-        const syncBtn = document.createElement('button');
-        syncBtn.type = 'button';
-        syncBtn.title = 'Copy current Due Date value to Execution Date';
-        syncBtn.style.cssText = [
-          'width:28px;height:28px;border-radius:50%;border:1px solid var(--color-border);',
-          'background:var(--color-surface);cursor:pointer;display:flex;align-items:center;',
-          'justify-content:center;font-size:14px;flex-shrink:0;transition:all 0.15s;',
-          'color:var(--color-accent);',
-        ].join('');
-        syncBtn.innerHTML = '⇐';
-        syncBtn.addEventListener('mouseenter', () => { syncBtn.style.background = 'var(--color-accent)'; syncBtn.style.color = '#fff'; });
-        syncBtn.addEventListener('mouseleave', () => { syncBtn.style.background = 'var(--color-surface)'; syncBtn.style.color = 'var(--color-accent)'; });
-        syncBtn.addEventListener('click', () => {
-          // Read live from DOM first (draft may be stale before submit)
-          const dueDateInput = _overlay?.querySelector('#ef-field-dueDate');
-          const dueDateVal = dueDateInput?.value || _draft.dueDate;
-          if (dueDateVal) {
-            const dateStr = String(dueDateVal).slice(0, 10);
-            input.value = dateStr;
-            _draft.executionDate = dateStr;
-            // Also sync executionTime from dueTime input if set
-            const dueTimeInput = _overlay?.querySelector('#ef-field-dueTime');
-            const dueTimeVal = dueTimeInput?.value || _draft.dueTime;
-            const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
-            if (execTimeEl && dueTimeVal) {
-              execTimeEl.value = dueTimeVal;
-              _draft.executionTime = dueTimeVal;
-            }
-          } else {
-            const orig = syncBtn.innerHTML;
-            syncBtn.textContent = '⚠';
-            syncBtn.title = 'No Due Date set yet';
-            setTimeout(() => { syncBtn.innerHTML = orig; syncBtn.title = 'Copy current Due Date value to Execution Date'; }, 1200);
-          }
-        });
-        wrap.appendChild(syncBtn);
-
         const input = document.createElement('input');
         input.type      = 'date';
         input.id        = `ef-field-${field.key}`;
         input.className = 'input';
-        // Auto-inherit dueDate ONLY for brand-new tasks (no _editEntity).
-        // On edit, respect whatever the user last saved (including intentional clear).
         const isNewTask = !_editEntity;
         const resolvedExec = existing
           ? existing.slice(0, 10)
@@ -1325,8 +1343,7 @@ function _buildFieldControl(field, config) {
         input.addEventListener('change', () => {
           _draft[field.key] = input.value || null;
         });
-        wrap.appendChild(input);
-        return wrap;
+        return input;
       }
 
       // Standard date field
@@ -3816,9 +3833,27 @@ async function _buildDetailsTab(container, config) {
   container.innerHTML = '';
 
   // Create mode: show metadata fields available but no timer (needs entity ID)
+  // ─── CHECKLIST (task / taskInstance — shown even for new entities) ──── //
+  // Rendered first so new tasks can add checklist items before their first save.
+  if (_typeKey === 'task' || _typeKey === 'taskInstance' || _editEntity?.type === 'task' || _editEntity?.type === 'taskInstance') {
+    const _clConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : getEntityTypeConfig(_typeKey);
+    const clField = _clConfig?.fields?.find(f => f.key === 'checklist');
+    if (clField) {
+      const clSection = document.createElement('div');
+      clSection.style.cssText = 'padding:12px 16px;border-bottom:1px solid var(--color-border);';
+      const clLabel = document.createElement('div');
+      clLabel.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);margin-bottom:var(--space-2);';
+      clLabel.textContent = '☑ Checklist';
+      clSection.appendChild(clLabel);
+      const clCtrl = _buildFieldControl(clField, _clConfig);
+      if (clCtrl) clSection.appendChild(clCtrl);
+      container.appendChild(clSection);
+    }
+  }
+
   if (!_editEntity) {
     const msg = document.createElement('div');
-    msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px 24px;gap:12px;';
+    msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;gap:12px;';
     msg.innerHTML = `
       <div style="font-size:1.8rem;opacity:0.4;">⚡</div>
       <div style="font-weight:600;color:var(--color-text);font-size:var(--text-sm);">Activity is tracked after saving</div>

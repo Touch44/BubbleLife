@@ -785,9 +785,9 @@ function _renderHeader() {
   if ((_config.actions || []).includes('edit')) {
     const editBtn = document.createElement('button');
     editBtn.className = 'panel-icon-btn panel-edit-btn';
-    editBtn.title = 'Edit all fields';
-    editBtn.setAttribute('aria-label', 'Edit entity');
-    editBtn.textContent = '✎';
+    editBtn.title = _entity?.type === 'taskInstance' ? 'Edit this occurrence' : 'Edit all fields';
+    editBtn.setAttribute('aria-label', _entity?.type === 'taskInstance' ? 'Edit this occurrence' : 'Edit entity');
+    editBtn.innerHTML = '✏️';
     editBtn.style.cssText = 'font-size: 1rem;';
     editBtn.addEventListener('click', () => {
       if (!_entity) return;
@@ -929,7 +929,7 @@ function _renderHeaderActions() {
     return btn;
   };
 
-  // ── PRIMARY: Complete (tasks only) ──────────────────────
+  // ── PRIMARY: Complete (tasks and taskInstances) ─────────
   if (_entity.type === 'task' && _entity.status !== 'Done' && _entity.status !== 'Completed') { // SYS-05
     const btn = mkBtn('✓', 'Mark complete');
     btn.style.color = 'var(--color-success-text, #15803d)';
@@ -944,8 +944,29 @@ function _renderHeaderActions() {
     _headerActions.appendChild(btn);
   }
 
-  // ── PRIMARY: Archive / Unarchive ────────────────────────
-  if (actions.includes('archive') || actions.includes('edit')) {
+  // Complete for taskInstance — uses completeInstance (updates streak/count)
+  if (_entity.type === 'taskInstance' && _entity.status !== 'Completed' && _entity.status !== 'Skipped') {
+    const btn = mkBtn('✓', 'Complete this occurrence');
+    btn.style.color = 'var(--color-success-text, #15803d)';
+    btn.style.fontWeight = '600';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const { completeInstance } = await import('../services/recurrence.js');
+        await completeInstance(_entity.id);
+        _entity.status = 'Completed';
+        _renderHeader();
+        _renderActiveTab();
+      } catch (err) {
+        console.error('[panel] completeInstance from header:', err);
+        btn.disabled = false;
+      }
+    });
+    _headerActions.appendChild(btn);
+  }
+
+  // ── PRIMARY: Archive / Unarchive (not for taskInstance) ─
+  if (!(_entity.type === 'taskInstance') && (actions.includes('archive') || actions.includes('edit'))) {
     const isArchived = _entity.status === 'Archived' || _entity.archived;
     const btn = mkBtn(isArchived ? '↑' : '📦', isArchived ? 'Unarchive' : 'Archive');
     btn.addEventListener('click', async () => {
@@ -972,7 +993,7 @@ function _renderHeaderActions() {
   // ── OVERFLOW MENU: Duplicate · Add to Project · Convert ─
   const overflowItems = [];
   if (actions.includes('duplicate'))     overflowItems.push({ label: 'Duplicate',       fn: _duplicateEntity });
-  if (_entity.type !== 'project')        overflowItems.push({ label: 'Add to Project',  fn: _showProjectPicker });
+  if (_entity.type !== 'project' && _entity.type !== 'taskInstance') overflowItems.push({ label: 'Add to Project',  fn: _showProjectPicker });
   if (actions.includes('convert'))       overflowItems.push({ label: 'Convert to…',     fn: _showConvertDropdown });
 
   if (overflowItems.length > 0) {
@@ -3188,7 +3209,7 @@ async function _renderRelationsTab(container) {
     const actions = _config.actions || [];
     const isDone = _entity.status === 'Completed' || _entity.status === 'Done';
 
-    // Complete (tasks only)
+    // Complete (tasks)
     if (_entity.type === 'task') {
       const completeBtn = mkActionBtn(isDone ? 'Mark In Progress' : 'Mark Complete', isDone ? '↩' : '✓', 'color:var(--color-success-text,#15803d);border-color:var(--color-success-text,#15803d);');
       completeBtn.addEventListener('click', async () => {
@@ -3201,8 +3222,27 @@ async function _renderRelationsTab(container) {
       actRow.appendChild(completeBtn);
     }
 
-    // Archive/Unarchive
-    if (actions.includes('archive') || actions.includes('edit')) {
+    // Complete this occurrence (taskInstance)
+    if (_entity.type === 'taskInstance' && !isDone && _entity.status !== 'Skipped') {
+      const completeBtn = mkActionBtn('Complete Occurrence', '✓', 'color:var(--color-success-text,#15803d);border-color:var(--color-success-text,#15803d);');
+      completeBtn.addEventListener('click', async () => {
+        completeBtn.disabled = true;
+        try {
+          const { completeInstance } = await import('../services/recurrence.js');
+          await completeInstance(_entity.id);
+          _entity.status = 'Completed';
+          _renderHeader();
+          _renderActiveTab();
+        } catch (err) {
+          console.error('[panel] completeInstance (props tab):', err);
+          completeBtn.disabled = false;
+        }
+      });
+      actRow.appendChild(completeBtn);
+    }
+
+    // Archive/Unarchive (not for taskInstance)
+    if (_entity.type !== 'taskInstance' && (actions.includes('archive') || actions.includes('edit'))) {
       const isArchived = _entity.status === 'Archived' || _entity.archived;
       const archBtn = mkActionBtn(isArchived ? 'Unarchive' : 'Archive', isArchived ? '↑' : '📦');
       archBtn.addEventListener('click', async () => {
@@ -3223,8 +3263,8 @@ async function _renderRelationsTab(container) {
       actRow.appendChild(dupBtn);
     }
 
-    // Add to project
-    if (_entity.type !== 'project') {
+    // Add to project (not for taskInstance)
+    if (_entity.type !== 'project' && _entity.type !== 'taskInstance') {
       const projBtn = mkActionBtn('Add to Project', '📁');
       projBtn.addEventListener('click', () => _showProjectPicker());
       actRow.appendChild(projBtn);
@@ -4475,6 +4515,19 @@ async function _renderSeriesTab(container) {
         });
         row.appendChild(skipBtn);
       }
+
+      // Edit button on every occurrence row (including current one)
+      const editOccBtn = document.createElement('button');
+      editOccBtn.className = 'btn btn-ghost btn-xs';
+      editOccBtn.style.cssText = 'font-size:0.65rem;padding:2px 5px;color:var(--color-text-muted);';
+      editOccBtn.textContent = '✏️';
+      editOccBtn.title = 'Edit this occurrence';
+      editOccBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const freshInst = await getEntity(inst.id).catch(() => inst);
+        openEditForm(freshInst);
+      });
+      row.appendChild(editOccBtn);
 
       frag.appendChild(row);
     }
