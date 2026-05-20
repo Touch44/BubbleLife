@@ -173,7 +173,8 @@ async function _createInstance(tmpl, periodStart, acct, baseIndex = 0) {
     periodStart:    periodStart,   // always YYYY-MM-DD
     executionDate:  periodStart,
     executionTime:  tmpl.executionTime || tmpl.dueTime || null,
-    dueDate:        tmpl.dueDate || periodStart,
+    // [v5.4.3] dueDate = periodStart: the deadline for an occurrence is the day it occurs
+    dueDate:        periodStart,
     status:         'Not Started',
     context:        tmpl.context,  // inherit for filterByContext
     assignedTo:     tmpl.assignedTo,

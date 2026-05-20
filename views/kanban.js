@@ -1279,7 +1279,11 @@ function _buildCard(task) {
   card.setAttribute('draggable', 'true');
 
   const today = _todayStr();
-  const due   = _isoToLocalDate(task.dueDate); // [minor] BUG-49 fix: local date
+  // [v5.4.4] For instances, the deadline is always periodStart (the day it occurs),
+  // regardless of any stale dueDate inherited from the template pre-v5.4.3.
+  const due   = task._isInstance
+    ? (_isoToLocalDate(task.periodStart) || _isoToLocalDate(task.dueDate))
+    : _isoToLocalDate(task.dueDate); // [minor] BUG-49 fix: local date
   const dueCls = !due ? '' : due < today ? 'due-overdue' : due === today ? 'due-today' : 'due-future';
 
   // Project chip — resolve from direct field first, then from edge map

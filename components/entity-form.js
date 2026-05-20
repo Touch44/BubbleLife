@@ -3243,7 +3243,7 @@ async function _buildRelationsTab(container) {
 
     const _guardR = async (fn) => { _saveDraftFromForm(); await fn(); };
 
-    // ── Mark Complete / In Progress (tasks only) ─────────────
+    // ── Mark Complete / In Progress ─────────────────────────
     if (entity.type === 'task') {
       const isDone = entity.status === 'Completed' || entity.status === 'Done';
       const completeBtn = _mkB(isDone ? '↩' : '✓', isDone ? 'Mark In Progress' : 'Mark Complete');
@@ -3258,15 +3258,40 @@ async function _buildRelationsTab(container) {
         if (statusSel) statusSel.value = newStatus;
         emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: false });
         toast.success(newStatus === 'Completed' ? 'Marked complete ✓' : 'Marked in progress');
-        // Rebuild tab so button label flips
         container.innerHTML = '';
         _buildRelationsTab(container);
       }));
       toolbar.appendChild(completeBtn);
     }
 
-    // ── Archive / Unarchive ───────────────────────────────────
-    if (actions.includes('archive') || actions.includes('edit')) {
+    // taskInstance: complete via completeInstance (updates streak/count)
+    if (entity.type === 'taskInstance') {
+      const isDone = entity.status === 'Completed' || entity.status === 'Skipped';
+      if (!isDone) {
+        const completeBtn = _mkB('✓', 'Complete Occurrence');
+        completeBtn.style.color       = 'var(--color-success-text,#15803d)';
+        completeBtn.style.borderColor = 'var(--color-success-text,#15803d)';
+        completeBtn.addEventListener('click', () => _guardR(async () => {
+          completeBtn.disabled = true;
+          try {
+            const { completeInstance } = await import('../services/recurrence.js');
+            await completeInstance(entity.id);
+            _editEntity = { ..._editEntity, status: 'Completed' };
+            emit(EVENTS.ENTITY_SAVED, { entity: _editEntity, isNew: false });
+            toast.success('Occurrence completed ✓');
+            container.innerHTML = '';
+            _buildRelationsTab(container);
+          } catch (err) {
+            console.error('[entity-form] completeInstance:', err);
+            completeBtn.disabled = false;
+          }
+        }));
+        toolbar.appendChild(completeBtn);
+      }
+    }
+
+    // ── Archive / Unarchive (not for taskInstance) ───────────
+    if (entity.type !== 'taskInstance' && (actions.includes('archive') || actions.includes('edit'))) {
       const isArchived = entity.status === 'Archived' || entity.archived;
       const btn = _mkB(isArchived ? '↑' : '📦', isArchived ? 'Unarchive' : 'Archive');
       btn.addEventListener('click', () => _guardR(async () => {
@@ -3301,8 +3326,8 @@ async function _buildRelationsTab(container) {
       toolbar.appendChild(btn);
     }
 
-    // ── Add to Project ────────────────────────────────────────
-    if (entity.type !== 'project') {
+    // ── Add to Project (not for taskInstance) ─────────────────
+    if (entity.type !== 'project' && entity.type !== 'taskInstance') {
       const btn = _mkB('📁', 'Add to Project');
       btn.style.position = 'relative';
       btn.addEventListener('click', (e) => {
@@ -3832,26 +3857,23 @@ async function _renderFormConnectionsList(container, entity) {
 async function _buildDetailsTab(container, config) {
   container.innerHTML = '';
 
-  // Create mode: show metadata fields available but no timer (needs entity ID)
-  // ─── CHECKLIST (task / taskInstance — shown even for new entities) ──── //
-  // Rendered first so new tasks can add checklist items before their first save.
-  if (_typeKey === 'task' || _typeKey === 'taskInstance' || _editEntity?.type === 'task' || _editEntity?.type === 'taskInstance') {
-    const _clConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : getEntityTypeConfig(_typeKey);
-    const clField = _clConfig?.fields?.find(f => f.key === 'checklist');
-    if (clField) {
-      const clSection = document.createElement('div');
-      clSection.style.cssText = 'padding:12px 16px;border-bottom:1px solid var(--color-border);';
-      const clLabel = document.createElement('div');
-      clLabel.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);margin-bottom:var(--space-2);';
-      clLabel.textContent = '☑ Checklist';
-      clSection.appendChild(clLabel);
-      const clCtrl = _buildFieldControl(clField, _clConfig);
-      if (clCtrl) clSection.appendChild(clCtrl);
-      container.appendChild(clSection);
-    }
-  }
-
   if (!_editEntity) {
+    // New entity: show checklist (for tasks) + "save first" for activity
+    if (_typeKey === 'task' || _typeKey === 'taskInstance') {
+      const _clConfig = getEntityTypeConfig(_typeKey);
+      const clField = _clConfig?.fields?.find(f => f.key === 'checklist');
+      if (clField) {
+        const clSection = document.createElement('div');
+        clSection.style.cssText = 'padding:12px 16px;border-bottom:1px solid var(--color-border);';
+        const clLabel = document.createElement('div');
+        clLabel.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);margin-bottom:var(--space-2);';
+        clLabel.textContent = '☑ Checklist';
+        clSection.appendChild(clLabel);
+        const clCtrl = _buildFieldControl(clField, _clConfig);
+        if (clCtrl) clSection.appendChild(clCtrl);
+        container.appendChild(clSection);
+      }
+    }
     const msg = document.createElement('div');
     msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;gap:12px;';
     msg.innerHTML = `
@@ -3892,7 +3914,24 @@ async function _buildDetailsTab(container, config) {
     _buildFormTimeTrackerUI(ttWrap, entity).catch(e => console.warn('[entity-form] timer UI error:', e));
   }
 
-  // ─── 1. METADATA CARD ─────────────────────────────────────── //
+  // ─── 1. CHECKLIST (tasks / taskInstances — after time tracker) ──── //
+  if (entity.type === 'task' || entity.type === 'taskInstance') {
+    const _clConfig = getEntityTypeConfig(entity.type);
+    const clField = _clConfig?.fields?.find(f => f.key === 'checklist');
+    if (clField) {
+      const clSection = document.createElement('div');
+      clSection.style.cssText = 'padding:12px 16px;border-bottom:1px solid var(--color-border);';
+      const clLabel = document.createElement('div');
+      clLabel.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);margin-bottom:var(--space-2);';
+      clLabel.textContent = '☑ Checklist';
+      clSection.appendChild(clLabel);
+      const clCtrl = _buildFieldControl(clField, _clConfig);
+      if (clCtrl) clSection.appendChild(clCtrl);
+      container.appendChild(clSection);
+    }
+  }
+
+  // ─── 2. METADATA CARD ─────────────────────────────────────── //
   const meta = document.createElement('div');
   meta.style.cssText = [
     'padding: 14px 16px;',

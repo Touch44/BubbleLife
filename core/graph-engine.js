@@ -197,10 +197,10 @@ const BUILT_IN_ENTITY_TYPES = [
     fields: [
       field('title',          'title',    { isTitle: true, label: 'Title' }),
       field('templateId',     'text',     { label: 'Template ID', hidden: true }),
-      field('periodStart',    'date',     { label: 'Period Start' }),
+      field('periodStart',    'date',     { label: 'Period Start', hidden: true }),  // scheduler-managed
       field('executionDate',  'date',     { label: 'Planned For' }),
       field('executionTime',  'time',     { label: 'Planned Time' }),
-      field('dueDate',        'date',     { label: 'Deadline' }),
+      field('dueDate',        'date',     { label: 'Deadline', hidden: true }),  // auto-set = periodStart
       field('status',         'select',   { label: 'Status',           options: ['Not Started','In Progress','Completed','Skipped'] }),
       field('completedAt',    'datetime', { label: 'Completed At', hidden: true }),
       field('skippedReason',  'text',     { label: 'Skip Reason' }),

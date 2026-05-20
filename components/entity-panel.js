@@ -447,12 +447,12 @@ async function _migrateDailyReviewEdges() {
     // and by _createAndLink / _syncDailyReviewLinks in the current version.
     //
     // Guard: skip if this migration has already run (stored in a DB setting).
-    const migDoneKey = 'migration_dr_edges_v2_done';
+    const migDoneKey = 'migration_dr_edges_v3_done'; // [v5.4.4] bumped to include taskInstance
     const alreadyMigrated = await getSetting(migDoneKey).catch(() => null);
     if (alreadyMigrated) {
       // Migration already ran — skip entirely
     } else {
-      const allTypes = ['task','event','appointment','note','post','dateEntity',
+      const allTypes = ['task','taskInstance','event','appointment','note','post','dateEntity',
                         'mealPlan','trip','idea','research','book',
                         'person','project','contact','place','weblink',
                         'recipe','medication','shoppingItem','habit','goal','dailyReview'];
@@ -502,6 +502,12 @@ function _getCorrectDatesForEntity(entity) {
     case 'task':
       if (entity.dueDate) { const d = _isoToLocalDate(entity.dueDate); if (d) dates.add(d); }
       break;
+    case 'taskInstance': {
+      // [v5.4.3] Instances belong to their periodStart DR only
+      const occDate = _isoToLocalDate(entity.periodStart);
+      if (occDate) dates.add(occDate);
+      break;
+    }
     case 'event': {
       const startD = _isoToLocalDate(entity.date);
       const endD   = _isoToLocalDate(entity.endDate);
@@ -2772,6 +2778,21 @@ async function _ensureDailyLinks(entity) {
       if (entity.dueDate) { const d = _isoToLocalDate(entity.dueDate); if (d) datesToLink.add(d); }
       break;
 
+    case 'taskInstance': {
+      // [v5.4.3] Instances link to their periodStart (the day they occur).
+      // If overdue (periodStart < today), also link to today so it appears in today's DR.
+      const occDate = _isoToLocalDate(entity.periodStart);
+      if (occDate) {
+        datesToLink.add(occDate);
+        const todayStr = (() => {
+          const n = new Date();
+          return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
+        })();
+        if (occDate < todayStr) datesToLink.add(todayStr); // overdue: also today's DR
+      }
+      break;
+    }
+
     case 'event': {
       // Events link to every date they span (startDate through endDate inclusive)
       const startD = _isoToLocalDate(entity.date);
@@ -4438,9 +4459,10 @@ async function _renderSeriesTab(container) {
       frag.appendChild(empty);
     }
 
-    const PAGE_SIZE = 30;
-    for (const inst of insts.slice(0, PAGE_SIZE)) { // show up to 30; show-more expands
-      const STATUS_ICONS = { Completed: '✅', Skipped: '⏭', 'In Progress': '🔄', 'Not Started': '⭕' };
+    // ── Helper: build one occurrence row (reused in both main list and show-more) ──
+    const STATUS_ICONS = { Completed: '✅', Skipped: '⏭', 'In Progress': '🔄', 'Not Started': '⭕' };
+
+    const _buildOccRow = (inst) => {
       const icon   = STATUS_ICONS[inst.status] || '⭕';
       const isThis = inst.id === _entity.id;
 
@@ -4454,7 +4476,6 @@ async function _renderSeriesTab(container) {
       ].join(';');
 
       const dateStr10 = inst.periodStart?.slice(0, 10) || '';
-      // [N40 fix] Show weekday name for better readability (Mon May 19, not just 2026-05-19)
       let dateDisplay = dateStr10 || '—';
       if (dateStr10) {
         try {
@@ -4472,7 +4493,7 @@ async function _renderSeriesTab(container) {
         <span style="font-size:var(--text-xs);color:var(--color-text-muted);">#${inst.occurrenceIndex || '?'}</span>
       `;
 
-      // Click: open this instance's panel
+      // Click: navigate to that instance's panel (if not already open)
       if (!isThis) {
         row.style.cursor = 'pointer';
         row.addEventListener('click', () => {
@@ -4482,7 +4503,6 @@ async function _renderSeriesTab(container) {
 
       // Action buttons for Not Started instances (not the currently-open one)
       if (inst.status === 'Not Started' && !isThis) {
-        // Complete button [N13 fix]
         const doneBtn = document.createElement('button');
         doneBtn.className = 'btn btn-ghost btn-xs';
         doneBtn.style.cssText = 'font-size:0.6rem;padding:2px 6px;color:var(--color-success,#22c55e);';
@@ -4500,7 +4520,6 @@ async function _renderSeriesTab(container) {
         });
         row.appendChild(doneBtn);
 
-        // Skip button
         const skipBtn = document.createElement('button');
         skipBtn.className = 'btn btn-ghost btn-xs';
         skipBtn.style.cssText = 'font-size:0.6rem;padding:2px 6px;color:var(--color-text-muted);';
@@ -4516,7 +4535,7 @@ async function _renderSeriesTab(container) {
         row.appendChild(skipBtn);
       }
 
-      // Edit button on every occurrence row (including current one)
+      // Edit button on every row
       const editOccBtn = document.createElement('button');
       editOccBtn.className = 'btn btn-ghost btn-xs';
       editOccBtn.style.cssText = 'font-size:0.65rem;padding:2px 5px;color:var(--color-text-muted);';
@@ -4529,7 +4548,12 @@ async function _renderSeriesTab(container) {
       });
       row.appendChild(editOccBtn);
 
-      frag.appendChild(row);
+      return row;
+    };
+
+    const PAGE_SIZE = 30;
+    for (const inst of insts.slice(0, PAGE_SIZE)) {
+      frag.appendChild(_buildOccRow(inst));
     }
 
     // [N42 fix] Show-more link when list is truncated
@@ -4538,24 +4562,10 @@ async function _renderSeriesTab(container) {
       moreBtn.className = 'btn btn-ghost btn-sm';
       moreBtn.style.cssText = 'width:100%;margin-top:var(--space-2);font-size:var(--text-xs);color:var(--color-text-muted);';
       moreBtn.textContent = `↓ Show all ${insts.length} occurrences`;
-      moreBtn.addEventListener('click', async () => {
+      moreBtn.addEventListener('click', () => {
         moreBtn.remove();
-        // Render remaining occurrences by appending rows directly to container
         for (const inst of insts.slice(PAGE_SIZE)) {
-          const STATUS_ICONS = { Completed: '✅', Skipped: '⏭', 'In Progress': '🔄', 'Not Started': '⭕' };
-          const rowMore = document.createElement('div');
-          rowMore.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-1);border-bottom:1px solid var(--color-border);font-size:var(--text-sm);';
-          const dateStr10m = inst.periodStart?.slice(0, 10) || '';
-          let dateDisplayM = dateStr10m || '—';
-          if (dateStr10m) {
-            try {
-              const pm = dateStr10m.split('-');
-              const dm = new Date(+pm[0], +pm[1]-1, +pm[2]);
-              dateDisplayM = dm.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
-            } catch(_) {}
-          }
-          rowMore.innerHTML = `<span style="min-width:1.2em;text-align:center;">${STATUS_ICONS[inst.status] || '⭕'}</span><span style="flex:1;${inst.status==='Completed'?'text-decoration:line-through;color:var(--color-text-muted);':''}">${_esc(dateDisplayM)}</span><span style="font-size:var(--text-xs);color:var(--color-text-muted);">#${inst.occurrenceIndex||'?'}</span>`;
-          container.appendChild(rowMore);
+          container.appendChild(_buildOccRow(inst));
         }
       });
       frag.appendChild(moreBtn);

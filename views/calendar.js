@@ -30,6 +30,7 @@ import { emit, on, EVENTS }         from '../core/events.js';
 import { getAccount }                from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                     from '../core/toast.js';
+import { nextDate }                  from '../services/rrule-lite.js'; // [v5.5.0] virtual occurrence synthesis
 
 // ── Constants ─────────────────────────────────────────────── //
 // Module-level edge map for task assignee resolution (set during render from _loadData)
@@ -239,6 +240,14 @@ function _formatFullDate(d) {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
+/** Format a YYYY-MM-DD string as "May 21" */
+function _formatDateShort(dateStr) {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  const d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 /**
  * Format a Date for week header: "Apr 21 – Apr 27, 2025".
  */
@@ -357,7 +366,101 @@ async function _loadData() {
  *
  * Also flags overdue tasks (dueDate < today, not done).
  */
+/**
+ * [v5.5.0] Synthesize virtual (display-only) occurrences from recurring task templates
+ * for date ranges that extend beyond the materialized ghost-instance window.
+ *
+ * These entries look like taskInstance objects but have `_virtual: true` — they are
+ * never written to IDB. They are blended into the dateMap so planning views (week,
+ * agenda, month) show the full recurring schedule for any date range.
+ *
+ * @param {object[]} recurringTasks  — task entities with isRecurring:true and rrule set
+ * @param {object[]} existingInsts   — already-materialized taskInstance entities
+ * @param {string}   rangeStart      — YYYY-MM-DD
+ * @param {string}   rangeEnd        — YYYY-MM-DD
+ * @returns {object[]}               — array of virtual taskInstance-like objects
+ */
+function _synthesizeVirtualOccurrences(recurringTasks, existingInsts, rangeStart, rangeEnd) {
+  const virtual = [];
+  if (!recurringTasks?.length) return virtual;
+
+  // Build set of already-materialized periodStart dates per template for dedup
+  const materializedByTemplate = new Map(); // templateId → Set<YYYY-MM-DD>
+  for (const inst of (existingInsts || [])) {
+    if (!inst.templateId || !inst.periodStart) continue;
+    const ds = String(inst.periodStart).slice(0, 10);
+    if (!materializedByTemplate.has(inst.templateId)) materializedByTemplate.set(inst.templateId, new Set());
+    materializedByTemplate.get(inst.templateId).add(ds);
+  }
+
+  const rangeStartD = new Date(rangeStart + 'T00:00:00');
+  const rangeEndD   = new Date(rangeEnd   + 'T23:59:59');
+
+  for (const tmpl of recurringTasks) {
+    if (!tmpl.rrule || !tmpl.isRecurring || tmpl.status === 'Completed') continue;
+
+    const materialized = materializedByTemplate.get(tmpl.id) || new Set();
+    const execTime  = tmpl.executionTime || tmpl.dueTime || '06:00';
+
+    // Start cursor from template's nextOccurrenceDate or executionDate, clamped to rangeStart
+    const startCursor = tmpl.nextOccurrenceDate || tmpl.executionDate || rangeStart;
+    let cursor = startCursor.slice(0, 10) + 'T00:00:00';
+
+    let safety = 0;
+    while (safety++ < 500) {
+      const nextISO = nextDate(tmpl.rrule, cursor, tmpl.executionDate || rangeStart);
+      if (!nextISO) break;
+      const nextDs  = nextISO.slice(0, 10);
+      const nextDt  = new Date(nextDs + 'T00:00:00');
+
+      // Stop if past range end
+      if (nextDt > rangeEndD) break;
+
+      cursor = nextISO; // advance
+
+      // Skip if before range start
+      if (nextDt < rangeStartD) continue;
+
+      // Skip if already materialized as a real instance
+      if (materialized.has(nextDs)) continue;
+
+      // Skip if the series has ended
+      if (tmpl.recurrenceEnd === 'date' && tmpl.recurrenceEndDate && nextDs > tmpl.recurrenceEndDate) break;
+
+      // Create a virtual display entry (never saved to IDB)
+      virtual.push({
+        id:             `virtual:${tmpl.id}:${nextDs}`,
+        type:           'taskInstance',
+        title:          tmpl.title,
+        templateId:     tmpl.id,
+        periodStart:    nextDs,
+        executionDate:  nextDs,
+        executionTime:  execTime,
+        dueDate:        nextDs,
+        status:         'Not Started',
+        priority:       tmpl.priority || 'Medium',
+        tags:           tmpl.tags || [],
+        context:        tmpl.context,
+        assignedTo:     tmpl.assignedTo,
+        occurrenceIndex: null, // not yet materialized — unknown
+        _virtual:       true,  // display-only — never write to IDB
+        _template:      tmpl,
+      });
+    }
+  }
+  return virtual;
+}
+
 function _buildDateMap(data, rangeStart, rangeEnd) {
+  // [v5.5.0] Synthesize virtual occurrences for recurring tasks beyond the materialized window
+  // This lets week/agenda/month views show the full schedule for any date range
+  const recurringTasks = (data.task || []).filter(t => t.isRecurring && t.rrule && !t.deleted);
+  const virtualOccs    = _synthesizeVirtualOccurrences(recurringTasks, data.taskInstance || [], rangeStart, rangeEnd);
+  // Merge: real instances take priority; virtuals only fill gaps
+  if (virtualOccs.length > 0) {
+    data = { ...data, taskInstance: [...(data.taskInstance || []), ...virtualOccs] };
+  }
+
   const map = new Map();
   const todayStr = _toDateStr(_todayLocal());
 
@@ -766,7 +869,7 @@ function _buildMonthView(container, dateMap, personMap = new Map()) {
     // Click → day popover
     cell.addEventListener('click', (e) => {
       e.stopPropagation();
-      _showDayPopover(cell, cellDate, cellDateStr, items);
+      _showDayPopover(cell, cellDate, cellDateStr, items, personMap);
     });
 
     // Drop target for drag-and-drop rescheduling
@@ -899,7 +1002,7 @@ function _closePopover() {
 /**
  * Show a day popover anchored near the clicked cell.
  */
-function _showDayPopover(anchorEl, dateObj, dateStr, items) {
+function _showDayPopover(anchorEl, dateObj, dateStr, items, personMap = new Map()) {
   _closePopover();
 
   // Overlay to catch clicks outside
@@ -990,20 +1093,30 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
       // Color accent bar
       row.style.borderLeftColor = _getItemColor(item.entityType, item.entity, personMap); // C-01
 
-      // Make draggable (except recurring dateEntities)
-      if (item.entityType !== 'dateEntity') {
+      // Virtual occurrences: dashed border + reduced opacity to signal "forecast"
+      if (item.entity._virtual) {
+        row.style.opacity = '0.72';
+        row.style.borderLeftStyle = 'dashed';
+        row.title = 'Forecast — will materialize when within the preview window';
+      }
+
+      // Make draggable (not virtual occurrences — no real entity to move)
+      if (item.entityType !== 'dateEntity' && !item.entity._virtual) {
         _makeDraggable(row, item.entityType, item.entity.id);
       }
 
-      // Click → task title opens edit form; other entity types open panel
+      // Click → virtual items open template panel; real items open their own panel
       row.addEventListener('click', (e) => {
         e.stopPropagation();
         _closePopover();
-        // All entity types now route through PANEL_OPENED → openEditForm (form-first UX)
-        emit(EVENTS.PANEL_OPENED, {
-          entityType: item.entityType,
-          entityId:   item.entity.id,
-        });
+        if (item.entity._virtual) {
+          emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: item.entity.templateId });
+        } else {
+          emit(EVENTS.PANEL_OPENED, {
+            entityType: item.entityType,
+            entityId:   item.entity.id,
+          });
+        }
       });
 
       list.appendChild(row);
@@ -1406,7 +1519,8 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
     const timedItems = items.filter(it => {
       const reg = ENTITY_REGISTRY[it.entityType];
       if (!reg || !reg.hasTime) return false;
-      const dateISO = it.entityType === 'task'
+      // [v5.5.0] tasks AND taskInstances use _dateTimeISO (executionDate+executionTime)
+      const dateISO = (it.entityType === 'task' || it.entityType === 'taskInstance')
         ? (it._dateTimeISO || null)
         : it.entity.date;
       if (!dateISO) return false;
@@ -1418,8 +1532,8 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
       }
       const h = _isoToLocalHourFrac(dateISO);
       if (h === null) return false;
-      // Tasks before HOUR_START are clamped to grid top rather than hidden
-      if (it.entityType === 'task') return h < HOUR_END;
+      // Tasks/instances before HOUR_START are clamped to grid top rather than hidden
+      if (it.entityType === 'task' || it.entityType === 'taskInstance') return h < HOUR_END;
       return h >= HOUR_START && h < HOUR_END;
     });
 
@@ -1428,8 +1542,9 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
     // ── Overlap detection: assign column indices ──
     // Sort by start time, then find groups of overlapping events
     const sorted = timedItems.map(it => {
-      const dateISO = it.entityType === 'task'
-        ? (it._dateTimeISO || it.entity.dueDate)
+      // [v5.5.0] tasks AND taskInstances use _dateTimeISO; other types use entity.date
+      const dateISO = (it.entityType === 'task' || it.entityType === 'taskInstance')
+        ? (it._dateTimeISO || it.entity.executionDate || it.entity.dueDate)
         : it.entity.date;
 
       let startH, endH;
@@ -1448,7 +1563,7 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
           startH = _isoToLocalHourFrac(dateISO) ?? HOUR_START;
           endH   = Math.min(startH + Math.max(_durationHours(it.entity.date, it.entity.endDate), 0.5), HOUR_END);
         }
-      } else if (it.entityType === 'task') {
+      } else if (it.entityType === 'task' || it.entityType === 'taskInstance') {
         startH = Math.max(_isoToLocalHourFrac(dateISO) ?? 6, HOUR_START); // clamp to grid top
         endH   = Math.min(startH + 0.5, HOUR_END);
       } else {
@@ -1512,16 +1627,28 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
 
       block.append(blockTitle, blockTime);
 
-      // Make event blocks draggable
-      _makeDraggable(block, item.entityType, item.entity.id);
+      // Make event blocks draggable (not virtual occurrences — they have no real entity)
+      if (!item.entity._virtual) {
+        _makeDraggable(block, item.entityType, item.entity.id);
+      }
+      // Virtual blocks get a dashed style — forecast indicator
+      if (item.entity._virtual) {
+        block.style.opacity = '0.65';
+        block.style.borderLeftStyle = 'dashed';
+        block.title = 'Forecast — will materialize when within the preview window';
+      }
 
       block.addEventListener('click', (e) => {
         e.stopPropagation();
-        // All entity types now route through PANEL_OPENED → openEditForm (form-first UX)
-        emit(EVENTS.PANEL_OPENED, {
-          entityType: item.entityType,
-          entityId:   item.entity.id,
-        });
+        if (item.entity._virtual) {
+          // Open the recurring template for editing series settings
+          emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: item.entity.templateId });
+        } else {
+          emit(EVENTS.PANEL_OPENED, {
+            entityType: item.entityType,
+            entityId:   item.entity.id,
+          });
+        }
       });
 
       bodyEl.appendChild(block);
@@ -1584,10 +1711,23 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
         const startTime = _formatTime(item.entity.date);
         const endTime   = item.entity.endDate ? _formatTime(item.entity.endDate) : '';
         timeCol.textContent = startTime ? (endTime ? `${startTime} – ${endTime}` : startTime) : 'All day';
+      } else if (item.entityType === 'task' || item.entityType === 'taskInstance') {
+        // [v5.5.0] Show Planned For time if available; fall back to "Due HH:MM" or just "Due"
+        const execTime = item.entity.executionTime || item.entity.dueTime || '';
+        const execDate = _isoToLocalDate(item.entity.executionDate) || _isoToLocalDate(item.entity.periodStart);
+        const dueDate  = _isoToLocalDate(item.entity.dueDate);
+        if (execTime && execTime !== '06:00') {
+          timeCol.textContent = execTime.slice(0, 5);
+        } else if (item._dateTimeISO) {
+          const t = _formatTime(item._dateTimeISO);
+          timeCol.textContent = t || 'Planned';
+        } else {
+          timeCol.textContent = 'Planned';
+        }
       } else if (item.entityType === 'mealPlan') {
         timeCol.textContent = item.entity.mealType || 'Meal';
       } else {
-        timeCol.textContent = item.entityType === 'task' ? 'Due' : '';
+        timeCol.textContent = '';
       }
 
       // Content column
@@ -1601,26 +1741,54 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
       const itemMeta = document.createElement('span');
       itemMeta.className = 'cal-agenda-item-meta';
       const icon = _getIcon(item.entityType);
-      const label = item.entityType === 'dateEntity'
-        ? (item.entity.type || 'Date')
-        : (item.entityType === 'task' ? (item.entity.priority || '') : '');
-      itemMeta.textContent = `${icon} ${label}`.trim();
+      let metaText = '';
+      if (item.entityType === 'dateEntity') {
+        metaText = item.entity.type || 'Date';
+      } else if (item.entityType === 'task') {
+        // [v5.5.0] Show priority + due date if different from planned date
+        const parts = [];
+        if (item.entity.priority) parts.push(item.entity.priority);
+        const execDate = _isoToLocalDate(item.entity.executionDate);
+        const dueDate  = _isoToLocalDate(item.entity.dueDate);
+        if (dueDate && execDate && dueDate !== execDate) {
+          parts.push(`Due ${_formatDateShort(dueDate)}`);
+        }
+        metaText = parts.join(' · ');
+      } else if (item.entityType === 'taskInstance') {
+        // [v5.5.0] Show occurrence index + virtual badge
+        const idx = item.entity.occurrenceIndex ? `#${item.entity.occurrenceIndex}` : '';
+        const virt = item.entity._virtual ? '◦ forecast' : '';
+        metaText = ['↺', idx, virt].filter(Boolean).join(' ');
+      }
+      itemMeta.textContent = `${icon} ${metaText}`.trim();
+
+      // [v5.5.0] Virtual items get a subtle dashed style — forecast, not confirmed
+      if (item.entity._virtual) {
+        row.style.opacity = '0.72';
+        row.style.borderLeftStyle = 'dashed';
+        row.title = 'Forecast — will materialize when within the preview window';
+      }
 
       contentCol.append(itemTitle, itemMeta);
       row.append(timeCol, contentCol);
 
-      // Make draggable (except recurring dateEntities)
-      if (item.entityType !== 'dateEntity') {
+      // Don't make virtual occurrences draggable (no real entity to move)
+      if (item.entityType !== 'dateEntity' && !item.entity._virtual) {
         _makeDraggable(row, item.entityType, item.entity.id);
       }
 
-      // Task agenda rows open edit form; other entity types open panel
+      // Virtual items open the template's panel (so user can edit the series)
+      // Real items route through PANEL_OPENED as normal
       row.addEventListener('click', () => {
-        // All entity types now route through PANEL_OPENED → openEditForm (form-first UX)
-        emit(EVENTS.PANEL_OPENED, {
-          entityType: item.entityType,
-          entityId:   item.entity.id,
-        });
+        if (item.entity._virtual) {
+          // Open the recurring template so user can edit series settings
+          emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: item.entity.templateId });
+        } else {
+          emit(EVENTS.PANEL_OPENED, {
+            entityType: item.entityType,
+            entityId:   item.entity.id,
+          });
+        }
       });
 
       itemList.appendChild(row);

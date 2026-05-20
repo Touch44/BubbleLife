@@ -847,11 +847,12 @@ async function renderDashboard() {
 async function _loadAndPopulate(el) {
   try {
     const [
-      tasks, events, appointments, budgetEntries,
+      tasks, taskInstances, events, appointments, budgetEntries,
       posts, recipes, documents, persons,
       shoppingItems, projects, dateEntities, notes,
     ] = await Promise.all([
       getEntitiesByType('task'),
+      getEntitiesByType('taskInstance'),  // [v5.4.5] include recurring occurrences
       getEntitiesByType('event'),
       getEntitiesByType('appointment'),
       getEntitiesByType('budgetEntry'),
@@ -876,6 +877,7 @@ async function _loadAndPopulate(el) {
 
     const data = {
       tasks:         _f(tasks),
+      taskInstances: _f(taskInstances),
       events:        _f(events),
       appointments:  _f(appointments),
       budgetEntries: _f(budgetEntries),
@@ -890,7 +892,7 @@ async function _loadAndPopulate(el) {
     };
 
     // Populate cards
-    _populateTaskCard(el, data.tasks);
+    _populateTaskCard(el, data.tasks, data.taskInstances);
     _populateCalendarCard(el, data.events, data.appointments);
     _populateBudgetCard(el, data.budgetEntries);
     await _populateMessagesCard(el);
@@ -899,7 +901,7 @@ async function _loadAndPopulate(el) {
     _populateDocumentsCard(el, data.documents);
 
     // Populate banner (after data loaded)
-    _populateBanner(el, data.tasks, data.documents, data.posts);
+    _populateBanner(el, data.tasks, data.taskInstances, data.documents, data.posts);
 
     // Populate widgets
     _populateMembersWidget(el, data.persons);
@@ -915,21 +917,32 @@ async function _loadAndPopulate(el) {
 
 // ── Card populators ───────────────────────────────────────────────────────────
 
-function _populateTaskCard(el, tasks) {
+function _populateTaskCard(el, tasks, taskInstances = []) {
   const card = el.querySelector('[data-dash-card="tasks"]');
   if (!card) return;
 
   const today    = _todayStr();
-  const open     = tasks.filter(t => t.status !== 'Done' && t.status !== 'Completed'); // SYS-07
+  const open     = tasks.filter(t => !t.isRecurring && t.status !== 'Done' && t.status !== 'Completed'); // SYS-07: exclude recurring templates
   const _safeDate = (d) => { if (!d) return null; const s = String(d); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0,10) : null; };
-  const dueToday = open.filter(t => _safeDate(t.dueDate) === today); // SYS-09
-  const overdue  = open.filter(t => _safeDate(t.dueDate) && _safeDate(t.dueDate) < today);
+
+  // [v5.4.5] Include active recurring instances in due/overdue counts
+  const activeInsts = taskInstances.filter(i =>
+    i.status !== 'Completed' && i.status !== 'Skipped' && !i.deleted
+  );
+  // Merge: use executionDate (= periodStart) for instances, dueDate for regular tasks
+  const allOpen = [
+    ...open,
+    ...activeInsts.map(i => ({ ...i, dueDate: i.executionDate || i.periodStart || i.dueDate })),
+  ];
+
+  const dueToday = allOpen.filter(t => _safeDate(t.dueDate) === today);
+  const overdue  = allOpen.filter(t => _safeDate(t.dueDate) && _safeDate(t.dueDate) < today);
 
   const hasAlert = overdue.length > 0;
   const badgeClass = hasAlert ? 'danger' : dueToday.length > 0 ? 'warn' : 'ok';
   const badgeText  = hasAlert ? `${overdue.length} overdue` : dueToday.length > 0 ? `${dueToday.length} due today` : 'All clear';
   const statClass  = hasAlert ? 'danger' : '';
-  const statText   = open.length > 0 ? `${open.length} open` : 'No open tasks';
+  const statText   = allOpen.length > 0 ? `${allOpen.length} open` : 'No open tasks';
 
   let sub = '';
   if (dueToday.length > 0) sub += `${dueToday.length} due today. `;
@@ -1346,7 +1359,7 @@ function _populateNotesWidget(el, notes) {
 
 // ── Banner populator ──────────────────────────────────────────────────────────
 
-function _populateBanner(el, tasks, documents, posts) {
+function _populateBanner(el, tasks, taskInstances, documents, posts) {
   const wrap = el.querySelector('#dash-banner-wrap');
   if (!wrap) return;
 
@@ -1357,9 +1370,18 @@ function _populateBanner(el, tasks, documents, posts) {
   }
 
   const today    = _todayStr();
-  const openTasks = tasks.filter(t => t.status !== 'Done' && t.status !== 'Completed'); // SYS-08
+  const openTasks = tasks.filter(t => !t.isRecurring && t.status !== 'Done' && t.status !== 'Completed'); // SYS-08
   const _safeDate2 = (d) => { if (!d) return null; const s = String(d); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0,10) : null; };
-  const overdue  = openTasks.filter(t => _safeDate2(t.dueDate) && _safeDate2(t.dueDate) < today); // SYS-09c
+  // [v5.4.5] Include overdue recurring instances in banner overdue count
+  const overdueInsts = (taskInstances || []).filter(i =>
+    i.status !== 'Completed' && i.status !== 'Skipped' && !i.deleted &&
+    _safeDate2(i.executionDate || i.periodStart) &&
+    _safeDate2(i.executionDate || i.periodStart) < today
+  );
+  const overdue  = [
+    ...openTasks.filter(t => _safeDate2(t.dueDate) && _safeDate2(t.dueDate) < today),
+    ...overdueInsts,
+  ];
 
   const expiringSoon = documents.filter(d => {
     const n = _daysUntil(d.expiryDate);

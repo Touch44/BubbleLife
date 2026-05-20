@@ -488,6 +488,27 @@ async function _syncDailyReviewLinks(dateStr, data) {
       }
     }
 
+    // ── Task instances: link to their periodStart DR + today's DR if overdue ──
+    // [v5.4.3] Instances belong to the day they occur (periodStart), not the template's dueDate.
+    // If an instance is overdue (periodStart < today), also link to today's DR.
+    if (data.taskInstances) {
+      const todayStr = _toDateStr(_todayLocal());
+      const isViewingToday = dateStr === todayStr;
+      for (const inst of data.taskInstances.filter(inst => {
+        if (!inst || inst.deleted) return false;
+        const isDone = inst.status === 'Completed' || inst.status === 'Skipped';
+        if (isDone) return false;
+        const occDate = _isoToLocalDate(inst.periodStart);
+        if (!occDate) return false;
+        const isOccDR    = occDate === dateStr;                    // viewing occurrence day
+        const isOverdueDR = isViewingToday && occDate < todayStr; // overdue → also today
+        return isOccDR || isOverdueDR;
+      })) {
+        await _linkToDailyReview(dr.id, inst.id, 'taskInstance', linkedSet);
+        linkedSet.add(inst.id);
+      }
+    }
+
     // ── Events spanning today (graph edge linking for knowledge graph) ─
     for (const ev of data.events.filter(ev => {
       const start = _isoToLocalDate(ev.date);
@@ -1499,7 +1520,10 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
   function _buildTaskRow(task, isOverdue) {
     // Use execution date for scheduling display; show dueDate as deadline when different
     const execDate  = _getTaskExecDate(task) || '';
-    const due       = _isoToLocalDate(task.dueDate) || '';
+    // [v5.4.5] For instances, the deadline is always periodStart — ignore stale template dueDate
+    const due       = task._isInstance
+      ? (_isoToLocalDate(task.periodStart) || _isoToLocalDate(task.dueDate) || '')
+      : (_isoToLocalDate(task.dueDate) || '');
     const row       = document.createElement('div');
     row.className   = 'daily-task-row' + (isOverdue ? ' overdue' : '');
     row.dataset.id  = task.id;
@@ -2655,7 +2679,7 @@ async function renderDaily(params = {}) {
     // [minor] Bug 13 fix: await sync so _loadDRLinkedNotes() in _renderDailyNotes
     // sees freshly-linked edges. Errors are caught and non-fatal.
     await _syncDailyReviewLinks(dateStr, {
-      tasks, events, notes, posts, appointments, dateEntities, mealPlans, allComments,
+      tasks, events, notes, posts, appointments, dateEntities, mealPlans, allComments, taskInstances,
     }).catch(err => console.warn('[daily] Daily Review sync error (non-fatal):', err));
 
     // Clear and rebuild
