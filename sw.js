@@ -4,13 +4,13 @@
  */
 'use strict';
 
-const APP_VERSION   = '5.3.5'; // [v5.3.5] Form/toggle fixes: recurrence panel select class, labels, layout, mobile
+const APP_VERSION   = '5.3.8'; // [v5.3.6] Comprehensive form/toggle fix: hidden types, select classes, double-emit, completedAt
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
-  './', './index.html', './manifest.json?v=5.3.5', // 3P-L-02: version-bust manifest
+  './', './index.html', './manifest.json?v=5.3.8', // 3P-L-02: version-bust manifest
   './styles/tokens.css?v=5.1.0', './styles/layout.css?v=5.1.0',
   './styles/components.css?v=5.1.0', './styles/dark.css?v=5.1.0',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',

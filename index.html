@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v5.3.5 [minor] Form/toggle: recurrence panel select class, labels, layout, mobile -->
+  <!-- Build: v5.3.8 [minor] Form/toggle: recurrence panel select class, labels, layout, mobile -->
 
   <title>FamilyHub</title>
 
@@ -875,7 +875,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '5.3.5'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '5.3.8'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };

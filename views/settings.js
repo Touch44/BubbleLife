@@ -37,18 +37,22 @@ import { startTour } from '../core/tour.js';
       color: var(--color-accent); border-bottom-color: var(--color-accent);
       background: var(--color-bg);
     }
-    .stab-panel { display: none; padding: var(--space-5) var(--space-4); max-width: 620px; margin: 0 auto; }
+    .stab-panel { display: none; padding: var(--space-5) var(--space-4); }
     .stab-panel.active { display: block; }
+    #view-settings.active > .stab-panel.active,
+    #settings-content > .stab-panel.active { margin: 0; }
+    .stab-panels-wrap { width: 100%; max-width: 680px; box-sizing: border-box; padding: 0 var(--space-4); }
 
     .srow {
-      display: flex; align-items: flex-start; justify-content: space-between;
-      gap: var(--space-4); padding: var(--space-3) 0;
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: start;
+      gap: var(--space-3); padding: var(--space-3) 0;
       border-bottom: 1px solid var(--color-border);
     }
     .srow:last-child { border-bottom: none; }
     .srow-label { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--color-text); }
-    .srow-hint { font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 2px; }
-    .srow-ctrl { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+    .srow-hint { font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 2px; max-width: 380px; }
+    .srow-ctrl { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; justify-content: flex-end; }
   `;
   document.head.appendChild(style);
 })();
@@ -440,7 +444,7 @@ async function renderSettings() {
       <div class="srow">
         <div>
           <div class="srow-label">Version</div>
-          <div class="srow-hint">FamilyHub v5.3.5 — Multi-context family management PWA</div>
+          <div class="srow-hint">FamilyHub v5.3.8 — Multi-context family management PWA</div>
         </div>
       </div>
       <div class="srow">

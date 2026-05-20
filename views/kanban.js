@@ -1634,6 +1634,7 @@ function _showStateDotPopover(dotEl, task) {
         // Fetch fresh entity to avoid saving stale snapshot
         let freshTask;
         try { freshTask = await getEntity(task.id); } catch { freshTask = task; }
+        // [G03 fix] Preserve _noSync on ghost instances — state dot doesn't promote ghost
         await saveEntity({ ...freshTask, kanban_state: state.key }, account?.id);
         // Update dot immediately without full re-render
         dotEl.className = `kanban-state-dot kanban-state-dot--${state.key}`;

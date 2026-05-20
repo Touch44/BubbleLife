@@ -1362,7 +1362,7 @@ function _buildWeekView(container, dateMap, personMap = new Map()) {
 
   // Schedule event block placement + auto-scroll after render
   requestAnimationFrame(() => {
-    _placeWeekEvents(body, weekStart, dateMap);
+    _placeWeekEvents(body, weekStart, dateMap, personMap); // [fix] pass personMap for event colors
 
     // Auto-scroll week body to current hour (or 8 AM if before HOUR_START)
     const now = new Date();
@@ -1384,7 +1384,7 @@ function _buildWeekView(container, dateMap, personMap = new Map()) {
  * Uses absolute positioning within each day column.
  * Handles overlapping events by narrowing and offsetting columns.
  */
-function _placeWeekEvents(bodyEl, weekStart, dateMap) {
+function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
   const slots = bodyEl.querySelectorAll('.cal-week-hour-row');
   if (slots.length === 0) return;
 

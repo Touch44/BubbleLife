@@ -547,8 +547,26 @@ export async function openPanel(entityId, entityTypeHint) {
 
   try {
     const entity = await getEntity(entityId);
-    if (!entity) {
+    if (!entity || entity.deleted) {
       console.warn(`[entity-panel] Entity "${entityId}" not found.`);
+      // Show friendly message in panel instead of silent failure
+      _panelBody.innerHTML = '';
+      const msg = document.createElement('div');
+      msg.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:var(--space-4);padding:var(--space-8);text-align:center;';
+      msg.innerHTML = `
+        <div style="font-size:2.5rem;">🔍</div>
+        <div style="font-weight:var(--weight-semibold);font-size:var(--text-base);color:var(--color-text);">Item not found</div>
+        <div style="font-size:var(--text-sm);color:var(--color-text-muted);max-width:260px;line-height:1.5;">
+          This item may have been deleted or moved. It no longer exists in your data.
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="this.closest('.entity-panel,.side-panel,[class*=panel]')?.dispatchEvent(new CustomEvent('close'))">Close</button>
+      `;
+      _panelBody.appendChild(msg);
+      // Show panel so user sees the message
+      if (_panel && !_panel.classList.contains('open')) {
+        _panel.classList.add('open');
+        document.body.classList.add('panel-open');
+      }
       return;
     }
 
@@ -3382,7 +3400,7 @@ async function _renderRelationsTab(container) {
           pickerLabel.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);white-space:nowrap;';
           pickerLabel.textContent = 'Create as:';
           const typeSelect = document.createElement('select');
-          typeSelect.className = 'input';
+          typeSelect.className = 'select'; // [G10b fix] was 'input' — needs dropdown arrow
           typeSelect.style.cssText = 'font-size:var(--text-xs);padding:3px 6px;flex:1;min-width:100px;';
           const creatableTypes = getAllEntityTypes().filter(t => !t.archived);
           for (const tp of creatableTypes) {
@@ -3761,6 +3779,8 @@ function _escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+/** Alias required by _renderSeriesTab and other inline template callers */
+const _esc = _escHtml;
 
 // ════════════════════════════════════════════════════════════
 // ACTIVITY TAB
