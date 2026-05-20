@@ -4,15 +4,15 @@
  */
 'use strict';
 
-const APP_VERSION   = '5.5.0'; // [v5.5.0] Week instance fix; Agenda time details; virtual forecast occurrences; checklist order
+const APP_VERSION   = '5.5.1'; // [v5.5.1] Migration: fix stale taskInstance dueDate for existing instances
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
-  './', './index.html', './manifest.json?v=5.5.0', // 3P-L-02: version-bust manifest
-  './styles/tokens.css?v=5.5.0', './styles/layout.css?v=5.5.0',
-  './styles/components.css?v=5.5.0', './styles/dark.css?v=5.5.0',
+  './', './index.html', './manifest.json?v=5.5.1', // 3P-L-02: version-bust manifest
+  './styles/tokens.css?v=5.5.1', './styles/layout.css?v=5.5.1',
+  './styles/components.css?v=5.5.1', './styles/dark.css?v=5.5.1',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',

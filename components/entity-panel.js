@@ -362,6 +362,9 @@ export function initEntityPanel() {
 
   // ── One-time migration: clean up stale daily-review edges and fix DR titles ──
   _migrateDailyReviewEdges();
+
+  // ── One-time migration: fix stale dueDate on taskInstances (pre-v5.4.3) ──
+  _migrateInstanceDueDates();
 }
 
 /**
@@ -485,6 +488,42 @@ async function _migrateDailyReviewEdges() {
 
   } catch (err) {
     console.warn('[entity-panel] [migration] _migrateDailyReviewEdges failed (non-fatal):', err);
+  }
+}
+
+/**
+ * [v5.5.1] One-time migration: fix stale dueDate on taskInstances created before v5.4.3.
+ * Pre-v5.4.3, instances inherited dueDate from the template (e.g. "May 11") instead of
+ * being set to their own periodStart. This caused wrong "DUE Yesterday" chips in kanban/daily.
+ * Fix: set dueDate = periodStart for any instance where they differ.
+ */
+async function _migrateInstanceDueDates() {
+  const migKey = 'migration_instance_duedate_v1_done';
+  try {
+    const already = await getSetting(migKey).catch(() => null);
+    if (already) return;
+
+    const instances = await getEntitiesByType('taskInstance').catch(() => []);
+    let fixed = 0;
+    const acct = getAccount();
+    for (const inst of instances) {
+      if (!inst || inst.deleted) continue;
+      const ps = inst.periodStart?.slice(0, 10);
+      if (!ps) continue;
+      if (inst.dueDate?.slice(0, 10) !== ps) {
+        try {
+          await saveEntity({ ...inst, dueDate: ps }, acct?.id);
+          fixed++;
+        } catch { /* best-effort, skip this one */ }
+      }
+    }
+
+    await setSetting(migKey, true).catch(() => {});
+    if (fixed > 0) {
+      console.info(`[entity-panel] [migration] Fixed dueDate on ${fixed} taskInstance(s).`);
+    }
+  } catch (err) {
+    console.warn('[entity-panel] [migration] _migrateInstanceDueDates failed (non-fatal):', err);
   }
 }
 
