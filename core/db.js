@@ -348,8 +348,10 @@ export async function saveEntity(entity, byAccountId) {
 
     const now   = new Date().toISOString();
     const isNew = !entity.id;
+    // [N07 fix] Strip transient runtime-only flags before IDB storage
+    const { _streakUpdate: _su, ...entityClean } = entity;
     const saved = {
-      ...entity,
+      ...entityClean,
       id:        entity.id || uid(),
       createdAt: entity.createdAt || now,
       updatedAt: now,
@@ -381,9 +383,10 @@ export async function saveEntity(entity, byAccountId) {
                                     'deleted', 'dirtyAt', '_authorName', '_authorPersonId',
                                     'timeTracked',              // timer updates handled by timer widget
                                     'lastFiredAt', 'fireCount', // rule stats — high-frequency, internal
-                                    'reminderTitle']);           // reminderLog denormalized field
+                                    'reminderTitle',            // reminderLog denormalized field
+                                    '_streakUpdate']);          // [N07] transient flag, never stored
       // Skip audit for internal system types (rule stats, reminder logs flood history)
-      const SKIP_AUDIT_TYPES = new Set(['rule', 'reminderLog', 'activityLog']);
+      const SKIP_AUDIT_TYPES = new Set(['rule', 'reminderLog', 'activityLog', 'taskInstance']); // [N08] ghost scheduler saves must not flood auditLog
       let wroteAny = false;
       if (!SKIP_AUDIT_TYPES.has(saved.type)) {
       for (const key of Object.keys(saved)) {
@@ -414,7 +417,7 @@ export async function saveEntity(entity, byAccountId) {
 
     // Include prevStatus so auto-rules engine can detect real status changes
     const prevStatus = (!isNew && oldEntity) ? (oldEntity.status || null) : null;
-    await _emit('entity:saved', { entity: saved, isNew, prevStatus });
+    await _emit('entity:saved', { entity: saved, isNew, prevStatus, _streakUpdate: !!entity._streakUpdate });
     // P-14: notify other tabs via sync service
     window._fhEnv?.services?.sync?.broadcast(saved.type || 'entity', saved.id, isNew ? 'create' : 'update');
     return saved;
@@ -478,6 +481,60 @@ export async function deleteEntity(id, byAccountId) {
 
   } catch (err) {
     console.error('[db] deleteEntity failed:', err);
+    throw err;
+  }
+}
+
+/**
+ * Hard-delete a taskInstance (or any entity) — permanently removes entity,
+ * all connected edges, and cleans both dirty queues in a single IDB transaction.
+ * Used by the recurrence scheduler to prune ghost instances without leaving
+ * orphaned dirty-queue entries.
+ * [v5.3.1]
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+export async function hardDeleteEntity(id) {
+  try {
+    const db = await _getDB();
+    const entity = await db.get(STORES.ENTITIES, id);
+    if (!entity) return;
+
+    // Read edges BEFORE opening the transaction (invariant: no db.get inside open tx)
+    const [fromEdges, toEdges] = await Promise.all([
+      db.getAllFromIndex(STORES.EDGES, 'fromId', id),
+      db.getAllFromIndex(STORES.EDGES, 'toId',   id),
+    ]);
+    const edgeIds = [...new Set([...fromEdges, ...toEdges].map(e => e.id))];
+
+    // Single transaction: entity + edges + queue cleanup
+    const tx = db.transaction([STORES.ENTITIES, STORES.EDGES, STORES.SETTINGS], 'readwrite');
+
+    await tx.objectStore(STORES.ENTITIES).delete(id);
+    await Promise.all(edgeIds.map(eid => tx.objectStore(STORES.EDGES).delete(eid)));
+
+    // Remove entity from dirtyEntities queue
+    const entQ = await tx.objectStore(STORES.SETTINGS).get('dirtyEntities');
+    if (entQ) {
+      await tx.objectStore(STORES.SETTINGS).put({
+        key: 'dirtyEntities', value: (entQ.value || []).filter(x => x !== id),
+      });
+    }
+
+    // Remove edges from dirtyEdges queue
+    if (edgeIds.length > 0) {
+      const edgeQ = await tx.objectStore(STORES.SETTINGS).get('dirtyEdges');
+      if (edgeQ) {
+        await tx.objectStore(STORES.SETTINGS).put({
+          key: 'dirtyEdges', value: (edgeQ.value || []).filter(x => !edgeIds.includes(x)),
+        });
+      }
+    }
+
+    await tx.done;
+    await _emit('entity:deleted', { entity, id });
+  } catch (err) {
+    console.error('[db] hardDeleteEntity failed:', err);
     throw err;
   }
 }
@@ -1015,6 +1072,7 @@ export const dataServiceDescriptor = {
       queryEntities,
       saveEntity,
       deleteEntity,
+      hardDeleteEntity,
       getEdge,
       getEdgesFrom,
       getEdgesTo,

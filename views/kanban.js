@@ -16,7 +16,7 @@
  */
 
 import { registerView }                         from '../core/router.js';
-import { getEntitiesByType, getEdgesFrom,
+import { getEntitiesByType, getEdgesFrom, getEdgesTo,
          getEntity, saveEntity, getSetting, setSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }                      from '../core/events.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
@@ -109,6 +109,19 @@ let _taskAssigneeMap = new Map(); // taskId → personId  (from 'assignedTo' rel
 let _taskReminderMap = new Map();
 // [BUG-31 FIX] Dirty flag: only rebuild reminder map when a REMINDER_* event fires
 let _reminderMapDirty = true;
+// [v5.3.1] Recurring task instance state
+let _instances    = [];         // taskInstance entities
+let _instTemplMap = new Map();  // instanceId → template task entity
+
+// [v5.3.1] Lazy rrule-lite loader — avoids hard import at module level
+let _rruleHuman = null;
+async function _getRruleHuman() {
+  if (!_rruleHuman) {
+    const m = await import('../services/rrule-lite.js');
+    _rruleHuman = m.rruleToHuman;
+  }
+  return _rruleHuman;
+}
 
 // Filter state
 let _filterProject        = null;   // project ID or null
@@ -128,7 +141,6 @@ const _TAB_CANONICAL_VIEW = {
   inbox:      'list',    // spec: grouped by creation date
   today:      'kanban',  // [MAJOR] spec: default to kanban for Today tab
   scheduled:  'list',    // spec: grouped by execution date
-  byDeadline: 'list',    // spec: grouped by due/deadline date
   context:    'list',    // spec: grouped by context
   open:       'list',    // spec: ordered by priority and status (single group)
   completed:  'list',    // spec: ordered by completion date
@@ -149,7 +161,6 @@ const _FILTER_TABS = [
   { key: 'inbox',      label: 'Inbox',       icon: '\uD83D\uDCEC' },
   { key: 'today',      label: 'Today',        icon: '\u2600\uFE0F' },
   { key: 'scheduled',  label: 'Scheduled',    icon: '\uD83D\uDCC5' },
-  { key: 'byDeadline', label: 'By Deadline',  icon: '\u23F0' },
   { key: 'context',    label: 'Context',      icon: '\uD83C\uDFF7\uFE0F' },
   { key: 'open',       label: 'Open',         icon: '\u25CB' },
   { key: 'completed',  label: 'Completed',    icon: '\u2705' },
@@ -161,7 +172,6 @@ let _defaultViewPerTab = {
   inbox:      'list',
   today:      'kanban',
   scheduled:  'list',
-  byDeadline: 'list',
   context:    'list',
   open:       'list',
   completed:  'list',
@@ -202,18 +212,28 @@ async function _saveViewPreference(tabKey, viewMode) {
 // ── Data loading ──────────────────────────────────────────── //
 
 async function _loadData() {
-  const [tasks, persons, projects] = await Promise.all([
+  const [tasks, instances, persons, projects] = await Promise.all([
     getEntitiesByType('task'),
+    getEntitiesByType('taskInstance'),  // [v5.3.1]
     getEntitiesByType('person'),
     getEntitiesByType('project'),
   ]);
 
-  _tasks    = filterByContext(tasks.filter(t => !t.deleted));
-  _persons  = persons;
-  _projects = filterByContext(projects.filter(p => !p.deleted));
+  _tasks     = filterByContext(tasks.filter(t => !t.deleted));
+  _instances = filterByContext(instances.filter(i => !i.deleted)); // [v5.3.1]
+  _persons   = persons;
+  _projects  = filterByContext(projects.filter(p => !p.deleted));
 
   _personMap  = new Map(persons.map(p  => [p.id, p]));
   _projectMap = new Map(projects.map(pr => [pr.id, pr]));
+
+  // [v5.3.1] Build instance→template lookup using templateId field (no edge query needed)
+  _instTemplMap.clear();
+  const _taskMapK = new Map(_tasks.map(t => [t.id, t]));
+  for (const inst of _instances) {
+    const tmpl = inst.templateId ? _taskMapK.get(inst.templateId) : null;
+    if (tmpl) _instTemplMap.set(inst.id, tmpl);
+  }
 
   // Build blocker map and edge-resolved relation maps
   await _buildBlockerMap();
@@ -270,6 +290,13 @@ async function _buildReminderMap() {
         _taskReminderMap.set(edge.toId, count);
       }
     });
+    // [v5.3.1] Propagate template reminder count to instances
+    for (const inst of _instances) {
+      const tmpl = _instTemplMap.get(inst.id);
+      if (!tmpl) continue;
+      const cnt = _taskReminderMap.get(tmpl.id) || 0;
+      if (cnt > 0) _taskReminderMap.set(inst.id, cnt);
+    }
   } catch (e) { console.warn('[kanban] _buildReminderMap failed:', e); }
 }
 
@@ -302,11 +329,15 @@ function _applyFilters(tasks) {
     ? _getScheduledBoundaries() : null;
   return tasks.filter(t => {
     if (_filterProject) {
-      const resolvedProj = t.project || _taskProjectMap.get(t.id);
+      // [N03 fix] For instances, fall back to template's project
+      const resolvedProj = t.project || _taskProjectMap.get(t.id)
+        || (t._isInstance ? (t._template?.project || _taskProjectMap.get(t._template?.id)) : null);
       if (resolvedProj !== _filterProject) return false;
     }
     if (_filterAssignees.size > 0) {
-      const resolvedAssignee = t.assignedTo || _taskAssigneeMap.get(t.id);
+      // [N04 fix] For instances, fall back to template's assignedTo
+      const resolvedAssignee = t.assignedTo || _taskAssigneeMap.get(t.id)
+        || (t._isInstance ? (t._template?.assignedTo || _taskAssigneeMap.get(t._template?.id)) : null);
       if (!_filterAssignees.has(resolvedAssignee)) return false;
     }
     if (_filterTags.size > 0) {
@@ -320,17 +351,13 @@ function _applyFilters(tasks) {
     if (_filterPriority && t.priority !== _filterPriority) return false;
     if (_filterOverdue) {
       const today = _todayStr();
-      // byDeadline tab: overdue means past the deadline (dueDate)
-      // all other tabs: overdue means past the execution/scheduled date
-      const overdueDate = _filterTab === 'byDeadline'
-        ? _isoToLocalDate(t.dueDate)
-        : _getExecDate(t);
+      // Overdue means past the execution/scheduled date
+      const overdueDate = _getExecDate(t);
       if (!overdueDate || overdueDate > today) return false;
     }
     // Scheduled tab time-context filter (boundaries cached outside loop by closure)
-    if (_filterScheduledRange && (_filterTab === 'scheduled' || _filterTab === 'byDeadline')) {
-      // byDeadline uses dueDate; scheduled uses executionDate
-      const dateStr = _filterTab === 'byDeadline' ? _isoToLocalDate(t.dueDate) : _getExecDate(t);
+    if (_filterScheduledRange && _filterTab === 'scheduled') {
+      const dateStr = _getExecDate(t);
       if (!dateStr) return false;
       const bucket = _classifyScheduledDate(dateStr, _scheduledFilterBoundaries);
       if (bucket !== _filterScheduledRange) return false;
@@ -384,8 +411,13 @@ function _isoToLocalDate(isoStr) {
 
 function _collectAllTags() {
   const tags = new Set();
+  // Collect from regular tasks AND recurring templates (instances inherit template tags)
   for (const t of _tasks) {
     if (Array.isArray(t.tags)) t.tags.forEach(tg => tags.add(tg));
+  }
+  // [P08 fix] Also collect from instance templates via _instTemplMap
+  for (const tmpl of _instTemplMap.values()) {
+    if (Array.isArray(tmpl.tags)) tmpl.tags.forEach(tg => tags.add(tg));
   }
   return [...tags].sort();
 }
@@ -397,6 +429,12 @@ function _collectAssignees() {
     if (t.assignedTo) ids.add(t.assignedTo);
     const edgeAssignee = _taskAssigneeMap.get(t.id);
     if (edgeAssignee) ids.add(edgeAssignee);
+  }
+  // [P09 fix] Also collect assignees from instance templates
+  for (const tmpl of _instTemplMap.values()) {
+    if (tmpl.assignedTo) ids.add(tmpl.assignedTo);
+    const edgeTmplAssignee = _taskAssigneeMap.get(tmpl.id);
+    if (edgeTmplAssignee) ids.add(edgeTmplAssignee);
   }
   return [...ids].map(id => _personMap.get(id)).filter(Boolean);
 }
@@ -455,18 +493,16 @@ function _applyFilterTab(tasks) {
       // All tasks with an execution date, excluding Done
       return tasks.filter(t => !!_getExecDate(t) && t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
 
-    case 'byDeadline':
-      // All tasks with a due/deadline date, excluding Done — grouped by dueDate
-      return tasks.filter(t => !!_isoToLocalDate(t.dueDate) && t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
 
     case 'open':
       // All undone tasks
       return tasks.filter(t => t.status !== 'Completed' && t.status !== 'Done' && t.status !== 'done');
 
     case 'completed':
-      // Tasks marked Done, most recently completed first
+      // Tasks marked Done or Skipped, most recently actioned first
+      // [P18 fix] Include Skipped instances alongside Completed ones
       return tasks
-        .filter(t => t.status === 'Completed' || t.status === 'Done' || t.status === 'done')
+        .filter(t => t.status === 'Completed' || t.status === 'Done' || t.status === 'done' || t.status === 'Skipped')
         .sort((a, b) => (b.completedAt || b.updatedAt || '').localeCompare(a.completedAt || a.updatedAt || ''));
 
     case 'status':
@@ -642,40 +678,6 @@ function _groupByScheduledDate(tasks) {
   return result;
 }
 
-/** Group tasks for By Deadline tab: time-context buckets using DUE DATE (the deadline) */
-function _groupByDeadlineDate(tasks) {
-  const boundaries = _getScheduledBoundaries();
-
-  const buckets = new Map();
-  for (const b of SCHEDULED_BUCKETS) buckets.set(b.key, []);
-
-  for (const t of tasks) {
-    const dateStr = _isoToLocalDate(t.dueDate); // always use dueDate for deadline
-    if (!dateStr) continue;
-    const bucket = _classifyScheduledDate(dateStr, boundaries);
-    buckets.get(bucket).push(t);
-  }
-
-  for (const [key, group] of buckets) {
-    if (key === 'overdue') {
-      group.sort((a, b) => (_isoToLocalDate(a.dueDate) || '').localeCompare(_isoToLocalDate(b.dueDate) || ''));
-    } else {
-      group.sort((a, b) => {
-        const da = _isoToLocalDate(a.dueDate) || '9999-99-99';
-        const db = _isoToLocalDate(b.dueDate) || '9999-99-99';
-        if (da !== db) return da.localeCompare(db);
-        return _priorityStatusDeadlineSort(a, b);
-      });
-    }
-  }
-
-  const result = new Map();
-  for (const b of SCHEDULED_BUCKETS) {
-    const group = buckets.get(b.key);
-    if (group.length > 0) result.set(b.label, group);
-  }
-  return result;
-}
 
 
 /** Group for Today tab: by status, ordered by priority within each group */
@@ -747,9 +749,9 @@ function _scheduledPillStyle(isActive, color) {
   return base + color + ';background:transparent;color:' + color + ';';
 }
 
-/** Re-render the scheduled/byDeadline view — triggers full renderKanban for reliable state sync */
+/** Re-render the scheduled view — triggers full renderKanban for reliable state sync */
 function _reRenderScheduled() {
-  if (_filterTab !== 'scheduled' && _filterTab !== 'byDeadline') return;
+  if (_filterTab !== 'scheduled') return;
   renderKanban({ _internal: true });
 }
 
@@ -757,8 +759,8 @@ function _buildFilterBar(container) {
   const bar = document.createElement('div');
   bar.className = 'kanban-filter-bar';
 
-  // ── Scheduled/byDeadline tab: time-context bucket filters ──────────────
-  if (_filterTab === 'scheduled' || _filterTab === 'byDeadline') {
+  // ── Scheduled tab: time-context bucket filters ──────────────
+  if (_filterTab === 'scheduled') {
     const timeRow = document.createElement('div');
     timeRow.className = 'kanban-scheduled-time-row';
     timeRow.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);flex-wrap:nowrap;width:100%;padding-bottom:var(--space-2);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-2);overflow-x:auto;scrollbar-width:thin;';
@@ -784,11 +786,16 @@ function _buildFilterBar(container) {
     const bucketCounts = new Map();
     const savedRange = _filterScheduledRange;
     _filterScheduledRange = null;
-    const allForCounts = _applyFilters(_applyFilterTab(_tasks));
+    // [P17 fix] Include instances in scheduled count badges
+    const _normInstSched = _instances
+      .filter(i => i.status !== 'Completed' && i.status !== 'Skipped')
+      .map(_normalizeInstance).filter(Boolean);
+    const _mergedForCount = [..._tasks.filter(t => !t.isRecurring), ..._normInstSched];
+    const allForCounts = _applyFilters(_applyFilterTab(_mergedForCount));
     _filterScheduledRange = savedRange;
     for (const t of allForCounts) {
-      // byDeadline uses dueDate; scheduled uses executionDate (falls back to dueDate)
-      const ds = _filterTab === 'byDeadline' ? _isoToLocalDate(t.dueDate) : _getExecDate(t);
+      // Scheduled uses executionDate (falls back to dueDate)
+      const ds = _getExecDate(t);
       if (!ds) continue;
       const bk = _classifyScheduledDate(ds, boundaries);
       bucketCounts.set(bk, (bucketCounts.get(bk) || 0) + 1);
@@ -1119,6 +1126,23 @@ function _buildFilterBar(container) {
 
 let _boardEl = null;
 
+/**
+ * [v5.3.1] Normalize a taskInstance into a card-compatible object
+ * by merging template properties (priority, tags) onto the instance.
+ * Returns null if no template found (instance orphaned).
+ */
+function _normalizeInstance(inst) {
+  const tmpl = _instTemplMap.get(inst.id);
+  if (!tmpl) return null;
+  return {
+    ...inst,
+    _isInstance: true,
+    _template:   tmpl,
+    priority:    tmpl.priority || 'Medium',
+    tags:        tmpl.tags     || [],
+  };
+}
+
 function _buildBoard(container) {
   _boardEl = document.createElement('div');
   _boardEl.className = 'kanban-board';
@@ -1131,8 +1155,24 @@ function _rerenderColumns() {
   _cleanupTimerListeners(); // KB-9 fix: unsubscribe all card timer listeners before clearing DOM
   _boardEl.innerHTML = '';
 
+  // [v5.3.2] Build merged task list:
+  // - Non-recurring tasks appear in all tabs/columns as normal
+  // - Active instances (not completed/skipped) appear in status columns
+  // - Recurring templates are EXCLUDED from board columns (B5 fix):
+  //   showing both template + instances causes duplication.
+  //   Templates are visible via All tab in list-view only.
+  const normInst = _instances
+    .filter(i => i.status !== 'Completed' && i.status !== 'Skipped')
+    .map(_normalizeInstance)
+    .filter(Boolean);
+  const mergedTasks = [
+    ..._tasks.filter(t => !t.isRecurring),  // regular non-recurring tasks
+    ...normInst,                              // active occurrences in status columns
+    // recurring templates intentionally excluded from kanban columns
+  ];
+
   // Apply filter tab even in kanban mode (e.g. 'completed' → only Done column tasks)
-  const _tabFiltered = _applyFilterTab(_tasks);
+  const _tabFiltered = _applyFilterTab(mergedTasks);
   const filtered = _applyFilters(_tabFiltered);
 
   // Show a friendly empty state banner when filters yield no results
@@ -1302,7 +1342,8 @@ function _buildCard(task) {
     : '';
 
   // Checklist progress — K-02: visual progress bar + count
-  const cl = Array.isArray(task.checklist) ? task.checklist : [];
+  // [B29 fix] Recurring templates show a blueprint checklist — suppress progress bar on templates
+  const cl = (Array.isArray(task.checklist) && !task.isRecurring) ? task.checklist : [];
   const clDone = cl.filter(i => i.done).length;
   const clPct  = cl.length ? Math.round((clDone / cl.length) * 100) : 0;
   const clComplete = cl.length > 0 && clDone === cl.length;
@@ -1360,6 +1401,71 @@ function _buildCard(task) {
     });
   }
 
+  // ── [v5.3.1] Instance card overrides ──────────────────── //
+  if (task._isInstance) {
+    // Visual: purple left border marks instance cards
+    card.style.borderLeft = '3px solid var(--color-accent2,#7C3AED)';
+    // Subtitle: "#N · Weekly" etc.
+    _getRruleHuman().then(rth => {
+      const human  = rth ? rth(task._template?.rrule) : 'Recurring';
+      const sub    = document.createElement('div');
+      sub.style.cssText = [
+        'font-size:0.65rem',
+        'color:var(--color-accent2,#7C3AED)',
+        'margin:-4px 0 4px 22px',
+        'white-space:nowrap',
+        'overflow:hidden',
+        'text-overflow:ellipsis',
+      ].join(';');
+      sub.textContent = `↺ #${task.occurrenceIndex || '?'} · ${human}`;
+      card.querySelector('.kanban-card-top')?.insertAdjacentElement('afterend', sub);
+    }).catch(() => {});
+    // Override checkbox: completeInstance instead of saveEntity
+    const cbInst  = card.querySelector('.kanban-card-checkbox');
+    if (cbInst) {
+      const fresh = cbInst.cloneNode(true);
+      cbInst.replaceWith(fresh);
+      fresh.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        if (!fresh.checked) return;
+        fresh.disabled = true;
+        card.style.opacity = '0.4';
+        try {
+          const { completeInstance } = await import('../services/recurrence.js');
+          await completeInstance(task.id);
+          window._fhEnv?.services?.effects?.play('confetti');
+        } catch (err) {
+          console.error('[kanban] completeInstance:', err);
+          fresh.checked  = false;
+          fresh.disabled = false;
+          card.style.opacity = '1';
+        }
+      });
+    }
+  }
+
+  // ── [v5.3.1] Recurring template: disable checkbox, add 🔁 prefix + pending count ──
+  if (task.isRecurring && !task._isInstance) {
+    const cbTmpl = card.querySelector('.kanban-card-checkbox');
+    if (cbTmpl) {
+      cbTmpl.disabled = true;
+      cbTmpl.title    = 'Complete today\'s occurrence instead';
+    }
+    const tSpan = card.querySelector('.kanban-card-title');
+    if (tSpan) tSpan.textContent = '🔁 ' + tSpan.textContent;
+    // [N39 fix] Show count of pending instances so user knows activity level
+    const pendingCount = _instances.filter(i =>
+      i.templateId === task.id && i.status === 'Not Started'
+    ).length;
+    if (pendingCount > 0) {
+      const badge = document.createElement('span');
+      badge.style.cssText = 'font-size:0.6rem;padding:1px 5px;border-radius:99px;background:var(--color-accent2,#7C3AED);color:#fff;font-weight:600;margin-left:4px;vertical-align:middle;';
+      badge.title = `${pendingCount} pending occurrence${pendingCount !== 1 ? 's' : ''}`;
+      badge.textContent = pendingCount;
+      tSpan?.parentElement?.appendChild(badge);
+    }
+  }
+
   // ── Click: title → edit form  |  rest of card → panel ──
   // (Checkbox is handled separately below and stops propagation)
   const titleSpan = card.querySelector('.kanban-card-title');
@@ -1370,16 +1476,18 @@ function _buildCard(task) {
     titleSpan.addEventListener('click', (e) => {
       e.stopPropagation(); // prevent card click from also firing
       // Route through PANEL_OPENED → openPanel fetches fresh entity → openEditForm (form-first UX)
-      emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id });
+      // [B7 fix] use real entity type so panel config resolves correctly
+      emit(EVENTS.PANEL_OPENED, { entityType: task._isInstance ? 'taskInstance' : 'task', entityId: task.id });
     });
   }
   card.addEventListener('click', (e) => {
     if (e.target.closest('.kanban-card-check-label')) return;
     if (e.target.closest('.kanban-card-title')) return; // title has its own handler
-    emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id });
+    emit(EVENTS.PANEL_OPENED, { entityType: task._isInstance ? 'taskInstance' : 'task', entityId: task.id }); // [B7 fix]
   });
 
-  // ── Checkbox: toggle complete ──
+  // ── Checkbox: toggle complete ──  [B1 fix: skip for instances — they use completeInstance handler above]
+  if (!task._isInstance) {
   const cb = card.querySelector('.kanban-card-checkbox');
   cb.addEventListener('change', async (e) => {
     e.stopPropagation();
@@ -1419,10 +1527,13 @@ function _buildCard(task) {
       card.style.opacity = '1';
     }
   });
+  } // end !task._isInstance guard
 
   // ── Drag start ──
   card.addEventListener('dragstart', (e) => {
     if (!task.id) { e.preventDefault(); return; } // Bug-70: guard missing id
+    // [B4 fix] Instances must not be dragged to columns — use checkbox to complete
+    if (task._isInstance) { e.preventDefault(); return; }
     _dragTaskId = task.id;
     _dragEl     = card;
     card.classList.add('kanban-card-dragging');
@@ -1758,6 +1869,8 @@ function _clearDropIndicators() {
 // ── Drag and drop: touch ──────────────────────────────────── //
 
 function _wireTouchDrag(card, task) {
+  // [N56 fix] Instances must not be drag-moved — they complete via checkbox only
+  if (task._isInstance) return;
   let touchStartX = 0, touchStartY = 0;
   let isDragging = false;
 
@@ -1843,6 +1956,8 @@ async function _moveTask(taskId, newStatus) {
     task = _tasks.find(t => t.id === taskId);
   }
   if (!task || task.status === newStatus) return;
+  // [B4 fix] Never drag-move taskInstances — they complete via completeInstance
+  if (task.type === 'taskInstance') return;
 
   const account = getAccount();
   try {
@@ -2439,14 +2554,31 @@ async function renderKanban(params = {}) {
     viewEl.appendChild(tabBar);
 
     // \u2500\u2500 Controls row: count + view mode dropdown \u2500\u2500\u2500\u2500
-    const filtered = _applyFilters(_applyFilterTab(_tasks));  // [minor] Fixed: tab first, then bar filters (matches board order)
+    // [B6 fix] Build merged list for count badge + alt-views (list/table/wall)
+    // so instances appear in counts and non-kanban views, not just in the board columns.
+    // [B25 fix] Include completed/skipped instances for the 'completed' tab
+    const _altNormInst = _instances
+      .filter(i => i.status !== 'Completed' && i.status !== 'Skipped')
+      .map(_normalizeInstance).filter(Boolean);
+    const _altNormInstCompleted = _instances
+      .filter(i => i.status === 'Completed' || i.status === 'Skipped')
+      .map(_normalizeInstance).filter(Boolean);
+    // [N05 fix] Recurring templates visible in 'all' tab; excluded from other tabs to avoid duplication
+    const _recurringTemplates = _filterTab === 'all' ? _tasks.filter(t => t.isRecurring) : [];
+    const _altMerged = [
+      ..._tasks.filter(t => !t.isRecurring),
+      ..._altNormInst,
+      ...(_filterTab === 'completed' ? _altNormInstCompleted : []),
+      ..._recurringTemplates,
+    ];
+    const filtered = _applyFilters(_applyFilterTab(_altMerged));
     const controls = document.createElement('div');
     controls.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;gap:var(--space-3);padding:var(--space-2) var(--space-5);';
 
     const countEl = document.createElement('span');
     countEl.style.cssText = 'font-size:var(--text-sm);color:var(--color-text-muted);font-weight:var(--weight-semibold);';
     countEl.className = 'kanban-task-count'; // tagged for _reRenderScheduled fast-path
-    countEl.textContent = filtered.length + ' ' + (filtered.length === 1 ? 'task' : 'tasks');
+    countEl.textContent = filtered.length + ' ' + (filtered.length === 1 ? 'item' : 'items'); // [P19] instances + tasks
     controls.appendChild(countEl);
 
     // View mode dropdown
@@ -2536,9 +2668,6 @@ function _renderAltView(container, tasks) {
     case 'scheduled':
       grouped = _groupByScheduledDate(tasks);
       break;
-    case 'byDeadline':
-      grouped = _groupByDeadlineDate(tasks);
-      break;
     case 'open': {
       const openSorted = [...tasks].sort(_priorityStatusDeadlineSort);
       grouped = new Map([['Open Tasks', openSorted]]);
@@ -2562,7 +2691,6 @@ function _renderAltView(container, tasks) {
     inbox:      '📥 Inbox — tasks with no execution/due date. Grouped by creation date.',
     today:      '☀️ Today — grouped by Execution Date (or Due Date if not set). Shows today + overdue.',
     scheduled:  '📅 Scheduled — grouped by Execution Date (falls back to Due Date). Use this for planning when tasks will be done.',
-    byDeadline: '⏰ By Deadline — grouped by Due Date (the deadline). Use this to see what must be done by when.',
     context:    '🏷️ Context — grouped by context tag. Ordered by execution date (or due date).',
     open:       '○ Open — all incomplete tasks. Ordered by priority → status → execution date.',
     completed:  '✅ Completed — recently completed tasks, newest first.',
@@ -2589,13 +2717,11 @@ function _renderAltView(container, tasks) {
       hintBannerEmpty.textContent = hintTextEmpty;
       body.appendChild(hintBannerEmpty);
     }
-    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'byDeadline' ? '⏰' : _filterTab === 'open' ? '○' : '🎉';
+    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'open' ? '○' : '🎉';
     const emptyMsg  = _filterTab === 'inbox'
       ? 'Your inbox is clear! Tasks with no due date appear here, grouped by creation date.'
       : _filterTab === 'today'
       ? 'Nothing scheduled for today.'
-      : _filterTab === 'byDeadline'
-      ? 'No tasks with deadlines. Set a Due Date on a task to see it here.'
       : _filterTab === 'completed'
       ? 'No completed tasks yet.'
       : 'No tasks here. Switch tabs or clear filters to see tasks.';
@@ -2689,11 +2815,23 @@ function _renderAltView(container, tasks) {
           deadlineChip2 +
           (pName ? '<span style="font-size:var(--text-xs);color:var(--color-accent);background:var(--color-surface-2);padding:1px 8px;border-radius:var(--radius-full);">' + _esc(pName) + '</span>' : '');
         // BUG-14 fix: interactive checkbox in list/embed views
+        // [B11 fix] instances use completeInstance; regular tasks use saveEntity
         const listCb = row.querySelector('input[type=checkbox]');
         if (listCb) {
           listCb.addEventListener('change', async (e) => {
             e.stopPropagation();
             const account = getAccount();
+            if (task._isInstance) {
+              if (!listCb.checked) return;
+              listCb.disabled = true;
+              try {
+                const { completeInstance } = await import('../services/recurrence.js');
+                await completeInstance(task.id);
+                window._fhEnv?.services?.effects?.play('confetti');
+                row.style.opacity = '0.4';
+              } catch (err) { console.error('[kanban] list completeInstance:', err); listCb.checked = false; listCb.disabled = false; }
+              return;
+            }
             const newStatus = listCb.checked ? 'Completed' : (task.previousStatus && task.previousStatus !== 'Completed' && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
             if (listCb.checked) window._fhEnv?.services?.effects?.play('confetti');
             try {
@@ -2702,7 +2840,7 @@ function _renderAltView(container, tasks) {
             } catch (err) { console.error('[kanban] List complete failed:', err); listCb.checked = !listCb.checked; }
           });
         }
-        row.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }); });
+        row.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: task._isInstance ? 'taskInstance' : 'task', entityId: task.id }); }); // [B7]
         // Timer live badge
         const listTimerBadge = document.createElement('span');
         listTimerBadge.style.cssText = 'display:none;font-size:10px;font-weight:var(--weight-semibold);font-variant-numeric:tabular-nums;padding:1px 5px;border-radius:var(--radius-full);background:var(--color-accent);color:#fff;white-space:nowrap;flex-shrink:0;';
@@ -2758,6 +2896,21 @@ function _renderAltView(container, tasks) {
           wallCb.addEventListener('change', async (e) => {
             e.stopPropagation();
             const account = getAccount();
+            // [P02 fix] instances use completeInstance; regular tasks use saveEntity
+            if (task._isInstance) {
+              if (!wallCb.checked) return;
+              wallCb.disabled = true;
+              try {
+                const { completeInstance } = await import('../services/recurrence.js');
+                await completeInstance(task.id);
+                window._fhEnv?.services?.effects?.play('confetti');
+                card.style.opacity = '0.4';
+              } catch (err) {
+                console.error('[kanban] wall completeInstance:', err);
+                wallCb.checked = false; wallCb.disabled = false;
+              }
+              return;
+            }
             const newStatus = wallCb.checked ? 'Completed' : (task.previousStatus && task.previousStatus !== 'Completed' && task.previousStatus !== 'Done' ? task.previousStatus : 'In Progress');
             if (wallCb.checked) window._fhEnv?.services?.effects?.play('confetti');
             try {
@@ -2766,7 +2919,7 @@ function _renderAltView(container, tasks) {
             } catch (err) { console.error('[kanban] Wall complete failed:', err); wallCb.checked = !wallCb.checked; }
           }); // C05: previousStatus fix applied above in wallCb change handler
         }
-        card.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id }); });
+        card.addEventListener('click', (e) => { if (e.target.tagName === 'INPUT') return; emit(EVENTS.PANEL_OPENED, { entityType: task._isInstance ? 'taskInstance' : 'task', entityId: task.id }); }); // [B7]
         grid.appendChild(card);
       }
       body.appendChild(grid);
@@ -2827,7 +2980,7 @@ function _renderAltView(container, tasks) {
               on(TIMER_ALARM, (_d) => { if (_d.taskId === tk.id) _refreshTableTimer(); })
             );
           }
-          tr.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: tk.id }));
+          tr.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityType: tk._isInstance ? 'taskInstance' : 'task', entityId: tk.id })); // [P03 fix]
           tbody.appendChild(tr);
         });
         t.appendChild(tbody);
@@ -2842,9 +2995,39 @@ function _renderAltView(container, tasks) {
 
 // ── Listen for entity saves to refresh board ──────────────── //
 
-on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
-  const KANBAN_REFRESH_TYPES = new Set(['task', 'person', 'project']);
+// [N07 fix] Debounced refresh — completeInstance emits ENTITY_SAVED twice (instance + template).
+// Debounce coalesces them into one re-render.
+let _kanbanRefreshTimer = null;
+let _kanbanRefreshPending = false; // [P14 fix] prevent concurrent _loadData calls
+function _scheduleKanbanRefresh() {
+  clearTimeout(_kanbanRefreshTimer);
+  _kanbanRefreshTimer = setTimeout(async () => {
+    if (_kanbanRefreshPending) return; // already loading, skip
+    const viewActive = document.getElementById('view-kanban')?.classList.contains('active');
+    if (!viewActive) return;
+    _kanbanRefreshPending = true;
+    try {
+      if (_viewMode === 'kanban') {
+        await _loadData();
+        _rerenderColumns();
+      } else {
+        await renderKanban({ _internal: true });
+      }
+    } catch (e) { console.error('[kanban] refresh error:', e); }
+    finally { _kanbanRefreshPending = false; }
+  }, 150); // [P14 fix] 150ms: enough for rapid ENTITY_SAVED + RECURRENCE_MATERIALIZED
+}
+
+on(EVENTS.ENTITY_SAVED, ({ entity, _streakUpdate } = {}) => {
+  const KANBAN_REFRESH_TYPES = new Set(['task', 'person', 'project', 'taskInstance']); // [v5.3.1]
   if (entity && !KANBAN_REFRESH_TYPES.has(entity.type)) return;
+  if (_streakUpdate) return; // [N07 fix] streak-only template update from completeInstance
+  _scheduleKanbanRefresh();
+});
+
+on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
+  const entityType = entity?.type;
+  if (entityType && !['task', 'person', 'project', 'taskInstance'].includes(entityType)) return; // [v5.3.1]
   const viewActive = document.getElementById('view-kanban')?.classList.contains('active');
   if (!viewActive) return;
   if (_viewMode === 'kanban') {
@@ -2854,16 +3037,18 @@ on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
   }
 });
 
-on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
-  const entityType = entity?.type;
-  if (entityType && !['task', 'person', 'project'].includes(entityType)) return;
+// [P07 fix] RECURRENCE_MATERIALIZED: new ghost instances need to appear immediately
+on(EVENTS.RECURRENCE_MATERIALIZED, () => {
   const viewActive = document.getElementById('view-kanban')?.classList.contains('active');
   if (!viewActive) return;
-  if (_viewMode === 'kanban') {
-    _loadData().then(() => _rerenderColumns()).catch(() => {});
-  } else {
-    renderKanban({ _internal: true }).catch(() => {});
-  }
+  _scheduleKanbanRefresh();
+});
+
+// [P16 fix] RECURRENCE_SERIES_STOPPED: remove template instances from board immediately
+on(EVENTS.RECURRENCE_SERIES_STOPPED, () => {
+  const viewActive = document.getElementById('view-kanban')?.classList.contains('active');
+  if (!viewActive) return;
+  _scheduleKanbanRefresh();
 });
 
 // BUG-D fix: close state dot popover and collapse any open dropdowns on navigation

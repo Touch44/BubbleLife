@@ -178,6 +178,17 @@ async function _fireReminder(reminder, now) {
     targetEdges.map(e => getEntity(e.toId).catch(() => null))
   )).filter(Boolean);
 
+  // [v5.3.1] Route recurring task reminders to the active instance (today's occurrence)
+  for (let i = 0; i < targets.length; i++) {
+    if (targets[i]?.type === 'task' && targets[i]?.isRecurring) {
+      try {
+        const { getActiveInstanceForTemplate } = await import('./recurrence.js');
+        const inst = await getActiveInstanceForTemplate(targets[i].id);
+        if (inst) targets[i] = { ...inst, _template: targets[i] };
+      } catch (e) { /* non-fatal: fall through to template */ }
+    }
+  }
+
   // ── Condition evaluation (async, always awaited) ────────
   if (reminder.conditionMode && reminder.conditionMode !== 'none' && reminder.conditionJson) {
     const evalFn = await _getEval();

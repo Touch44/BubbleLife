@@ -1,16 +1,16 @@
 /**
- * FamilyHub v5.3.0 — Service Worker (sw.js)
+ * FamilyHub v5.3.1 — Service Worker (sw.js)
  * [minor] Phase 2: condition UI, quiet hours, timer in form, reminder badges, template library
  */
 'use strict';
 
-const APP_VERSION   = '5.3.0'; // [MAJOR] Phase 3: NLP reminders, auto-rules engine, chained reminders, analytics
+const APP_VERSION   = '5.3.5'; // [v5.3.5] Form/toggle fixes: recurrence panel select class, labels, layout, mobile
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
-  './', './index.html', './manifest.json?v=5.1.0', // 3P-L-02: version-bust manifest
+  './', './index.html', './manifest.json?v=5.3.5', // 3P-L-02: version-bust manifest
   './styles/tokens.css?v=5.1.0', './styles/layout.css?v=5.1.0',
   './styles/components.css?v=5.1.0', './styles/dark.css?v=5.1.0',
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
@@ -38,6 +38,7 @@ const SHELL_FILES = [
   // [v5.0.0] Reminder system files
   './views/reminders.js',
   './services/reminder.js', './services/rrule-lite.js', './services/condition-eval.js',
+  './services/recurrence.js',  // [v5.3.1] Ghost instance scheduler
   './components/alert-card.js', './components/reminder-form.js',
   './icons/icon-192.png', './icons/icon-192-maskable.png',
   './icons/icon-512.png', './icons/icon-512-maskable.png',

@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v5.3.0 [minor] bugfix2: reminder status filter, tab create-mode, openEditForm string ID, orphan delete -->
+  <!-- Build: v5.3.5 [minor] Form/toggle: recurrence panel select class, labels, layout, mobile -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=5.1.0" />
-  <link rel="stylesheet" href="./styles/layout.css?v=5.1.0" />
-  <link rel="stylesheet" href="./styles/components.css?v=5.1.0" />
-  <link rel="stylesheet" href="./styles/dark.css?v=5.1.0" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=5.3.5" />
+  <link rel="stylesheet" href="./styles/layout.css?v=5.3.5" />
+  <link rel="stylesheet" href="./styles/components.css?v=5.3.5" />
+  <link rel="stylesheet" href="./styles/dark.css?v=5.3.5" />
 </head>
 <body>
 
@@ -227,20 +227,10 @@
     <!-- Family name header -->
     <div class="sidebar-family-name" id="sidebar-family-name">FamilyHub</div>
 
-    <!-- CS-02: Context Switcher -->
+    <!-- CS-02: Context Switcher — order driven by contextOrder setting -->
     <div id="context-switcher" style="padding:8px 16px 4px;margin-bottom:4px;">
       <div id="ctx-buttons" style="display:flex;gap:3px;background:rgba(0,0,0,0.04);border-radius:8px;padding:3px;">
-        <button class="ctx-btn" data-ctx="all"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:600;color:rgba(0,0,0,0.35);background:transparent;transition:all .15s;">ALL</button>
-        <button class="ctx-btn" data-ctx="family"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;color:#475569;transition:all .15s;"
-                title="Family">🏠</button>
-        <button class="ctx-btn" data-ctx="personal"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;color:#475569;transition:all .15s;"
-                title="Personal">👤</button>
-        <button class="ctx-btn" data-ctx="business"
-                style="flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:transparent;color:#475569;transition:all .15s;"
-                title="Business">💼</button>
+        <!-- Populated dynamically by boot JS based on contextOrder setting -->
       </div>
       <div id="ctx-label" style="text-align:center;font-size:10px;color:rgba(0,0,0,0.30);margin-top:4px;letter-spacing:0.08em;text-transform:uppercase;">All Contexts</div>
     </div>
@@ -546,13 +536,13 @@
       <!-- Populated by views/settings.js -->
     </div>
 
-    <!-- [v5.3.0] Reminders view -->
+    <!-- [v5.3.1] Reminders view -->
     <div id="view-reminders" class="view" role="region" aria-label="Reminders"
          aria-hidden="true">
       <!-- Populated by views/reminders.js -->
     </div>
 
-    <!-- [v5.3.0] Reminder Analytics view -->
+    <!-- [v5.3.1] Reminder Analytics view -->
     <div id="view-reminder-analytics" class="view" role="region" aria-label="Reminder Analytics"
          aria-hidden="true">
       <!-- Populated by views/reminder-analytics.js -->
@@ -788,14 +778,15 @@
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
   import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
-  // [v5.3.0] Reminder system
+  // [v5.3.1] Reminder system
   import { initReminderService,
            reminderServiceDescriptor }   from './services/reminder.js';
   import { mountAlertDrawer }           from './components/alert-card.js';
   import './views/reminders.js';         // registers 'reminders' view
-  // [v5.3.0] Phase 3 services
+  // [v5.3.1] Phase 3 services
   import { initAutoRulesEngine }        from './services/auto-reminder-rules.js';
-  import './views/reminder-analytics.js'; // [v5.3.0] registers 'reminder-analytics' view
+  import './views/reminder-analytics.js'; // [v5.3.1] registers 'reminder-analytics' view
+  import { initRecurrenceService }      from './services/recurrence.js'; // [v5.3.1]
   import { serviceRegistry }          from './core/registry.js';
   import { showToast, toast }        from './core/toast.js';
   import { mountDebugPanel }          from './core/debug.js';   // P-29
@@ -884,6 +875,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
+      window.FH.version = '5.3.5'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
@@ -990,7 +982,7 @@
       serviceRegistry.add('history',      historyServiceDescriptor);
       // P-11: command (no deps)
       serviceRegistry.add('command',      commandServiceDescriptor);
-      // [v5.3.0] Reminder service (depends on data + notification)
+      // [v5.3.1] Reminder service (depends on data + notification)
       serviceRegistry.add('reminder',     reminderServiceDescriptor);
 
       // P-01: Build the shared environment object (registry + services)
@@ -1025,11 +1017,12 @@
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
-      initReminderService(); // [v5.3.0] reminder scheduler + SW sync
-      mountAlertDrawer();    // [v5.3.0] alert drawer component
-      initAutoRulesEngine(); // [v5.3.0] auto-rules engine — triggers reminders on entity events
+      initReminderService(); // [v5.3.1] reminder scheduler + SW sync
+      initRecurrenceService(); // [v5.3.1] recurring task ghost-instance scheduler
+      mountAlertDrawer();    // [v5.3.1] alert drawer component
+      initAutoRulesEngine(); // [v5.3.1] auto-rules engine — triggers reminders on entity events
 
-      // [v5.3.0] NEW-C-05 fix: Deep-link handler for push notification taps
+      // [v5.3.1] NEW-C-05 fix: Deep-link handler for push notification taps
       // SW notificationclick opens /?open=TYPE:ID when no window is open
       // Must run AFTER navigate(startView) so the app is fully rendered first
       {
@@ -1046,14 +1039,46 @@
         }
       }
 
-      // CS-02: Wire context switcher buttons
+      // CS-02: Wire context switcher — order from contextOrder setting
       {
         const { setActiveContext, getActiveContext } = await import('./core/context.js');
         const { getAccount: _getAcct } = await import('./core/auth.js');
         const { on: _ctxOn } = await import('./core/events.js');
+        const { getSetting } = await import('./core/db.js');
 
         const CTX_LABELS = { all: 'All Contexts', family: 'Family', personal: 'Personal', business: 'Business' };
+        const CTX_ICONS  = { all: 'ALL', family: '🏠', personal: '👤', business: '💼' };
         const CTX_COLORS = { all: '#3B82F6', family: '#0891b2', personal: '#7c3aed', business: '#b45309' };
+        const DEFAULT_ORDER = ['all', 'family', 'personal', 'business'];
+
+        async function _buildSwitcherButtons() {
+          let order = DEFAULT_ORDER;
+          try {
+            const saved = await getSetting('contextOrder');
+            if (Array.isArray(saved) && saved.length === 4) order = saved;
+          } catch {}
+
+          const acct = _getAcct();
+          const isFullAccess = !acct || acct.role === 'admin' || acct.role === 'parent';
+
+          const ctxBtns = document.getElementById('ctx-buttons');
+          if (!ctxBtns) return;
+          ctxBtns.innerHTML = '';
+
+          for (const ctx of order) {
+            if (!isFullAccess && (ctx === 'personal' || ctx === 'business')) continue;
+            const btn = document.createElement('button');
+            btn.className = 'ctx-btn';
+            btn.dataset.ctx = ctx;
+            const isAll = ctx === 'all';
+            btn.style.cssText = 'flex:1;padding:6px 4px;border-radius:6px;border:none;cursor:pointer;font-size:' + (isAll ? '11' : '13') + 'px;font-weight:600;background:transparent;color:#475569;transition:all .15s;';
+            btn.textContent = CTX_ICONS[ctx];
+            btn.title = CTX_LABELS[ctx];
+            btn.addEventListener('click', () => setActiveContext(ctx));
+            ctxBtns.appendChild(btn);
+          }
+          _updateSwitcherUI(getActiveContext());
+        }
 
         function _updateSwitcherUI(ctx) {
           const label = document.getElementById('ctx-label');
@@ -1070,23 +1095,12 @@
           });
         }
 
-        // Bind click handlers — setActiveContext emits context:changed which drives _updateSwitcherUI
-        document.querySelectorAll('.ctx-btn').forEach(btn => {
-          btn.addEventListener('click', () => setActiveContext(btn.dataset.ctx));
-        });
-
-        // Always keep UI in sync with context state via event
         _ctxOn('context:changed', ({ context }) => _updateSwitcherUI(context));
 
-        // Hide Personal/Business for child accounts
-        const acct = _getAcct();
-        if (acct && acct.role !== 'admin' && acct.role !== 'parent') {
-          document.querySelector('.ctx-btn[data-ctx="personal"]')?.style.setProperty('display', 'none');
-          document.querySelector('.ctx-btn[data-ctx="business"]')?.style.setProperty('display', 'none');
-        }
+        // Re-build sidebar buttons when order changes in settings
+        window.addEventListener('fh:contextOrderChanged', () => _buildSwitcherButtons());
 
-        // Set initial state from restored context
-        _updateSwitcherUI(getActiveContext());
+        await _buildSwitcherButtons();
       }
 
       // 11. Auto-start onboarding tour on first login (P-31)
@@ -1195,7 +1209,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=5.1.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=5.3.5', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);

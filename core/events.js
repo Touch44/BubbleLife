@@ -161,4 +161,11 @@ export const EVENTS = Object.freeze({
   ALERT_DISMISSED:     'alert:dismissed',
   ALERT_CLEARED_ALL:   'alert:clearedAll',
   ALERT_COUNT_CHANGED: 'alert:countChanged',
+
+  // ── Recurrence lifecycle [v5.3.1] ─────────────────────
+  RECURRENCE_MATERIALIZED:        'recurrence:materialized',
+  RECURRENCE_INSTANCE_COMPLETED:  'recurrence:instanceCompleted',
+  RECURRENCE_INSTANCE_SKIPPED:    'recurrence:instanceSkipped',
+  RECURRENCE_SERIES_STOPPED:      'recurrence:seriesStopped',
+  RECURRENCE_STREAK_UPDATED:      'recurrence:streakUpdated',
 });

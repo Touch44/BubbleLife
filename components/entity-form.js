@@ -18,6 +18,8 @@ import { emit, on, EVENTS }                                    from '../core/eve
 import { toast }                                               from '../core/toast.js';
 import { getAccount }                                          from '../core/auth.js';
 import { getActiveContext, ALWAYS_SHARED_TYPES }               from '../core/context.js';
+import { presetToRrule, rruleToHuman, nextNDates }
+  from '../services/rrule-lite.js'; // [v5.3.1]
 
 // ── Module-level state ────────────────────────────────────── //
 
@@ -50,6 +52,14 @@ let _formIsSaving = false;
 
 /** Cleanup fns for form-lifetime event subscriptions — called in closeForm */
 let _formEventUnsubs = [];
+
+// ── Date helper [v5.3.1] ──────────────────────────────────── //
+/** Return today as YYYY-MM-DD using local time (never toISOString). */
+function _todayStr() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+
 
 /** Stack of saved parent form states for stacked (child) forms.
  *  When closeForm runs, if a parent state exists, it is restored. */
@@ -856,6 +866,178 @@ function _rebuildBodyInto(config, container) {
 }
 
 // ════════════════════════════════════════════════════════════
+// RECURRENCE PANEL [v5.3.1]
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Show or hide the recurrence settings panel below the isRecurring checkbox.
+ * Called on checkbox change and immediately on edit-mode open when already recurring.
+ * @param {boolean} enabled
+ * @param {HTMLElement} anchor  — the data-field="isRecurring" group element
+ */
+function _toggleRecurrencePanel(enabled, anchor) {
+  const panelId = 'ef-recurrence-panel';
+  _overlay?.querySelector('#' + panelId)?.remove();
+  if (!enabled) {
+    // [B9 fix] Clear ALL recurrence draft fields to prevent stale values persisting on entity
+    _draft.rrule             = null;
+    _draft.recurrenceEnd     = 'never';
+    _draft.recurrenceCount   = null;
+    _draft.recurrenceEndDate = null;
+    _draft.nextOccurrenceDate = null;
+    return;
+  }
+  if (!anchor) return; // [F06 fix] silently bail if anchor missing (form not yet in DOM)
+
+  const panel = document.createElement('div');
+  panel.id = panelId;
+  panel.style.cssText = [
+    'margin:var(--space-3) 0',
+    'padding:var(--space-4)',
+    'border-radius:var(--radius-md)',
+    'background:var(--color-surface)',
+    'border:1px solid var(--color-accent)',   // accent border to indicate active state
+    'border-left:4px solid var(--color-accent)',
+    'display:flex',
+    'flex-direction:column',
+    'gap:var(--space-3)',
+  ].join(';');
+
+  const PRESETS = [
+    ['one-time',              'Does not repeat'],
+    ['daily',                 'Daily'],
+    ['weekdays',              'Weekdays (Mon–Fri)'],
+    ['weekends',              'Weekends'],
+    ['weekly',                'Weekly'],
+    ['biweekly',              'Every 2 weeks'],
+    ['monthly',               'Monthly'],
+    ['monthly-first-monday',  '1st Monday of month'],
+    ['yearly',                'Annually'],
+    ['hourly',                'Every hour'],
+  ];
+
+  // [F02 fix] Section header label
+  const header = document.createElement('div');
+  header.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-accent);text-transform:uppercase;letter-spacing:.06em;';
+  header.textContent = '🔁 Recurrence Schedule';
+  panel.appendChild(header);
+
+  // [F01 fix] Preset selector — must use 'select' class (provides dropdown arrow SVG)
+  const selWrap = document.createElement('div');
+  selWrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  const selLbl = document.createElement('label');
+  selLbl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);font-weight:500;';
+  selLbl.textContent = 'Repeats';
+  selLbl.setAttribute('for', 'ef-rrule-sel');
+  const sel = document.createElement('select');
+  sel.className = 'select'; // [F01 fix] was 'input' — select class provides the dropdown arrow
+  sel.id = 'ef-rrule-sel';
+  const curRule = _draft.rrule || '';
+  let matched = 'weekly';
+  for (const [pk] of PRESETS) {
+    if (presetToRrule(pk) === curRule) { matched = pk; break; }
+  }
+  PRESETS.forEach(([pk, pl]) => {
+    const o = document.createElement('option');
+    o.value = pk; o.textContent = pl; o.selected = pk === matched;
+    sel.appendChild(o);
+  });
+  selWrap.appendChild(selLbl);
+  selWrap.appendChild(sel);
+  panel.appendChild(selWrap);
+
+  // Human-readable preview + next dates
+  const prev = document.createElement('div');
+  prev.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);';
+
+  function _updatePreview() {
+    const rule = presetToRrule(sel.value);
+    _draft.rrule = rule;
+    if (!rule) { prev.textContent = 'One-time — will not repeat.'; return; }
+    const anchorDate = _draft.executionDate || _draft.dueDate || _todayStr();
+    const dates  = nextNDates(rule, anchorDate + 'T00:00:00', 5).map(d =>
+      new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    );
+    prev.textContent = rruleToHuman(rule) + (dates.length ? ' · Next: ' + dates.join(', ') : '');
+  }
+  sel.addEventListener('change', _updatePreview);
+  _updatePreview();
+  panel.appendChild(prev);
+
+  // [F05 fix] End-condition section label
+  const endsLbl = document.createElement('div');
+  endsLbl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);font-weight:500;margin-top:var(--space-1);';
+  endsLbl.textContent = 'Ends';
+  panel.appendChild(endsLbl);
+
+  // [F03 fix] End-condition radios with inline inputs — each radio+input is a paired row
+  const endsWrap = document.createElement('div');
+  endsWrap.style.cssText = 'display:flex;flex-direction:column;gap:var(--space-2);';
+
+  const rbName = 'ef-recend-' + Date.now();
+  const curEnd = _draft.recurrenceEnd || 'never';
+
+  // "Never" option
+  const lbNever = document.createElement('label');
+  lbNever.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:var(--text-sm);cursor:pointer;';
+  const rbNever = document.createElement('input');
+  rbNever.type = 'radio'; rbNever.name = rbName; rbNever.value = 'never';
+  rbNever.checked = curEnd === 'never';
+  lbNever.append(rbNever, document.createTextNode('Never'));
+  endsWrap.appendChild(lbNever);
+
+  // "After N times" option — with inline count input
+  const lbCount = document.createElement('label');
+  lbCount.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:var(--text-sm);cursor:pointer;flex-wrap:wrap;';
+  const rbCount = document.createElement('input');
+  rbCount.type = 'radio'; rbCount.name = rbName; rbCount.value = 'count';
+  rbCount.checked = curEnd === 'count';
+  const countIn = document.createElement('input');
+  countIn.type = 'number'; countIn.min = '1'; countIn.placeholder = 'N';
+  countIn.className = 'input';
+  countIn.style.cssText = 'width:64px;padding:3px 8px;font-size:var(--text-sm);display:' + (curEnd === 'count' ? 'inline-block' : 'none') + ';';
+  countIn.value = _draft.recurrenceCount || '';
+  countIn.addEventListener('input', () => { _draft.recurrenceCount = parseInt(countIn.value, 10) || null; });
+  const countSuffix = document.createElement('span');
+  countSuffix.textContent = 'times';
+  countSuffix.style.cssText = 'display:' + (curEnd === 'count' ? 'inline' : 'none') + ';color:var(--color-text-muted);font-size:var(--text-xs);';
+  lbCount.append(rbCount, document.createTextNode('After'), countIn, countSuffix);
+  endsWrap.appendChild(lbCount);
+
+  // "On date" option — with inline date input
+  const lbDate = document.createElement('label');
+  lbDate.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:var(--text-sm);cursor:pointer;flex-wrap:wrap;';
+  const rbDate = document.createElement('input');
+  rbDate.type = 'radio'; rbDate.name = rbName; rbDate.value = 'date';
+  rbDate.checked = curEnd === 'date';
+  const dateIn = document.createElement('input');
+  dateIn.type = 'date';
+  dateIn.className = 'input';
+  dateIn.style.cssText = 'width:150px;padding:3px 8px;font-size:var(--text-sm);display:' + (curEnd === 'date' ? 'inline-block' : 'none') + ';';
+  dateIn.value = _draft.recurrenceEndDate || '';
+  // [F04 fix] listen on both 'change' and 'input' for cross-browser / mobile compatibility
+  const _syncDate = () => { _draft.recurrenceEndDate = dateIn.value || null; };
+  dateIn.addEventListener('change', _syncDate);
+  dateIn.addEventListener('input',  _syncDate);
+  lbDate.append(rbDate, document.createTextNode('On'), dateIn);
+  endsWrap.appendChild(lbDate);
+
+  // Wire radio → show/hide inline inputs
+  function _syncEndVisibility(val) {
+    countIn.style.display    = val === 'count' ? 'inline-block' : 'none';
+    countSuffix.style.display = val === 'count' ? 'inline'      : 'none';
+    dateIn.style.display     = val === 'date'  ? 'inline-block' : 'none';
+    _draft.recurrenceEnd = val;
+  }
+  [rbNever, rbCount, rbDate].forEach(rb => {
+    rb.addEventListener('change', () => _syncEndVisibility(rb.value));
+  });
+
+  panel.appendChild(endsWrap);
+  anchor.insertAdjacentElement('afterend', panel); // anchor guaranteed non-null (checked above)
+}
+
+// ════════════════════════════════════════════════════════════
 // FIELD RENDERING
 // ════════════════════════════════════════════════════════════
 
@@ -1151,10 +1333,30 @@ function _buildFieldControl(field, config) {
       empty.textContent = `— Select ${field.label} —`;
       select.appendChild(empty);
 
-      // CS-05: Emoji labels for context field
+      // CS-05: Emoji labels for context field — order follows contextOrder setting
       const CTX_EMOJI = { family: '🏠 Family', personal: '👤 Personal', business: '💼 Business', all: '🌐 All' };
 
-      for (const opt of (field.options || [])) {
+      let _fieldOpts = field.options || [];
+      if (field.key === 'context') {
+        // Reorder options to match saved context order (async, best-effort)
+        getSetting('contextOrder').then(saved => {
+          if (!Array.isArray(saved) || saved.length !== 4) return;
+          // Sort the existing <option> elements inside select by saved order
+          const optMap = {};
+          for (const o of [...select.querySelectorAll('option')]) {
+            if (o.value) optMap[o.value] = o;
+          }
+          // Remove non-empty options only (preserve the blank "— Select —" placeholder)
+          for (const o of [...select.querySelectorAll('option')]) {
+            if (o.value) o.remove();
+          }
+          for (const ctx of saved) {
+            if (optMap[ctx]) select.appendChild(optMap[ctx]);
+          }
+        }).catch(() => {});
+      }
+
+      for (const opt of _fieldOpts) {
         const o = document.createElement('option');
         o.value       = opt;
         o.textContent = (field.key === 'context' && CTX_EMOJI[opt]) ? CTX_EMOJI[opt] : opt;
@@ -1202,6 +1404,23 @@ function _buildFieldControl(field, config) {
       cb.checked = !!existing;
       cb.style.cssText = 'width: 18px; height: 18px; accent-color: var(--color-accent); cursor: pointer; flex-shrink: 0;';
       cb.addEventListener('change', () => { _draft[field.key] = cb.checked; });
+
+      // [v5.3.1] isRecurring: toggle the recurrence panel below this field
+      if (field.key === 'isRecurring') {
+        cb.addEventListener('change', () => {
+          _draft.isRecurring = cb.checked;
+          const group = cb.closest('[data-field]');
+          _toggleRecurrencePanel(cb.checked, group);
+        });
+        // Edit mode: show panel immediately if already recurring
+        if (cb.checked) {
+          requestAnimationFrame(() => {
+            if (!_overlay || !document.body.contains(_overlay)) return; // [B22 fix] form may have closed
+            const group = cb.closest('[data-field]');
+            if (group) _toggleRecurrencePanel(true, group);
+          });
+        }
+      }
 
       const lbl = document.createElement('span');
       lbl.textContent = field.label;
@@ -3909,6 +4128,16 @@ async function _submitForm() {
     // Family/School/Work which would overwrite entity.type).
     entityData.type = _typeKey;
 
+    // [v5.3.1] Initialise recurrence cursor for new recurring tasks
+    if (entityData.isRecurring && !entityData.nextOccurrenceDate) {
+      entityData.nextOccurrenceDate = entityData.executionDate
+                                    || entityData.dueDate
+                                    || _todayStr();
+      entityData.occurrenceCount = 0;
+      entityData.currentStreak   = 0;
+      entityData.longestStreak   = 0;
+    }
+
     // ── Capture live timer elapsed (tasks only) ───────────────── //
     // timeTracked is hidden (not in config.fields loop). If the timer is running
     // when Save is clicked, _editEntity.timeTracked is stale. Capture current elapsed
@@ -3920,6 +4149,11 @@ async function _submitForm() {
 
     // ── Save entity ───────────────────────────────────────── //
     const account = getAccount();
+    // [N01 fix] Promote ghost taskInstance to real when user edits it via form
+    if (entityData.type === 'taskInstance' && (entityData.isGhost || entityData._noSync)) {
+      delete entityData.isGhost;
+      delete entityData._noSync;
+    }
     const saved = await saveEntity(entityData, account?.id);
 
     // ── Save relation edges (diff-aware: add new, remove deleted) ──── //
@@ -4053,8 +4287,44 @@ async function _submitForm() {
     // Emit ENTITY_SAVED before the callback so listeners (panel, kanban, daily)
     // update state first. The callback then has fresh data if it queries anything.
     const cb = _onSave;
+    const _wasNewLocal = !_editEntity; // [v5.3.1] capture BEFORE emit (wasNew declared after)
     const wasNew = !_editEntity;
     const entityLabel = config?.label || 'item';
+
+    // [v5.3.1] Stop series if isRecurring was toggled off during edit
+    if (_editEntity?.isRecurring && !saved.isRecurring) {
+      try {
+        const { stopSeries } = await import('../services/recurrence.js');
+        await stopSeries(saved.id); // must await before ENTITY_SAVED fires
+      } catch (e) { console.error('[entity-form] stopSeries:', e); }
+    }
+
+    // [v5.3.1] Auto-create linked reminder for brand-new recurring tasks
+    if (_wasNewLocal && saved.isRecurring && saved.rrule) {
+      try {
+        const { getEdgesTo: _getEdgesTo } = await import('../core/db.js');
+        const linked = await _getEdgesTo(saved.id, 'reminds').catch(() => []);
+        if (linked.length === 0) {
+          const { createReminder } = await import('../services/reminder.js');
+          const ft = (saved.executionTime || saved.dueTime || '06:00').slice(0, 5);
+          const fd = saved.executionDate || saved.dueDate;
+          if (fd) {
+            await createReminder({
+              title:             `Reminder: ${saved.title}`,
+              rrule:             saved.rrule,
+              fireAt:            `${fd}T${ft}:00`,
+              context:           saved.context,
+              recurrenceEnd:     saved.recurrenceEnd,
+              recurrenceEndDate: saved.recurrenceEndDate,
+              recurrenceCount:   saved.recurrenceCount,
+              channelInApp:      true,
+              channelToast:      true,
+            }, saved.id);
+          }
+        }
+      } catch (e) { console.error('[entity-form] auto-reminder:', e); }
+    }
+
     // Emit ENTITY_SAVED FIRST so listeners (kanban, daily, panel) get fresh data,
     // then run the onSave callback, then close the form.
     // Closing last ensures any listener that checks the overlay won't see null prematurely.

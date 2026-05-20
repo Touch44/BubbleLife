@@ -39,7 +39,7 @@ let _calReminderMap = new Map();
 // [v5.1.0] Filter toggle: show only entities with reminders
 let _calFilterReminderOnly = false;
 
-const DONE_STATUSES = new Set(['done', 'Done', 'Completed']); // NEW-03
+const DONE_STATUSES = new Set(['done', 'Done', 'Completed', 'Skipped']); // NEW-03 [B48 fix: Skipped not overdue]
 
 /**
  * Calendar entity type registry — extensible for future custom types.
@@ -96,6 +96,17 @@ const ENTITY_REGISTRY = {
     dotStyle:  'letter',                  // renders as "M" instead of dot
     dotLetter: 'M',
   },
+  // [v5.3.1] Recurring task instances
+  taskInstance: {
+    color:     'var(--color-accent2,#7C3AED)',
+    icon:      '↺',
+    label:     'Occurrence',
+    dateField: 'executionDate',
+    timeField: 'executionTime',
+    hasTime:   true,
+    recurring: false,
+    filterFn:  (e) => e.status !== 'Completed' && e.status !== 'Skipped',
+  },
 };
 
 // C-01: Map person.color select values → CSS hex colors
@@ -111,7 +122,7 @@ const PERSON_COLOR_MAP = {
 };
 
 /** Ordered list of entity types to load — determines dot order */
-const DATA_TYPES = ['event', 'task', 'dateEntity', 'appointment', 'mealPlan'];
+const DATA_TYPES = ['event', 'task', 'taskInstance', 'dateEntity', 'appointment', 'mealPlan']; // [v5.3.1]
 
 /** Quick lookup helpers derived from registry */
 function _getColor(type)  { return ENTITY_REGISTRY[type]?.color || 'var(--color-border)'; }
@@ -382,7 +393,7 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       // as a local variable passed via the dateMap entry (avoids polluting IDB objects).
       let _taskDateTimeISO = null;
       let _taskEffectiveDate = null; // the date used for calendar placement
-      if (typeKey === 'task') {
+      if (typeKey === 'task' || typeKey === 'taskInstance') { // [v5.3.1] taskInstance uses same date logic
         // Resolve execution date (falls back to dueDate)
         _taskEffectiveDate = entity.executionDate
           ? _isoToLocalDate(entity.executionDate)
@@ -394,8 +405,8 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
         }
       }
 
-      // For tasks, use the resolved execution/due date; for other types use dateField
-      const rawDate = typeKey === 'task' ? _taskEffectiveDate : entity[reg.dateField];
+      // For tasks/instances, use the resolved execution/due date; for other types use dateField
+      const rawDate = (typeKey === 'task' || typeKey === 'taskInstance') ? _taskEffectiveDate : entity[reg.dateField]; // [v5.3.1]
       if (!rawDate) continue;
 
       // ── Recurring types (dateEntity): match by month+day across years ──
@@ -436,8 +447,8 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       }
 
       // ── Standard single-day ──
-      const ds = typeKey === 'task' ? _taskEffectiveDate : _isoToLocalDate(rawDate);
-      const isOverdue = typeKey === 'task' && ds && ds < todayStr;
+      const ds = (typeKey === 'task' || typeKey === 'taskInstance') ? _taskEffectiveDate : _isoToLocalDate(rawDate); // [v5.3.1]
+      const isOverdue = (typeKey === 'task' || typeKey === 'taskInstance') && ds && ds < todayStr && !DONE_STATUSES.has(entity.status); // [v5.3.1]
       _add(ds, entity, typeKey, { isOverdue, _dateTimeISO: _taskDateTimeISO });
     }
   }
@@ -961,6 +972,10 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items) {
         detail.textContent = _formatTime(item.entity.date) || _getLabel(item.entityType);
       } else if (item.entityType === 'task') {
         detail.textContent = item.entity.priority ? `${item.entity.priority} priority` : 'Task';
+      } else if (item.entityType === 'taskInstance') { // [N15/N20 fix]
+        const idx = item.entity.occurrenceIndex ? `#${item.entity.occurrenceIndex}` : '';
+        const prio = item.entity.priority || '';
+        detail.textContent = ['↺ Occurrence', idx, prio].filter(Boolean).join(' · ');
       } else if (item.entityType === 'mealPlan') {
         detail.textContent = item.entity.mealType || 'Meal';
       } else if (item.entityType === 'dateEntity') {
@@ -1745,6 +1760,14 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
     const entity = await getEntity(entityId);
     if (!entity) return;
 
+    // [v5.3.1] Guard: dragging a recurring template corrupts the series silently.
+    // Users must edit the task to change the recurrence pattern, or move a specific occurrence.
+    if (entity.type === 'task' && entity.isRecurring) {
+      const { toast: _t } = await import('../core/toast.js');
+      _t.info('Edit the task to change the recurrence pattern, or move a specific occurrence instead.');
+      return;
+    }
+
     const reg = ENTITY_REGISTRY[entityType];
     if (!reg) return;
     const dateField = reg.dateField;
@@ -1753,8 +1776,8 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
     if (reg.hasTime && newHour != null) {
       const hourStr = String(newHour).padStart(2, '0');
       const minStr  = String(newMin).padStart(2, '0');
-      if (entityType === 'task') {
-        // Update executionDate (the "planned for" date) when dragging tasks.
+      if (entityType === 'task' || entityType === 'taskInstance') { // [N02 fix] instances same as tasks
+        // Update executionDate (the "planned for" date) when dragging tasks/instances.
         // dueDate (deadline) is intentionally NOT changed by drag — deadlines are fixed.
         entity.executionDate = newDateStr;
         entity.executionTime = `${hourStr}:${minStr}`;
@@ -1770,7 +1793,9 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
       }
     } else if (reg.hasTime) {
       // Timed entity dropped on day cell (no specific hour): preserve time, change date
-      if (oldValue && !/^\d{4}-\d{2}-\d{2}$/.test(oldValue)) {
+      if (entityType === 'taskInstance') { // [N02 fix] instances always use bare executionDate
+        entity.executionDate = newDateStr;
+      } else if (oldValue && !/^\d{4}-\d{2}-\d{2}$/.test(oldValue)) {
         const old = new Date(oldValue);
         const preserved = new Date(`${newDateStr}T${String(old.getHours()).padStart(2,'0')}:${String(old.getMinutes()).padStart(2,'0')}:00`);
         const delta = preserved - old;
@@ -1782,7 +1807,7 @@ async function _rescheduleEntity(entityType, entityId, newDateStr, newHour, newM
         entity[dateField] = newDateStr + 'T12:00:00';
       }
     } else {
-      if (entityType === 'task') {
+      if (entityType === 'task' || entityType === 'taskInstance') { // [N02 fix]
         entity.executionDate = newDateStr;
         if (!entity.executionTime) entity.executionTime = entity.dueTime || '06:00';
       } else {

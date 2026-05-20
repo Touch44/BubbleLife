@@ -578,18 +578,20 @@ export async function openPanel(entityId, entityTypeHint) {
     // Outside of graph mode: every entity click goes to the edit form (modal overlay)
     // rather than the slide panel. The panel is reserved for graph-view entity browsing.
     // Exception: skipFormFirst flag allows internal navigation (graph button, close-graph restore).
-    if (!_graphViewActive && !openPanel._skipFormFirst) {
+    // [P01 fix] taskInstance bypasses form-first — series panel is the primary UX.
+    const _isTaskInstance = entity.type === 'taskInstance';
+    if (!_graphViewActive && !openPanel._skipFormFirst && !_isTaskInstance) {
       // [minor] BUG-35 fix: do NOT set module state before early-return to avoid leakage
       openEditForm(entity);
       return;
     }
-    // Graph mode (or explicit bypass): fall through to the panel rendering below.
-    // ────────────────────────────────────────────────────────────
+    // Graph mode, explicit bypass, or taskInstance: fall through to panel rendering.
 
     _entity    = entity;
     _config    = config;
     // Content-first types default to 'content' view; others to 'properties'
     _activeTab = CONTENT_FIRST_TYPES.has(entity.type) ? 'content' : 'properties';
+    if (entity.type === 'taskInstance') _activeTab = 'series'; // [v5.3.1]
     _dirty     = false;
     _snapshot  = JSON.stringify(entity);  // P-26: snapshot for dirty detection
     _updateDirtyIndicator();
@@ -740,6 +742,9 @@ function _renderHeader() {
   // View icon buttons: only show 'content' if entity has a content field
   const hasContent = _getContentField(_entity, _config) !== null;
   const visibleViews = VIEW_DEFS.filter(v => v.key !== 'content' || hasContent);
+  // [v5.3.1] Inject Series tab for recurring templates and instances
+  const _showSeries = (_entity?.type === 'task' && _entity?.isRecurring) || _entity?.type === 'taskInstance';
+  if (_showSeries) visibleViews.push({ key: 'series', icon: '🔁', title: 'Series' });
 
   for (const view of visibleViews) {
     const btn = document.createElement('button');
@@ -1255,6 +1260,7 @@ function _renderActiveTab() {
     case 'properties': _renderPropertiesTab(container);  break;
     case 'relations':  _renderRelationsTab(container);   break;
     case 'activity':   _renderActivityTab(container);    break;
+    case 'series':     _renderSeriesTab(container);      break; // [v5.3.1]
     default:           _renderPropertiesTab(container);  break;
   }
 
@@ -4256,9 +4262,247 @@ async function _confirmDelete() {
 
 
 /**
+ * [v5.3.1] Render the Series tab for a recurring task template or task instance.
+ * Mirrors _renderActivityTab async pattern exactly — sets loading state first,
+ * then async loads. Called without await from _renderActiveTab switch.
+ * Uses _esc() (module-level), getEdgesFrom/To/getEntity (already imported).
+ */
+async function _renderSeriesTab(container) {
+  if (!_entity) return;
+  const entityId = _entity.id; // capture before await (C11 async safety)
+
+  container.innerHTML = '<div style="font-size:var(--text-xs);color:var(--color-text-muted);padding:var(--space-2);">Loading series…</div>';
+
+  try {
+    // Determine if we're on a template or an instance
+    const isInstance = _entity.type === 'taskInstance';
+    const templateId = isInstance ? _entity.templateId : _entity.id;
+
+    // Load template
+    const tmpl = templateId ? await getEntity(templateId).catch(() => null) : null;
+    if (!_entity || _entity.id !== entityId) return; // stale — panel switched
+
+    // Load all instances via instanceOf edges
+    const edges = tmpl ? await getEdgesTo(tmpl.id, 'instanceOf').catch(() => []) : [];
+    const allInsts = await Promise.all(edges.map(e => getEntity(e.fromId).catch(() => null)));
+    if (!_entity || _entity.id !== entityId) return; // stale check again
+
+    const insts = allInsts.filter(Boolean).sort((a, b) =>
+      (b.periodStart || '').localeCompare(a.periodStart || '')
+    );
+
+    // Lazy-load rrule-lite for human-readable label
+    let rruleHuman = '';
+    if (tmpl?.rrule) {
+      try {
+        const m = await import('../services/rrule-lite.js');
+        rruleHuman = m.rruleToHuman(tmpl.rrule);
+      } catch (_) {}
+    }
+
+    const frag = document.createDocumentFragment();
+
+    // ── Header: template summary ──────────────────────────
+    if (tmpl) {
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'margin-bottom:var(--space-4);padding:var(--space-3);background:var(--color-surface);border-radius:var(--radius-md);border:1px solid var(--color-border);';
+      hdr.innerHTML = `
+        <div style="font-weight:var(--weight-semibold);margin-bottom:var(--space-2);">🔁 ${_esc(tmpl.title || 'Recurring Task')}</div>
+        ${rruleHuman ? `<div style="font-size:var(--text-sm);color:var(--color-text-muted);">${_esc(rruleHuman)}</div>` : ''}
+        <div style="display:flex;gap:var(--space-4);margin-top:var(--space-2);font-size:var(--text-sm);">
+          <span>🔢 <b>${tmpl.occurrenceCount || 0}</b> completed</span>
+          <span>🔥 <b>${tmpl.currentStreak || 0}</b> streak</span>
+          <span>🏆 <b>${tmpl.longestStreak || 0}</b> best</span>
+        </div>
+      `;
+
+      // [B12 fix] Instance view: add link to navigate to parent template
+      if (isInstance) {
+        const tmplLink = document.createElement('button');
+        tmplLink.className = 'btn btn-ghost btn-sm';
+        tmplLink.style.cssText = 'margin-top:var(--space-2);color:var(--color-accent);font-size:var(--text-xs);';
+        tmplLink.textContent = '→ View recurring template';
+        tmplLink.addEventListener('click', () => {
+          emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: tmpl.id });
+        });
+        hdr.appendChild(tmplLink);
+      }
+
+      // Stop series button (template view only)
+      if (!isInstance) {
+        const stopBtn = document.createElement('button');
+        stopBtn.className = 'btn btn-ghost btn-sm';
+        stopBtn.style.cssText = 'margin-top:var(--space-2);color:var(--color-danger);';
+        stopBtn.textContent = '⏹ Stop recurring series';
+        stopBtn.addEventListener('click', async () => {
+          // [N10 fix] PWA-safe confirmation — use dialog service if available, else inline confirm
+          let confirmed = false;
+          const dialogSvc = window._fhEnv?.services?.dialog;
+          if (dialogSvc?.confirm) {
+            confirmed = await dialogSvc.confirm(
+              'Stop this recurring series? All pending (Not Started) occurrences will be permanently deleted.',
+              { confirmLabel: 'Stop Series', danger: true }
+            ).catch(() => false);
+          } else {
+            // Fallback for environments where dialog service isn't yet available
+            confirmed = window.confirm('Stop this recurring series? All pending occurrences will be deleted.');
+          }
+          if (!confirmed) return;
+          stopBtn.disabled = true;
+          stopBtn.textContent = '⏳ Stopping…';
+          try {
+            const { stopSeries } = await import('../services/recurrence.js');
+            await stopSeries(tmpl.id);
+            container.innerHTML = '<div style="padding:var(--space-4);color:var(--color-text-muted);">Series stopped. This task will no longer recur.</div>';
+          } catch (e) {
+            console.error('[panel] stopSeries:', e);
+            stopBtn.disabled = false;
+            stopBtn.textContent = '⏹ Stop recurring series';
+          }
+        });
+        hdr.appendChild(stopBtn);
+      }
+      frag.appendChild(hdr);
+    }
+
+    // ── Occurrences list ───────────────────────────────────
+    const listHdr = document.createElement('div');
+    listHdr.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:var(--space-2);';
+    listHdr.textContent = `Occurrences (${insts.length})`;
+    frag.appendChild(listHdr);
+
+    if (insts.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:var(--text-sm);color:var(--color-text-muted);padding:var(--space-3) 0;';
+      empty.textContent = 'No occurrences yet.';
+      frag.appendChild(empty);
+    }
+
+    const PAGE_SIZE = 30;
+    for (const inst of insts.slice(0, PAGE_SIZE)) { // show up to 30; show-more expands
+      const STATUS_ICONS = { Completed: '✅', Skipped: '⏭', 'In Progress': '🔄', 'Not Started': '⭕' };
+      const icon   = STATUS_ICONS[inst.status] || '⭕';
+      const isThis = inst.id === _entity.id;
+
+      const row = document.createElement('div');
+      row.style.cssText = [
+        'display:flex;align-items:center;gap:var(--space-2)',
+        'padding:var(--space-2) var(--space-1)',
+        'border-bottom:1px solid var(--color-border)',
+        'font-size:var(--text-sm)',
+        isThis ? 'background:var(--color-accent-muted,#ede9fe);border-radius:var(--radius-sm);' : '',
+      ].join(';');
+
+      const dateStr10 = inst.periodStart?.slice(0, 10) || '';
+      // [N40 fix] Show weekday name for better readability (Mon May 19, not just 2026-05-19)
+      let dateDisplay = dateStr10 || '—';
+      if (dateStr10) {
+        try {
+          const parts = dateStr10.split('-');
+          const d = new Date(parseInt(parts[0],10), parseInt(parts[1],10)-1, parseInt(parts[2],10));
+          dateDisplay = d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+        } catch (_) { dateDisplay = dateStr10; }
+      }
+
+      row.innerHTML = `
+        <span style="min-width:1.2em;text-align:center;">${icon}</span>
+        <span style="flex:1;${inst.status === 'Completed' ? 'text-decoration:line-through;color:var(--color-text-muted);' : ''}">
+          ${_esc(dateDisplay)}
+        </span>
+        <span style="font-size:var(--text-xs);color:var(--color-text-muted);">#${inst.occurrenceIndex || '?'}</span>
+      `;
+
+      // Click: open this instance's panel
+      if (!isThis) {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => {
+          emit(EVENTS.PANEL_OPENED, { entityType: 'taskInstance', entityId: inst.id });
+        });
+      }
+
+      // Action buttons for Not Started instances (not the currently-open one)
+      if (inst.status === 'Not Started' && !isThis) {
+        // Complete button [N13 fix]
+        const doneBtn = document.createElement('button');
+        doneBtn.className = 'btn btn-ghost btn-xs';
+        doneBtn.style.cssText = 'font-size:0.6rem;padding:2px 6px;color:var(--color-success,#22c55e);';
+        doneBtn.textContent = '✓';
+        doneBtn.title = 'Complete this occurrence';
+        doneBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          doneBtn.disabled = true;
+          try {
+            const { completeInstance } = await import('../services/recurrence.js');
+            await completeInstance(inst.id);
+            row.querySelector('span:first-child').textContent = '✅';
+            window._fhEnv?.services?.effects?.play('confetti');
+          } catch (err) { console.error('[panel] completeInstance:', err); doneBtn.disabled = false; }
+        });
+        row.appendChild(doneBtn);
+
+        // Skip button
+        const skipBtn = document.createElement('button');
+        skipBtn.className = 'btn btn-ghost btn-xs';
+        skipBtn.style.cssText = 'font-size:0.6rem;padding:2px 6px;color:var(--color-text-muted);';
+        skipBtn.textContent = 'Skip';
+        skipBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            const { skipInstance } = await import('../services/recurrence.js');
+            await skipInstance(inst.id);
+            row.querySelector('span:first-child').textContent = '⏭';
+          } catch (err) { console.error('[panel] skipInstance:', err); }
+        });
+        row.appendChild(skipBtn);
+      }
+
+      frag.appendChild(row);
+    }
+
+    // [N42 fix] Show-more link when list is truncated
+    if (insts.length > PAGE_SIZE) {
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'btn btn-ghost btn-sm';
+      moreBtn.style.cssText = 'width:100%;margin-top:var(--space-2);font-size:var(--text-xs);color:var(--color-text-muted);';
+      moreBtn.textContent = `↓ Show all ${insts.length} occurrences`;
+      moreBtn.addEventListener('click', async () => {
+        moreBtn.remove();
+        // Render remaining occurrences by appending rows directly to container
+        for (const inst of insts.slice(PAGE_SIZE)) {
+          const STATUS_ICONS = { Completed: '✅', Skipped: '⏭', 'In Progress': '🔄', 'Not Started': '⭕' };
+          const rowMore = document.createElement('div');
+          rowMore.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-1);border-bottom:1px solid var(--color-border);font-size:var(--text-sm);';
+          const dateStr10m = inst.periodStart?.slice(0, 10) || '';
+          let dateDisplayM = dateStr10m || '—';
+          if (dateStr10m) {
+            try {
+              const pm = dateStr10m.split('-');
+              const dm = new Date(+pm[0], +pm[1]-1, +pm[2]);
+              dateDisplayM = dm.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+            } catch(_) {}
+          }
+          rowMore.innerHTML = `<span style="min-width:1.2em;text-align:center;">${STATUS_ICONS[inst.status] || '⭕'}</span><span style="flex:1;${inst.status==='Completed'?'text-decoration:line-through;color:var(--color-text-muted);':''}">${_esc(dateDisplayM)}</span><span style="font-size:var(--text-xs);color:var(--color-text-muted);">#${inst.occurrenceIndex||'?'}</span>`;
+          container.appendChild(rowMore);
+        }
+      });
+      frag.appendChild(moreBtn);
+    }
+
+    container.innerHTML = '';
+    container.appendChild(frag);
+  } catch (err) {
+    console.error('[panel] _renderSeriesTab failed:', err);
+    container.innerHTML = `<div style="color:var(--color-danger);padding:var(--space-3);">Failed to load series data.</div>`;
+  }
+}
+
+
+/**
  * Mount activity stream below the properties tab content (P-28).
  */
 function _mountActivityStream() {
+  // [v5.3.1] taskInstance has no activity stream — skip to prevent crash
+  if (_entity?.type === 'taskInstance') return;
   // Cleanup previous stream
   if (_activityCleanup) { _activityCleanup(); _activityCleanup = null; }
   if (!_entity) return;

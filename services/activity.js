@@ -13,7 +13,9 @@ import { getActiveContext }             from '../core/context.js';
 // Types to never generate activity for
 // [v5.0.0] 'reminder' + 'reminderLog' added — scheduler saves would flood the activity feed
 // [v5.2.0] 'rule' added — rule stat updates (lastFiredAt, fireCount) are internal noise
-const SKIP_TYPES  = new Set(['post', 'comment', 'activity', 'message', 'conversation', 'reminder', 'reminderLog', 'rule']);
+const SKIP_TYPES  = new Set(['post', 'comment', 'activity', 'message', 'conversation', 'reminder', 'reminderLog', 'rule',
+  'taskInstance', // [v5.3.1] scheduler saves must not flood the Family Wall
+]);
 
 // Types that DO generate activity cards
 const TRACK_TYPES = new Set([
@@ -28,6 +30,8 @@ const TRACK_TYPES = new Set([
 export const MILESTONE_TYPES = new Set([
   'task:completed', 'project:completed', 'goal:achieved',
   'habit:streak', 'event:attended', 'milestone:posted',
+  'recurrence:streak',    // [v5.3.1]
+  'recurrence:milestone', // [v5.3.1]
 ]);
 
 // Dedup guard: tracks last activityType written per entityId.
@@ -100,6 +104,8 @@ function _buildBody(activityType, entity, acct) {
     'entity:deleted':        `${title} was deleted`,
     'type:created':          `New object type "${title}" created`,
     'milestone:posted':      `${actor} posted a milestone: "${title}"`,
+    'recurrence:streak':    `${actor} is on a ${title} streak! 🔥`,    // [v5.3.1]
+    'recurrence:milestone': `${actor} completed ${title}! 🎉`,          // [v5.3.1]
   };
   return map[activityType] || `${actor} updated "${title}"`;
 }

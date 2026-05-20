@@ -34,7 +34,7 @@ import { toast }                            from '../core/toast.js';
 // ── Constants ─────────────────────────────────────────────── //
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
-const DONE_STATUSES  = new Set(['done', 'Done', 'Completed']);
+const DONE_STATUSES  = new Set(['done', 'Done', 'Completed', 'Skipped']); // [N06 fix] Skipped must not appear in daily task list
 
 /** sessionStorage key prefix for section open/closed state */
 const SS_PREFIX = 'fh_daily_section_';
@@ -162,10 +162,11 @@ function _setSectionOpen(key, open) {
  * REVIEW 1: all getEntitiesByType calls use the correct type keys from graph-engine.js
  */
 async function _loadData(dateStr) {
-  const [tasks, events, notes, comments, posts, appointments, dateEntities, mealPlans, auditLog,
+  const [tasks, taskInstances, events, notes, comments, posts, appointments, dateEntities, mealPlans, auditLog,
          persons, projects, authData] =
     await Promise.all([
       getEntitiesByType('task'),
+      getEntitiesByType('taskInstance'),  // [v5.3.1]
       getEntitiesByType('event'),
       getEntitiesByType('note'),
       getEntitiesByType('comment'),     // new dedicated comment type
@@ -184,7 +185,20 @@ async function _loadData(dateStr) {
 
   // CS-04: Apply context filtering (persons, auditLog, projects are NOT filtered)
   // Must be declared BEFORE the edge-map loop which iterates fTasks.
-  const fTasks        = _filterByDailyContext(tasks);
+  const rawTasks      = _filterByDailyContext(tasks);
+
+  // [v5.3.1] Normalize and merge taskInstances into the task list
+  const _taskMapD = new Map(rawTasks.map(t => [t.id, t]));
+  const _normInstD = _filterByDailyContext(taskInstances)
+    .filter(i => !i.deleted && i.status !== 'Completed' && i.status !== 'Skipped')
+    .map(inst => {
+      const tmpl = inst.templateId ? _taskMapD.get(inst.templateId) : null;
+      if (!tmpl) return null;
+      return { ...inst, _isInstance: true, _template: tmpl, priority: tmpl.priority || 'Medium' };
+    })
+    .filter(Boolean);
+  // Non-recurring tasks + active instances (templates stay for reference but aren't shown as cards)
+  const fTasks        = [...rawTasks.filter(t => !t.isRecurring), ..._normInstD];
   const fEvents       = _filterByDailyContext(events);
   const fNotes        = _filterByDailyContext(notes);
   const fComments     = _filterByDailyContext(comments);
@@ -194,11 +208,13 @@ async function _loadData(dateStr) {
   const fMealPlans    = _filterByDailyContext(mealPlans);
 
   // Build edge-resolved relation maps for tasks — parallel IDB reads
+  // [B10 fix] Filter out instances — they never have project/assignedTo edges
   const taskProjectEdgeMap  = new Map(); // taskId → projectId
   const taskAssigneeEdgeMap = new Map(); // taskId → personId
   {
-    const needProject  = fTasks.filter(t => !t.project);
-    const needAssignee = fTasks.filter(t => !t.assignedTo);
+    const edgeTasks    = fTasks.filter(t => !t._isInstance); // only real tasks have edges
+    const needProject  = edgeTasks.filter(t => !t.project);
+    const needAssignee = edgeTasks.filter(t => !t.assignedTo);
     const [projRes, assignRes] = await Promise.all([
       Promise.all(needProject.map(t  => getEdgesFrom(t.id, 'project').catch(() => []))),
       Promise.all(needAssignee.map(t => getEdgesFrom(t.id, 'assignedTo').catch(() => []))),
@@ -1539,8 +1555,43 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
 
     // Title click → form-first UX; route through PANEL_OPENED so openPanel fetches fresh entity
     row.querySelector('.daily-task-info-clickable').addEventListener('click', () => {
-      emit(EVENTS.PANEL_OPENED, { entityType: 'task', entityId: task.id });
+      // [B16 fix] use real entity type so panel config resolves correctly for instances
+      emit(EVENTS.PANEL_OPENED, { entityType: task._isInstance ? 'taskInstance' : 'task', entityId: task.id });
     });
+
+    // [v5.3.1] Instance: add recurrence subtitle + completeInstance override
+    if (task._isInstance) {
+      const clickable = row.querySelector('.daily-task-info-clickable');
+      if (clickable) {
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:0.65rem;color:var(--color-accent2,#7C3AED);margin-top:1px;';
+        import('../services/rrule-lite.js').then(m => {
+          sub.textContent = `↺ #${task.occurrenceIndex || '?'} · ${m.rruleToHuman(task._template?.rrule)}`;
+        }).catch(() => { sub.textContent = '↺ Recurring'; });
+        clickable.appendChild(sub);
+      }
+      const cbD   = row.querySelector('.daily-task-checkbox');
+      if (cbD) {
+        const freshD = cbD.cloneNode(true);
+        cbD.replaceWith(freshD);
+        freshD.addEventListener('change', async () => {
+          if (!freshD.checked) return;
+          freshD.disabled = true;
+          try {
+            const { completeInstance } = await import('../services/recurrence.js');
+            await completeInstance(task.id);
+            row.style.opacity = '0.4';
+            row.style.transition = 'opacity 0.3s';
+            setTimeout(() => { row.remove(); _updateSectionCount(wrapper); }, 350);
+          } catch (e) {
+            console.error('[daily] completeInstance failed:', e);
+            freshD.checked  = false;
+            freshD.disabled = false;
+          }
+        });
+      }
+      return row; // skip standard checkbox handler below for instances
+    }
 
     const checkbox = row.querySelector('.daily-task-checkbox');
     checkbox.addEventListener('change', async () => {
@@ -2706,7 +2757,7 @@ async function renderDaily(params = {}) {
 // Refresh daily view when a relevant entity is saved (task, event, note, appointment, etc.)
 // Guard on types that actually appear in daily sections to avoid spurious re-renders.
 const _DAILY_REFRESH_TYPES = new Set([
-  'task','event','note','appointment','mealPlan','dateEntity','post','comment',
+  'task','taskInstance','event','note','appointment','mealPlan','dateEntity','post','comment', // [v5.3.1] taskInstance added
   'idea','goal','habit','shoppingItem','expense','workout','journalEntry',
   'budgetEntry','contact','recipe','document',
   // person and project: task rows display assignee name and project name;
@@ -2716,8 +2767,9 @@ const _DAILY_REFRESH_TYPES = new Set([
   'reminder',       // [v5.0.0] new reminder entities trigger daily refresh
 ]);
 let _dailyRefreshTimer = null;
-on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
+on(EVENTS.ENTITY_SAVED, ({ entity, _streakUpdate } = {}) => {
   if (entity && !_DAILY_REFRESH_TYPES.has(entity.type)) return;
+  if (_streakUpdate) return; // [N07 fix] skip streak-only template updates
   if (_dailyRefreshTimer) clearTimeout(_dailyRefreshTimer);
   _dailyRefreshTimer = setTimeout(() => {
     _dailyRefreshTimer = null;
@@ -2739,6 +2791,26 @@ on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
     if (viewEl && viewEl.classList.contains('active')) {
       renderDaily({ _internal: true });
     }
+  }, 200);
+});
+
+// [P07 fix] RECURRENCE_MATERIALIZED: new ghost instances need to appear in daily immediately
+on(EVENTS.RECURRENCE_MATERIALIZED, () => {
+  if (_dailyRefreshTimer) clearTimeout(_dailyRefreshTimer);
+  _dailyRefreshTimer = setTimeout(() => {
+    _dailyRefreshTimer = null;
+    const viewEl = document.getElementById('view-daily');
+    if (viewEl && viewEl.classList.contains('active')) renderDaily({ _internal: true });
+  }, 200);
+});
+
+// [P16 fix] RECURRENCE_SERIES_STOPPED: remove instances from daily view
+on(EVENTS.RECURRENCE_SERIES_STOPPED, () => {
+  if (_dailyRefreshTimer) clearTimeout(_dailyRefreshTimer);
+  _dailyRefreshTimer = setTimeout(() => {
+    _dailyRefreshTimer = null;
+    const viewEl = document.getElementById('view-daily');
+    if (viewEl && viewEl.classList.contains('active')) renderDaily({ _internal: true });
   }, 200);
 });
 

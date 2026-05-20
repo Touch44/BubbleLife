@@ -199,7 +199,8 @@ async function _clearDirtyQueues() {
 
 // 3P-C-04 fix: reminderLog entities are local-only audit trail — skip MySQL sync
 // to prevent dirty queue flooding (recurring reminders generate 24-240 logs/day)
-const _SYNC_SKIP_TYPES = new Set(['reminderLog']);
+// [N17 fix] taskInstance: server has no taskInstance table; keep all instances local-only for now
+const _SYNC_SKIP_TYPES = new Set(['reminderLog', 'taskInstance']);
 
 async function _loadDirtyEntities(entityIds) {
   if (!entityIds.length) return [];
@@ -207,7 +208,14 @@ async function _loadDirtyEntities(entityIds) {
   const results = await Promise.all(
     entityIds.map(id => db.getEntity(id).catch(() => null))
   );
-  return results.filter(e => e && !_SYNC_SKIP_TYPES.has(e.type));
+  return results.filter(e => {
+    if (!e) return false;
+    if (_SYNC_SKIP_TYPES.has(e.type)) return false;
+    // [v5.3.1] Never sync ghost task instances (not-started auto-generated occurrences)
+    if (e.type === 'taskInstance' && e._noSync === true) return false;
+    if (e.type === 'taskInstance' && e.isGhost && e.status === 'Not Started') return false;
+    return true;
+  });
 }
 
 async function _loadDirtyEdges(edgeIds) {
@@ -217,7 +225,8 @@ async function _loadDirtyEdges(edgeIds) {
   const results = await Promise.all(
     edgeIds.map(id => db.getEdge(id).catch(() => null))
   );
-  return results.filter(Boolean);
+  // [P04 fix] Filter edges connected to taskInstance entities — server has no instanceOf table
+  return results.filter(e => e && e.fromType !== 'taskInstance' && e.toType !== 'taskInstance');
 }
 
 // ── Merge pulled entities into IDB ─────────────────────────────
