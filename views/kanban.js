@@ -1182,20 +1182,23 @@ function _rerenderColumns() {
 
   // [Sequential mode] When filtering by a sequential project, hide blocked tasks
   // Only the "current" (first uncompleted) task is shown; others are locked
-  if (_effectiveProjectFilter) {
-    const projEntity = _projects?.find(p => p.id === _effectiveProjectFilter);
-    if (projEntity?.completionMode === 'Sequential') {
-      try {
-        // Get all tasks for this project (including those not in current filtered set)
+  // Sequential filter: entirely wrapped in try-catch so any error (including stale SW cache
+  // serving old code with undefined _effectiveProjectFilter) never crashes kanban render.
+  try {
+    const _seqFocusProjId = (() => { try { return getFocusProjectId(); } catch { return null; } })();
+    const _seqProjectFilter = _filterProject || _seqFocusProjId || null;
+    if (_seqProjectFilter) {
+      const projEntity = _projects?.find(p => p.id === _seqProjectFilter);
+      if (projEntity?.completionMode === 'Sequential') {
         const allProjTasks = _tasks.filter(t => !t.deleted &&
-          (t.project === _effectiveProjectFilter || _taskProjectMap.get(t.id) === _effectiveProjectFilter));
+          (t.project === _seqProjectFilter || _taskProjectMap.get(t.id) === _seqProjectFilter));
         const { blockedIds } = getSequentialTaskState(projEntity, allProjTasks);
         if (blockedIds.size > 0) {
           filtered = filtered.filter(t => !blockedIds.has(t.id));
         }
-      } catch { /* non-fatal */ }
+      }
     }
-  }
+  } catch { /* non-fatal — sequential filter is enhancement only */ }
 
   // Show a friendly empty state banner when filters yield no results
   const _focusProjId = (() => { try { return getFocusProjectId(); } catch { return null; } })();

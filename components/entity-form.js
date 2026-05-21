@@ -53,6 +53,7 @@ let _formIsSaving = false;
 let _tab2Body = null;  // Activity tab
 let _tab3Body = null;  // Connections tab
 let _tab4Body = null;  // Reminders tab
+let _tab5Body = null;  // Tasks tab (project edit only) [v5.9.4]
 
 /** Cleanup fns for form-lifetime event subscriptions — called in closeForm */
 let _formEventUnsubs = [];
@@ -300,7 +301,7 @@ export function closeForm() {
     _onSave     = null;
     _relationValues.clear();
     _tagValues.clear();
-    _tab2Body = null; _tab3Body = null; _tab4Body = null; // [fix] clear so _refreshFormTabs is a no-op when no form
+    _tab2Body = null; _tab3Body = null; _tab4Body = null; _tab5Body = null; // [fix] clear so _refreshFormTabs is a no-op when no form
 
     // If a parent form was stacked, restore it
     if (_parentFormStack.length > 0) {
@@ -520,9 +521,12 @@ function _buildAndMount(config) {
   // Tab 4: Reminders — not shown for reminder/reminderLog entities (no sub-reminders)
   const _noRemindersTab = ['reminder', 'reminderLog', 'taskInstance'].includes(_typeKey);
   const tab4Btn = _noRemindersTab ? null : _mkTab('reminders', 'Reminders',            '🔔');
+  // [v5.9.4] Tasks tab — only in EDIT mode for project type
+  const _showTasksTab = !!_editEntity && _typeKey === 'project';
+  const tab5Btn = _showTasksTab ? _mkTab('tasks', 'Tasks', '✅') : null;
 
   const _applyTabStyles = () => {
-    [tab1Btn, tab2Btn, tab3Btn, tab4Btn].filter(Boolean).forEach(b => {
+    [tab1Btn, tab2Btn, tab3Btn, tab4Btn, tab5Btn].filter(Boolean).forEach(b => {
       const active = b.dataset.tabKey === _activeFormTab;
       b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
       b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
@@ -539,12 +543,18 @@ function _buildAndMount(config) {
     if (_tab2Body) _tab2Body.style.display = key === 'details'   ? 'flex' : 'none';
     if (_tab3Body) _tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
     if (_tab4Body) _tab4Body.style.display = key === 'reminders' ? 'flex' : 'none';
+    if (_tab5Body) _tab5Body.style.display = key === 'tasks'     ? 'flex' : 'none'; // [v5.9.4]
     // Hide footer (Save button) only in EDIT mode on non-fields tabs.
     // In CREATE mode, always show footer so user can save from any tab.
     const footerEl = modal.querySelector('.modal-footer');
     if (footerEl) {
-      const hideFooter = !!_editEntity && (key === 'details' || key === 'relations' || key === 'reminders');
+      const hideFooter = !!_editEntity && (key === 'details' || key === 'relations' || key === 'reminders' || key === 'tasks');
       footerEl.style.display = hideFooter ? 'none' : '';
+    }
+    // [v5.9.4] Lazy-load Tasks tab on first activate
+    if (key === 'tasks' && _tab5Body && !_tab5Body.dataset.loaded) {
+      _tab5Body.dataset.loaded = '1';
+      _buildFormTasksTab(_tab5Body, _editEntity).catch(e => console.warn('[entity-form] Tasks tab error:', e));
     }
     // Lazy-load Tab 2 on first open (or if marked dirty by external save)
     if (key === 'details' && _tab2Body && (!_tab2Body.dataset.loaded || _tab2Body.dataset.loaded === 'dirty')) {
@@ -567,11 +577,13 @@ function _buildAndMount(config) {
   tab2Btn.addEventListener('click', () => _switchTab('details'));
   tab3Btn.addEventListener('click', () => _switchTab('relations'));
   if (tab4Btn) tab4Btn.addEventListener('click', () => _switchTab('reminders'));
+  if (tab5Btn) tab5Btn.addEventListener('click', () => _switchTab('tasks')); // [v5.9.4]
 
   tabStrip.appendChild(tab1Btn);
   tabStrip.appendChild(tab2Btn);
   tabStrip.appendChild(tab3Btn);
   if (tab4Btn) tabStrip.appendChild(tab4Btn);
+  if (tab5Btn) tabStrip.appendChild(tab5Btn); // [v5.9.4] Tasks tab
   _applyTabStyles();
 
   // ── Body ─────────────────────────────────────────────── //
@@ -779,6 +791,13 @@ function _buildAndMount(config) {
   _tab4Body = document.createElement('div');
   _tab4Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
   body.appendChild(_tab4Body);
+
+  // [v5.9.4] Tasks tab body — only created for project edit mode
+  if (_showTasksTab) {
+    _tab5Body = document.createElement('div');
+    _tab5Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4);';
+    body.appendChild(_tab5Body);
+  }
 
   // Apply initial tab visibility
   tab1Body.style.display = _activeFormTab === 'fields'    ? 'flex' : 'none';
@@ -3870,6 +3889,142 @@ async function _renderFormConnectionsList(container, entity) {
  *   2. Change History    — collapsible audit log
  * For non-task entities sections 1 & 2 only.
  */
+/**
+ * [v5.9.4] Build Tasks tab for project edit form.
+ * Shows all linked tasks with inline complete toggle and + Add Task.
+ */
+async function _buildFormTasksTab(container, project) {
+  if (!project || project.type !== 'project') return;
+  container.innerHTML = '<div style="color:var(--color-text-muted);font-size:var(--text-xs);padding:var(--space-2);">Loading tasks\u2026</div>';
+  try {
+    const { getEntitiesByType, getEdgesTo, saveEntity } = await import('../core/db.js');
+    const { emit, EVENTS } = await import('../core/events.js');
+    const { getAccount } = await import('../core/auth.js');
+
+    const [allTasks, edgesProject, edgesPartOf] = await Promise.all([
+      getEntitiesByType('task').catch(() => []),
+      getEdgesTo(project.id, 'project').catch(() => []),
+      getEdgesTo(project.id, 'part of').catch(() => []),
+    ]);
+
+    const edgeIds = new Set([...edgesProject, ...edgesPartOf].map(e => e.fromId));
+    const tasks = allTasks.filter(t => !t.deleted && (t.project === project.id || edgeIds.has(t.id)));
+
+    container.innerHTML = '';
+
+    const DONE = new Set(['Done','Completed','Skipped']);
+    const doneCount = tasks.filter(t => DONE.has(t.status)).length;
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);flex-shrink:0;';
+
+    const countEl = document.createElement('span');
+    countEl.style.cssText = 'font-size:var(--text-xs);color:var(--color-text-muted);font-weight:600;';
+    countEl.textContent = tasks.length + ' task' + (tasks.length !== 1 ? 's' : '') + ' \u00b7 ' + doneCount + ' done';
+    hdr.appendChild(countEl);
+
+    const addBtn = document.createElement('button');
+    addBtn.textContent = '+ Add Task';
+    addBtn.style.cssText = 'padding:4px 10px;font-size:var(--text-xs);font-weight:600;background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;';
+    addBtn.addEventListener('click', () => {
+      openForm('task', {
+        project: project.id,
+        projectTitle: project.name || project.title,
+        context: project.context || 'family',
+      });
+    });
+    hdr.appendChild(addBtn);
+    container.appendChild(hdr);
+
+    if (tasks.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'text-align:center;padding:var(--space-6) 0;color:var(--color-text-muted);font-size:var(--text-sm);';
+      empty.innerHTML = '<div style="font-size:1.8rem;margin-bottom:var(--space-2);">\uD83D\uDCCB</div><div>No tasks yet</div>';
+      container.appendChild(empty);
+      return;
+    }
+
+    const STATUS_ORDER = ['In Progress','Not Started','Blocked','On Hold','Done','Completed','Skipped'];
+    const groups = new Map(STATUS_ORDER.map(s => [s, []]));
+    for (const t of tasks) {
+      const s = t.status || 'Not Started';
+      if (!groups.has(s)) groups.set(s, []);
+      groups.get(s).push(t);
+    }
+    const STATUS_DOT = {
+      'In Progress':'var(--color-accent)', 'Done':'#16a34a', 'Completed':'#16a34a',
+      'Blocked':'var(--color-danger)', 'Not Started':'var(--color-text-muted)',
+      'Skipped':'var(--color-text-muted)', 'On Hold':'#d97706'
+    };
+    const PRIO_COLOR = {'Critical':'#ef4444','High':'#f97316','Medium':'#f59e0b','Low':'#94a3b8'};
+    const _e = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    for (const [status, sTasks] of groups) {
+      if (!sTasks.length) continue;
+      const isDone = DONE.has(status);
+      const dot = STATUS_DOT[status] || 'var(--color-text-muted)';
+
+      const grpHdr = document.createElement('div');
+      grpHdr.style.cssText = 'font-size:10px;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.06em;padding:var(--space-1) 0;border-bottom:1px solid var(--color-border);margin-bottom:var(--space-1);margin-top:var(--space-3);display:flex;align-items:center;justify-content:space-between;';
+      grpHdr.innerHTML = '<span style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>' + _e(status) + '</span><span style="font-weight:400;text-transform:none;">' + sTasks.length + '</span>';
+      container.appendChild(grpHdr);
+
+      for (const task of sTasks.sort((a,b) => {
+        const P = {'Critical':0,'High':1,'Medium':2,'Low':3};
+        return (P[a.priority] != null ? P[a.priority] : 2) - (P[b.priority] != null ? P[b.priority] : 2) || (a.title||'').localeCompare(b.title||'');
+      })) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);padding:var(--space-1-5) var(--space-1);border-radius:var(--radius-sm);cursor:pointer;transition:background 0.12s;' + (isDone ? 'opacity:0.55;' : '');
+        row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-surface)'; });
+        row.addEventListener('mouseleave', () => { row.style.background = ''; });
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = isDone;
+        cb.style.cssText = 'flex-shrink:0;cursor:pointer;width:15px;height:15px;accent-color:var(--color-accent);';
+        cb.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          try {
+            const acct = getAccount();
+            await saveEntity(Object.assign({}, task, { status: isDone ? 'In Progress' : 'Done' }), acct && acct.id);
+            if (container.isConnected) {
+              container.dataset.loaded = '';
+              _buildFormTasksTab(container, project).catch(function() {});
+            }
+          } catch(err) { /* non-fatal */ }
+        });
+
+        const prioDot = document.createElement('span');
+        prioDot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:' + (PRIO_COLOR[task.priority]||'#94a3b8') + ';flex-shrink:0;';
+
+        const titleEl = document.createElement('span');
+        titleEl.style.cssText = 'flex:1;font-size:var(--text-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' + (isDone ? 'text-decoration:line-through;' : '');
+        titleEl.textContent = task.title || '(Untitled)';
+
+        const due = document.createElement('span');
+        due.style.cssText = 'font-size:10px;color:var(--color-text-muted);white-space:nowrap;flex-shrink:0;';
+        if (task.dueDate) {
+          const parts = task.dueDate.split('-').map(Number);
+          const dueDate = new Date(parts[0], parts[1]-1, parts[2]);
+          const today = new Date(); today.setHours(0,0,0,0);
+          due.textContent = parts[1] + '/' + parts[2];
+          if (!isDone && dueDate < today) due.style.color = 'var(--color-danger)';
+        }
+
+        row.append(cb, prioDot, titleEl, due);
+        row.addEventListener('click', function(e) {
+          if (e.target === cb) return;
+          emit(EVENTS.PANEL_OPENED, { entityId: task.id });
+        });
+        container.appendChild(row);
+      }
+    }
+  } catch (err) {
+    console.error('[entity-form] _buildFormTasksTab:', err);
+    container.innerHTML = '<div style="color:var(--color-danger);font-size:var(--text-xs);padding:var(--space-3);">Failed to load tasks.</div>';
+  }
+}
+
+
 async function _buildDetailsTab(container, config) {
   container.innerHTML = '';
 
