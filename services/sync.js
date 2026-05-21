@@ -326,6 +326,11 @@ async function _doMysqlSync() {
     const lastPullMs = (await db.getSetting(SETTING_LAST_PULL_MS).catch(() => 0)) || 0;
     const pullRes = await _apiPost({ action: 'pull', token, since_ms: lastPullMs });
 
+    // [N-10 fix] Warn if server truncated the pull response
+    if (pullRes._truncated) {
+      console.warn('[sync] Pull result was truncated at server PULL_LIMIT. Some entities may be missing. Re-sync or increase PULL_LIMIT in api/sync.php.');
+      showToast('Sync warning: large dataset may require a manual full sync', 'warn');
+    }
     if (pullRes.entities && pullRes.entities.length) {
       await _mergeEntities(pullRes.entities);
     }

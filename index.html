@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v5.5.1 [minor] v5.5.1: one-time migration to fix stale dueDate on existing taskInstances -->
+  <!-- Build: v5.7.0 [MAJOR] v5.7.0: Remove sidebar graph nav; entity 🔮 graph button on all types; user-type action defaults -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=5.5.1" />
-  <link rel="stylesheet" href="./styles/layout.css?v=5.5.1" />
-  <link rel="stylesheet" href="./styles/components.css?v=5.5.1" />
-  <link rel="stylesheet" href="./styles/dark.css?v=5.5.1" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=5.7.0" />
+  <link rel="stylesheet" href="./styles/layout.css?v=5.7.0" />
+  <link rel="stylesheet" href="./styles/components.css?v=5.7.0" />
+  <link rel="stylesheet" href="./styles/dark.css?v=5.7.0" />
 </head>
 <body>
 
@@ -291,13 +291,6 @@
                 style="display:none"></span>
         </button>
       </li>
-      <li role="listitem">
-        <button class="nav-item" data-view="graph"
-                aria-label="Knowledge Graph">
-          <span class="nav-item-icon" aria-hidden="true">🔮</span>
-          <span class="nav-item-label">Graph</span>
-        </button>
-      </li>
 
       <!-- Tools / Trackers -->
       <li role="listitem" aria-hidden="true">
@@ -479,7 +472,7 @@
     <!-- graph-canvas.js, graph filter panel, and entity panel integrate here -->
     <div id="view-graph" class="view" role="region" aria-label="Knowledge Graph"
          aria-hidden="true">
-      <!-- Graph filter panel, canvas, and right panel populated by views/graph-view.js -->
+      <!-- Graph canvas and entity panel populated by entity-panel.js _openGraphView() -->
     </div>
 
     <!-- Budget -->
@@ -651,7 +644,6 @@
         <div class="shortcuts-row"><kbd>D</kbd><span>Go to Daily Review</span></div>
         <div class="shortcuts-row"><kbd>K</kbd><span>Go to Kanban</span></div>
         <div class="shortcuts-row"><kbd>C</kbd><span>Go to Calendar</span></div>
-        <div class="shortcuts-row"><kbd>G</kbd><span>Go to Knowledge Graph</span></div>
       </div>
       <div class="shortcuts-group">
         <div class="shortcuts-group-label">Create</div>
@@ -747,7 +739,6 @@
   import './views/projects.js';                               // V-02: registers 'projects' view
   import './views/settings.js';                               // V-03: registers 'settings' view
   import './views/generic-list.js';                            // V-04: registers 6 generic list views
-  import './views/graph-view.js';                            // CS-06: graph view with context chips
   import './views/entity-type.js';                           // 2-A: generic entity type view (Collections)
   import './views/object-studio.js';                         // 2-B: Capacities-style Object Studio
   import './views/stub-views.js';                             // registers placeholder views
@@ -777,6 +768,7 @@
   import { historyServiceDescriptor }     from './services/history.js';      // P-10
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
+  import { runWeeklyProjectDigest }               from './views/projects.js'; // [F4] Weekly Project Digest
   import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
   // [v5.3.1] Reminder system
   import { initReminderService,
@@ -875,7 +867,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '5.5.1'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '5.7.0'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
@@ -1021,6 +1013,8 @@
       initRecurrenceService(); // [v5.3.1] recurring task ghost-instance scheduler
       mountAlertDrawer();    // [v5.3.1] alert drawer component
       initAutoRulesEngine(); // [v5.3.1] auto-rules engine — triggers reminders on entity events
+      // [F4] Weekly Project Digest — runs max once per 6 days (Sunday evening trigger)
+      setTimeout(() => { try { runWeeklyProjectDigest(); } catch(e) { console.warn('[digest]', e); } }, 3000);
 
       // [v5.3.1] NEW-C-05 fix: Deep-link handler for push notification taps
       // SW notificationclick opens /?open=TYPE:ID when no window is open
@@ -1209,7 +1203,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=5.5.1', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=5.7.0', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);

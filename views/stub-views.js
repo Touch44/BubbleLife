@@ -5,7 +5,7 @@
  * Each stub shows a friendly "coming soon" state with the view name.
  *
  * Views covered:
- *   family-matters, notes, projects, graph, budget, recipes,
+ *   family-matters, notes, projects, budget, recipes,
  *   documents, contacts, gallery, settings, entity-type
  */
 
@@ -14,7 +14,7 @@ import { createViewSwitcher } from '../components/view-switcher.js';
 
 /** Views that are already implemented — skip stubbing these */
 const IMPLEMENTED = new Set(['daily', 'kanban', 'calendar', 'activity-center', 'notes', 'projects', 'settings',
-  'budget', 'recipes', 'documents', 'contacts', 'gallery', 'family-matters', 'graph', 'entity-type',
+  'budget', 'recipes', 'documents', 'contacts', 'gallery', 'family-matters', 'entity-type',
   'object-studio', 'dashboard']);
 
 /**
@@ -24,7 +24,6 @@ const VIEW_NAMES = {
   'family-matters': 'Family Matters',
   'notes':          'Notes',
   'projects':       'Projects',
-  'graph':          'Knowledge Graph',
   'budget':         'Budget',
   'recipes':        'Recipes',
   'documents':      'Documents',
@@ -41,7 +40,6 @@ const VIEW_ICONS = {
   'family-matters': '⌂',
   'notes':          '≡',
   'projects':       '📁',
-  'graph':          '🔮',
   'budget':         '💰',
   'recipes':        '🍽️',
   'documents':      '📄',

@@ -3361,7 +3361,7 @@ async function _buildRelationsTab(container) {
             dd.remove();
             openQuickCreateModal('project', { name: q || '' }, async np => {
               if (!np) return;
-              await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'part of' }, getAccount()?.id);
+              await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: np.id, toType: 'project', relation: 'project' }, getAccount()?.id); // [B-03 fix]
               toast.success(`Added to ${np.name || 'project'}`);
             });
           });
@@ -3373,7 +3373,7 @@ async function _buildRelationsTab(container) {
             row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-2)');
             row.addEventListener('mouseleave', () => row.style.background = '');
             row.addEventListener('click', async () => {
-              await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'part of' }, getAccount()?.id);
+              await saveEdge({ fromId: _editEntity.id, fromType: _editEntity.type, toId: proj.id, toType: 'project', relation: 'project' }, getAccount()?.id); // [B-03 fix]
               dd.remove();
               toast.success(`Added to ${proj.name || 'project'}`);
             });

@@ -28,7 +28,7 @@ define('DB_PASS', 'your_db_password');   // replace with Hostinger DB password
 define('DB_CHARSET', 'utf8mb4');
 
 // Max entities returned in a single pull (pagination safety)
-define('PULL_LIMIT', 500);
+define('PULL_LIMIT', 5000); // [N-10 fix] raised from 500 to prevent silent data loss on full sync
 
 // ── CORS / Headers ──────────────────────────────────────────────
 header('Content-Type: application/json; charset=utf-8');
@@ -310,7 +310,7 @@ function fh_action_pull(array $session, array $body): void {
         $stmt->execute([$family_id, $since_dt]);
     } else {
         $stmt = $pdo->prepare(
-            'SELECT data FROM fh_entities WHERE family_id = ? LIMIT ' . PULL_LIMIT
+            'SELECT data FROM fh_entities WHERE family_id = ? AND deleted = 0 ORDER BY updated_at DESC LIMIT ' . PULL_LIMIT
         );
         $stmt->execute([$family_id]);
     }
@@ -345,11 +345,17 @@ function fh_action_pull(array $session, array $body): void {
         ];
     }
 
+    // [N-10 fix] Warn if result hit PULL_LIMIT — may be truncated
+    $truncated = count($entities) >= PULL_LIMIT || count($edges) >= PULL_LIMIT;
+    if ($truncated) {
+        error_log('[fh-sync] WARNING: pull hit PULL_LIMIT (' . PULL_LIMIT . '). Increase limit or add cursor pagination.');
+    }
     echo json_encode([
         'ok'            => true,
         'entities'      => $entities,
         'edges'         => $edges,
         'server_time_ms'=> (int)(microtime(true) * 1000),
+        '_truncated'    => $truncated,
     ]);
 }
 

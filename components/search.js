@@ -431,8 +431,6 @@ const COMMANDS = [
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.KANBAN); } },
   { label:'Calendar',       detail:'Go to Calendar',         icon:'📅',  keys:['calendar','events'],
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.CALENDAR); } },
-  { label:'Knowledge Graph',detail:'Go to Knowledge Graph',  icon:'🕸️', keys:['graph','knowledge'],
-    action:()=>{ closeSearch(); navigate(VIEW_KEYS.GRAPH); } },
   { label:'Activity Wall',  detail:'Go to Activity Wall',    icon:'🏡',  keys:['family','wall','activity','post'],
     action:()=>{ closeSearch(); navigate(VIEW_KEYS.ACTIVITY_CENTER); } },
   { label:'Settings',       detail:'Open Settings',          icon:'⚙️', keys:['settings','prefs'],

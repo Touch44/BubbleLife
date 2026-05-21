@@ -225,11 +225,12 @@ export async function saveCustomObjectType(config) {
   };
 
   const toSave = {
-    // Defaults
+    // Defaults — every user-created type gets full action support including graph
     icon:              '📎',
     color:             '#6366f1',
     defaultView:       'list',
     graphVisible:      true,
+    actions:           ['create', 'edit', 'delete', 'duplicate', 'relate'],
     fields:            [titleField],
     defaultSort:       '-createdAt',
     dashboardSections: ['recentlyOpened', 'allObjects'],

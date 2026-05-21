@@ -65,6 +65,7 @@ let _options = {};
 const EDGE_COLORS = {
   'assigned to':    '#4f8ef7',
   'part of':        '#10b981',
+  'project':         '#10b981', // [fix] same color as 'part of' for edge-stored task→project links
   'blocked by':     '#ef4444',
   'attended by':    '#a855f7',
   'belongs to':     '#f97316',

@@ -4,15 +4,15 @@
  */
 'use strict';
 
-const APP_VERSION   = '5.5.1'; // [v5.5.1] Migration: fix stale taskInstance dueDate for existing instances
+const APP_VERSION   = '5.7.0'; // [v5.7.0] Remove sidebar graph nav; entity graph button on all types; user-type actions
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
 
 const SHELL_FILES = [
-  './', './index.html', './manifest.json?v=5.5.1', // 3P-L-02: version-bust manifest
-  './styles/tokens.css?v=5.5.1', './styles/layout.css?v=5.5.1',
-  './styles/components.css?v=5.5.1', './styles/dark.css?v=5.5.1',
+  './', './index.html', `./manifest.json?v=${APP_VERSION}`, // 3P-L-02: version-bust manifest
+  `./styles/tokens.css?v=${APP_VERSION}`, `./styles/layout.css?v=${APP_VERSION}`,
+  `./styles/components.css?v=${APP_VERSION}`, `./styles/dark.css?v=${APP_VERSION}`,
   './core/registry.js', './core/env.js', './core/utils.js', './core/errors.js',
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
@@ -34,7 +34,7 @@ const SHELL_FILES = [
   './views/notes.js', './views/projects.js', './views/messages.js', './views/settings.js',
   './views/generic-list.js',
   './views/dashboard.js',
-  './views/entity-type.js', './views/graph-view.js', './views/object-studio.js',
+  './views/entity-type.js', './views/object-studio.js',
   // [v5.0.0] Reminder system files
   './views/reminders.js',
   './services/reminder.js', './services/rrule-lite.js', './services/condition-eval.js',

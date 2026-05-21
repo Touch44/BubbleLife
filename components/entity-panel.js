@@ -289,6 +289,16 @@ export function initEntityPanel() {
     }, 80);
   });
 
+  // [F-graph] Open graph view for an entity (used by daily.js graph button and others)
+  // _openGraphView internally calls openPanel after setting _graphViewActive=true,
+  // so no pre-call to openPanel is needed — it avoids a redundant double-render.
+  on('panel:openGraphForEntity', ({ entityId } = {}) => {
+    if (!entityId) return;
+    _openGraphView(entityId).catch(err => {
+      console.error('[entity-panel] panel:openGraphForEntity failed:', err);
+    });
+  });
+
   // If user navigates away via sidebar/breadcrumbs while graph is open, clean up
   on(EVENTS.VIEW_CHANGED, ({ viewKey } = {}) => {
     if (_graphViewActive && viewKey !== 'graph') {
@@ -587,11 +597,24 @@ function _getCorrectDatesForEntity(entity) {
  * @param {string} entityId
  * @param {string} [entityTypeHint] - fallback type key if entity.type is corrupted
  */
+// [N-01] Concurrent openPanel guard — prevents stale entity from slower first call
+// overwriting _entity when a second call resolves first.
+let _loadingEntityId = null;
+
 export async function openPanel(entityId, entityTypeHint) {
   if (!_panel || !_panelBody) return;
 
+  // [N-01 fix] Track which entityId is currently being loaded.
+  // If a new call arrives before the previous one resolves, the first call's
+  // result is discarded.
+  const myLoadId = entityId;
+  _loadingEntityId = myLoadId;
+
   try {
     const entity = await getEntity(entityId);
+    // [N-01 fix] If another openPanel() was called while we were awaiting IDB,
+    // this result is stale — discard it.
+    if (_loadingEntityId !== myLoadId) return;
     if (!entity || entity.deleted) {
       console.warn(`[entity-panel] Entity "${entityId}" not found.`);
       // Show friendly message in panel instead of silent failure
@@ -1198,7 +1221,7 @@ async function _showProjectPicker() {
             fromType: _entity.type,
             toId:     proj.id,
             toType:   'project',
-            relation: 'part of',
+            relation: 'project', // [B-02 fix] match 'project' relation queried by _buildProjectTaskEdgeMap
           }, getAccount()?.id);
           dropdown.remove();
           _renderActiveTab();

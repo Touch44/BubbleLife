@@ -19,6 +19,8 @@ import { registerView }                         from '../core/router.js';
 import { getEntitiesByType, getEdgesFrom, getEdgesTo,
          getEntity, saveEntity, getSetting, setSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }                      from '../core/events.js';
+// [F3] Focus Mode integration
+import { getFocusProjectId }                     from './projects.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
 import { filterByContext, getActiveContext }      from '../core/context.js';
@@ -327,12 +329,15 @@ function _applyFilters(tasks) {
   // Cache scheduled boundaries once for the whole filter pass (avoid repeated new Date() calls)
   const _scheduledFilterBoundaries = (_filterScheduledRange && _filterTab === 'scheduled')
     ? _getScheduledBoundaries() : null;
+  // [F3] Focus Mode: if a project is focused, use it as an implicit project filter
+  const _focusProjectId = (() => { try { return getFocusProjectId(); } catch { return null; } })();
+  const _effectiveProjectFilter = _filterProject || _focusProjectId || null;
   return tasks.filter(t => {
-    if (_filterProject) {
+    if (_effectiveProjectFilter) {
       // [N03 fix] For instances, fall back to template's project
       const resolvedProj = t.project || _taskProjectMap.get(t.id)
         || (t._isInstance ? (t._template?.project || _taskProjectMap.get(t._template?.id)) : null);
-      if (resolvedProj !== _filterProject) return false;
+      if (resolvedProj !== _effectiveProjectFilter) return false;
     }
     if (_filterAssignees.size > 0) {
       // [N04 fix] For instances, fall back to template's assignedTo
@@ -1176,7 +1181,8 @@ function _rerenderColumns() {
   const filtered = _applyFilters(_tabFiltered);
 
   // Show a friendly empty state banner when filters yield no results
-  const anyFilter = _filterProject || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue || _filterScheduledRange; // B06 fix
+  const _focusProjId = (() => { try { return getFocusProjectId(); } catch { return null; } })();
+  const anyFilter = _filterProject || _focusProjId || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue || _filterScheduledRange; // B06 fix [F3] focus
   if (anyFilter && filtered.length === 0) {
     const banner = document.createElement('div');
     banner.style.cssText = [
@@ -1762,7 +1768,7 @@ function _buildQuickAdd(statusKey) {
         title,
         status:   statusKey,
         priority: 'Medium',
-        context:  (!ctx || ctx === 'all') ? 'personal' : ctx,
+        context:  (!ctx || ctx === 'all') ? 'family' : ctx, // [N-05 fix] family default in 'all' context (not personal)
         // BUG-10/B18 fix: auto-set dueDate based on active tab and range filter
         ...(_getQuickAddDueDate()),
       }, account?.id);
@@ -3028,6 +3034,13 @@ on(EVENTS.ENTITY_SAVED, ({ entity, _streakUpdate } = {}) => {
   if (entity && !KANBAN_REFRESH_TYPES.has(entity.type)) return;
   if (_streakUpdate) return; // [N07 fix] streak-only template update from completeInstance
   _scheduleKanbanRefresh();
+});
+
+// [B-10 fix] Re-render kanban when focus project changes
+on('projects:focusChanged', () => {
+  if (document.getElementById('view-kanban')?.classList.contains('active')) {
+    _scheduleKanbanRefresh();
+  }
 });
 
 on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {

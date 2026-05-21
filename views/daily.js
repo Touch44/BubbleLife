@@ -30,6 +30,8 @@ import { openForm }                             from '../components/entity-form.
 import { getAccount }                      from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                            from '../core/toast.js';
+// [F3] Focus Mode integration
+import { getFocusProjectId }               from './projects.js';
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -53,6 +55,7 @@ const SECTION_DEFAULTS = {
 };
 
 // ── Module state ──────────────────────────────────────────── //
+let _lastTaskProjectEdgeMap = new Map(); // [F3 fix] cached for _sortTasks focus sort
 
 /** Currently viewed date as a Date object (local midnight) */
 let _currentDate = _todayLocal();
@@ -220,6 +223,7 @@ async function _loadData(dateStr) {
       Promise.all(needAssignee.map(t => getEdgesFrom(t.id, 'assignedTo').catch(() => []))),
     ]);
     needProject.forEach((t, i)  => { if (projRes[i].length   > 0) taskProjectEdgeMap.set(t.id,  projRes[i][0].toId); });
+  _lastTaskProjectEdgeMap = taskProjectEdgeMap; // [F3 fix] cache for focus sort
     needAssignee.forEach((t, i) => { if (assignRes[i].length  > 0) taskAssigneeEdgeMap.set(t.id, assignRes[i][0].toId); });
   }
 
@@ -269,16 +273,29 @@ function _filterTasks(tasks, dateStr) {
 
 /**
  * Sort tasks: overdue first (red), then today's, then by priority descending.
+ * [F3] Focus Mode: focused project tasks float to the top of each section.
  * REVIEW 3: priority sort uses PRIORITY_ORDER map; unknown priorities fall to 99
  *           so they sort last rather than crashing.
  */
 function _sortTasks(tasks, dateStr) {
+  // [F3] Get focus project id safely (module may not be loaded yet)
+  let focusId = null;
+  try { focusId = getFocusProjectId(); } catch { /* not available */ }
+
   return [...tasks].sort((a, b) => {
     const aExec = _getTaskExecDate(a) || '';
     const bExec = _getTaskExecDate(b) || '';
     const aOverdue = aExec < dateStr ? 0 : 1;
     const bOverdue = bExec < dateStr ? 0 : 1;
     if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+    // [F3] Focus mode: focused project tasks rise within their overdue/today bucket
+    if (focusId) {
+      const aProjId = a.project || _lastTaskProjectEdgeMap.get(a.id) || null;
+      const bProjId = b.project || _lastTaskProjectEdgeMap.get(b.id) || null;
+      const aFocused = (aProjId === focusId) ? 0 : 1;
+      const bFocused = (bProjId === focusId) ? 0 : 1;
+      if (aFocused !== bFocused) return aFocused - bFocused;
+    }
     const aPrio = PRIORITY_ORDER[a.priority] ?? 99;
     const bPrio = PRIORITY_ORDER[b.priority] ?? 99;
     return aPrio - bPrio;
@@ -735,15 +752,12 @@ function _buildTopBar(container, dateStr) {
   });
 
   // [MAJOR] Graph button — opens Knowledge Graph focused on today's Daily Review entity
+  // Uses entity-panel graph mode (not sidebar graph view which has been removed)
   bar.querySelector('.daily-graph-btn').addEventListener('click', async () => {
     const dateStr = _toDateStr(_currentDate);
     const dr = await _getOrCreateDailyReview(dateStr);
     if (dr?.id) {
-      // Navigate to graph view with this daily review as the focus entity
-      import('../core/router.js').then(({ navigate, VIEW_KEYS }) => {
-        navigate(VIEW_KEYS.GRAPH || 'graph', { focusEntityId: dr.id },
-          `Graph — Daily Review ${dateStr}`);
-      });
+      emit('panel:openGraphForEntity', { entityId: dr.id });
     }
   });
 
@@ -2836,6 +2850,13 @@ on(EVENTS.RECURRENCE_SERIES_STOPPED, () => {
     const viewEl = document.getElementById('view-daily');
     if (viewEl && viewEl.classList.contains('active')) renderDaily({ _internal: true });
   }, 200);
+});
+
+// [B-10 fix] Re-render daily when focus project changes (sorts focused tasks to top)
+on('projects:focusChanged', () => {
+  if (document.getElementById('view-daily')?.classList.contains('active')) {
+    renderDaily({ _internal: true });
+  }
 });
 
 // CS-04: Re-render daily view when context changes

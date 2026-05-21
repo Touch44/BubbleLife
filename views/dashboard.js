@@ -33,6 +33,8 @@ import { getEntitiesByType, saveEntity,
 import { on, emit, EVENTS }                   from '../core/events.js';
 import { getActiveContext, filterByContext }  from '../core/context.js';
 import { getAccount }                         from '../core/auth.js';
+// [F3] Focus Mode + [F1] Health Score integration
+import { getFocusProjectId, clearFocusProject } from './projects.js';
 import { openForm }                           from '../components/entity-form.js';
 // [fix] Stubs replaced at runtime by dynamic import in renderDashboard() — 
 // prevents module crash if time-tracker.js not yet deployed on server.
@@ -1265,25 +1267,67 @@ function _populateProjectsWidget(el, projects) {
   if (!list) return;
 
   const active = projects.filter(p => p.status !== 'Complete' && p.status !== 'Archived');
-  const show   = active.slice(0, 4);
+
+  // [F3] Focus Mode: put focused project first
+  let focusId = null;
+  try { focusId = getFocusProjectId(); } catch { /* not available */ }
+  let sorted = [...active];
+  if (focusId) {
+    const fi = sorted.findIndex(p => p.id === focusId);
+    if (fi > 0) { const [fp] = sorted.splice(fi, 1); sorted.unshift(fp); }
+  }
+  const show = sorted.slice(0, 5);
 
   if (show.length === 0) {
     list.innerHTML = `<div class="dash-widget-empty">No active projects.</div>`;
     return;
   }
 
+  function _quickHealthColor(p) {
+    if (p.status === 'On Hold') return '#d97706';
+    if (!p.deadline) return 'var(--color-accent)';
+    const today = new Date(); today.setHours(0,0,0,0);
+    const deadline = new Date(p.deadline + 'T00:00:00');
+    const daysLeft = Math.ceil((deadline - today) / 86400000);
+    if (daysLeft < 0) return '#dc2626';
+    if (daysLeft < 7) return '#d97706';
+    return '#16a34a';
+  }
+
   list.innerHTML = show.map(p => {
-    const statusColor = p.status === 'On Hold' ? 'var(--color-warning-text)' : 'var(--color-accent)';
+    const isFocused = p.id === focusId;
+    const hColor = _quickHealthColor(p);
     return `
-      <div class="dash-widget-row" data-proj-id="${_esc(p.id)}">
-        <span class="dash-widget-row-label">📁 ${_esc(_trunc(p.name || 'Untitled', 30))}</span>
-        <span class="dash-widget-row-badge" style="color:${statusColor}">${_esc(p.status || 'Active')}</span>
+      <div class="dash-widget-row" data-proj-id="${_esc(p.id)}" style="${isFocused ? 'background:var(--color-accent)11;border-radius:var(--radius-sm);' : ''}">
+        <span class="dash-widget-row-label">${isFocused ? '🎯 ' : '📁 '}${_esc(_trunc(p.name || 'Untitled', 28))}</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${hColor};display:inline-block;" title="${_esc(p.status)}"></span>
+          <span class="dash-widget-row-badge" style="color:${hColor}">${_esc(p.status || 'Active')}</span>
+        </span>
       </div>`;
   }).join('');
 
   list.querySelectorAll('.dash-widget-row').forEach(row => {
     row.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityId: row.dataset.projId }));
   });
+
+  // [F3] Show Exit Focus button if a project is focused
+  if (focusId) {
+    const exitFocusEl = el.querySelector('#dash-exit-focus');
+    if (!exitFocusEl) {
+      const exitBtn = document.createElement('button');
+      exitBtn.id = 'dash-exit-focus';
+      exitBtn.style.cssText = 'margin-top:6px;padding:3px 10px;font-size:10px;border:1px solid var(--color-accent);border-radius:var(--radius-full);background:none;color:var(--color-accent);cursor:pointer;width:100%;';
+      exitBtn.textContent = '✕ Exit Focus Mode';
+      exitBtn.addEventListener('click', () => {
+        try { clearFocusProject(); } catch(e) { console.warn('[dash] clear focus:', e); }
+      });
+      list.insertAdjacentElement('afterend', exitBtn);
+    }
+  } else {
+    const existingBtn = el.querySelector('#dash-exit-focus');
+    if (existingBtn) existingBtn.remove();
+  }
 }
 
 function _populateDatesWidget(el, dateEntities, persons) {

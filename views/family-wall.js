@@ -1426,7 +1426,9 @@ async function renderWall(params={}) {
     if (_viewMode==='timeline') {
       await _buildTimeline(el, filterByContext(posts), persons, pm, apm);
     } else {
-      const filtered = _filterFeed(feed);
+      // [N-02 fix] Soft cap: render at most 200 items to prevent DOM OOM with large feeds
+      const FEED_RENDER_LIMIT = 200;
+      const filtered = _filterFeed(feed).slice(-FEED_RENDER_LIMIT); // newest N items
       if (!filtered.length) {
         const empty=document.createElement('div'); empty.className='fw-empty';
         if (_filterPostType === 'Activities') {
