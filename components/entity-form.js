@@ -49,6 +49,10 @@ let _activeFormTab = 'fields';
 
 /** True while _submitForm is in-flight — prevents ENTITY_SAVED re-entering the form */
 let _formIsSaving = false;
+/** Form tab bodies — promoted to module scope so _refreshFormTabs can access them */
+let _tab2Body = null;  // Activity tab
+let _tab3Body = null;  // Connections tab
+let _tab4Body = null;  // Reminders tab
 
 /** Cleanup fns for form-lifetime event subscriptions — called in closeForm */
 let _formEventUnsubs = [];
@@ -156,6 +160,16 @@ export function openForm(typeKey, prefill = {}, onSave = null) {
 
   _relationValues.clear();
   _tagValues.clear();
+
+  // Apply field-level defaultValues for new entities (not edits)
+  // This sets sensible defaults (e.g. project status=Active) without overriding explicit prefill
+  if (!_editEntity) {
+    for (const f of config.fields) {
+      if (f.defaultValue !== undefined && _draft[f.key] === undefined) {
+        _draft[f.key] = f.defaultValue;
+      }
+    }
+  }
 
   // Pre-populate relation fields from prefill ID values.
   // When callers pass { project: 'some-id' }, the form should show that relation
@@ -286,6 +300,7 @@ export function closeForm() {
     _onSave     = null;
     _relationValues.clear();
     _tagValues.clear();
+    _tab2Body = null; _tab3Body = null; _tab4Body = null; // [fix] clear so _refreshFormTabs is a no-op when no form
 
     // If a parent form was stacked, restore it
     if (_parentFormStack.length > 0) {
@@ -463,9 +478,10 @@ function _buildAndMount(config) {
   // ── Tab strip ─────────────────────────────────────────── //
   let tabStrip = null;
   let tab1Body = null;
-  let tab2Body = null;
-  let tab3Body = null;
-  let tab4Body = null;
+  // _tab2Body/_tab3Body/_tab4Body are module-level so _refreshFormTabs can reach them
+  _tab2Body = null;
+  _tab3Body = null;
+  _tab4Body = null;
 
   // Show tab strip in both create and edit modes for visual consistency
   tabStrip = document.createElement('div');
@@ -520,9 +536,9 @@ function _buildAndMount(config) {
     _activeFormTab = key;
     _applyTabStyles();
     if (tab1Body) tab1Body.style.display = key === 'fields'    ? 'flex' : 'none';
-    if (tab2Body) tab2Body.style.display = key === 'details'   ? 'flex' : 'none';
-    if (tab3Body) tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
-    if (tab4Body) tab4Body.style.display = key === 'reminders' ? 'flex' : 'none';
+    if (_tab2Body) _tab2Body.style.display = key === 'details'   ? 'flex' : 'none';
+    if (_tab3Body) _tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
+    if (_tab4Body) _tab4Body.style.display = key === 'reminders' ? 'flex' : 'none';
     // Hide footer (Save button) only in EDIT mode on non-fields tabs.
     // In CREATE mode, always show footer so user can save from any tab.
     const footerEl = modal.querySelector('.modal-footer');
@@ -531,19 +547,19 @@ function _buildAndMount(config) {
       footerEl.style.display = hideFooter ? 'none' : '';
     }
     // Lazy-load Tab 2 on first open (or if marked dirty by external save)
-    if (key === 'details' && tab2Body && (!tab2Body.dataset.loaded || tab2Body.dataset.loaded === 'dirty')) {
-      tab2Body.dataset.loaded = '1';
+    if (key === 'details' && _tab2Body && (!_tab2Body.dataset.loaded || _tab2Body.dataset.loaded === 'dirty')) {
+      _tab2Body.dataset.loaded = '1';
       const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
-      _buildDetailsTab(tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
+      _buildDetailsTab(_tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
     }
     // Lazy-load Tab 3 on first open (or if marked dirty)
-    if (key === 'relations' && tab3Body && (!tab3Body.dataset.loaded || tab3Body.dataset.loaded === 'dirty')) {
-      tab3Body.dataset.loaded = '1';
-      _buildRelationsTab(tab3Body);
+    if (key === 'relations' && _tab3Body && (!_tab3Body.dataset.loaded || _tab3Body.dataset.loaded === 'dirty')) {
+      _tab3Body.dataset.loaded = '1';
+      _buildRelationsTab(_tab3Body);
     }
-    if (key === 'reminders' && tab4Body && (!tab4Body.dataset.loaded || tab4Body.dataset.loaded === 'dirty')) {
-      tab4Body.dataset.loaded = '1';
-      _buildRemindersTab(tab4Body);
+    if (key === 'reminders' && _tab4Body && (!_tab4Body.dataset.loaded || _tab4Body.dataset.loaded === 'dirty')) {
+      _tab4Body.dataset.loaded = '1';
+      _buildRemindersTab(_tab4Body);
     }
   };
 
@@ -752,23 +768,23 @@ function _buildAndMount(config) {
   body.appendChild(tab1Body);
 
   // ── Tabs 2–4: always create so switching works in both create and edit mode ──
-  tab2Body = document.createElement('div');
-  tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
-  body.appendChild(tab2Body);
+  _tab2Body = document.createElement('div');
+  _tab2Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
+  body.appendChild(_tab2Body);
 
-  tab3Body = document.createElement('div');
-  tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
-  body.appendChild(tab3Body);
+  _tab3Body = document.createElement('div');
+  _tab3Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
+  body.appendChild(_tab3Body);
 
-  tab4Body = document.createElement('div');
-  tab4Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
-  body.appendChild(tab4Body);
+  _tab4Body = document.createElement('div');
+  _tab4Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; padding: 0;';
+  body.appendChild(_tab4Body);
 
   // Apply initial tab visibility
   tab1Body.style.display = _activeFormTab === 'fields'    ? 'flex' : 'none';
-  tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
-  tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
-  tab4Body.style.display = _activeFormTab === 'reminders' ? 'flex' : 'none';
+  _tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
+  _tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
+  _tab4Body.style.display = _activeFormTab === 'reminders' ? 'flex' : 'none';
 
   // ── Footer ───────────────────────────────────────────── //
   // Single Save button — Cancel is redundant (✕ header, Esc, backdrop click all close).
@@ -3155,8 +3171,8 @@ async function _buildRelationsTab(container) {
   const entity = _editEntity;
 
   // [BUG-29 FIX] Dispatch cleanup on the modal overlay so it reaches the timer widget
-  // in the Activity tab (tab2Body), not just tab3Body. Timer widget listens on ttWrap
-  // which is inside tab2Body — dispatching on tab3Body (container) never reaches it.
+  // in the Activity tab (_tab2Body), not just _tab3Body. Timer widget listens on ttWrap
+  // which is inside _tab2Body — dispatching on _tab3Body (container) never reaches it.
   const _overlayEl = container.closest?.('[data-modal]') || _overlay;
   if (_overlayEl) _overlayEl.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: true }));
   else container.dispatchEvent(new CustomEvent('fh:timerCleanup', { bubbles: false }));
@@ -4551,28 +4567,28 @@ async function _submitForm() {
 function _refreshFormTabs(config, includeDetails = false) {
   if (!_editEntity) return;
   // Activity tab: reset so it re-loads with latest change history
-  if (tab2Body?.dataset.loaded && (includeDetails || tab2Body.dataset.loaded === 'dirty')) {
-    tab2Body.dataset.loaded = '';
+  if (_tab2Body?.dataset.loaded && (includeDetails || _tab2Body.dataset.loaded === 'dirty')) {
+    _tab2Body.dataset.loaded = '';
     if (_activeFormTab === 'details') {
       const freshConfig = getEntityTypeConfig(_editEntity.type) || config;
-      _buildDetailsTab(tab2Body, freshConfig).catch(e => console.warn('[entity-form] Activity refresh:', e));
+      _buildDetailsTab(_tab2Body, freshConfig).catch(e => console.warn('[entity-form] Activity refresh:', e));
     }
-  } else if (tab2Body?.dataset.loaded) {
+  } else if (_tab2Body?.dataset.loaded) {
     // Mark dirty so it reloads next time it becomes active
-    tab2Body.dataset.loaded = 'dirty';
+    _tab2Body.dataset.loaded = 'dirty';
   }
   // Connections tab
-  if (tab3Body?.dataset.loaded) {
-    tab3Body.dataset.loaded = '';
+  if (_tab3Body?.dataset.loaded) {
+    _tab3Body.dataset.loaded = '';
     if (_activeFormTab === 'relations') {
-      _buildRelationsTab(tab3Body);
+      _buildRelationsTab(_tab3Body);
     }
   }
   // Reminders tab
-  if (tab4Body?.dataset.loaded) {
-    tab4Body.dataset.loaded = '';
+  if (_tab4Body?.dataset.loaded) {
+    _tab4Body.dataset.loaded = '';
     if (_activeFormTab === 'reminders') {
-      _buildRemindersTab(tab4Body);
+      _buildRemindersTab(_tab4Body);
     }
   }
   // Update modal header title if entity title changed

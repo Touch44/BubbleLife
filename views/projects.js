@@ -19,7 +19,7 @@
  */
 
 import { registerView } from '../core/router.js';
-import { getEntitiesByType, getEdgesTo, getEdgesFrom, saveEntity } from '../core/db.js';
+import { getEntitiesByType, getEdgesTo, getEdgesFrom, saveEntity, saveEdge, getSetting, setSetting } from '../core/db.js';
 import { emit, on, EVENTS } from '../core/events.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { openForm } from '../components/entity-form.js';
@@ -294,6 +294,366 @@ const BUILT_IN_TEMPLATES = [
   },
 ];
 
+
+// ── [F2+] Template Editor View ──────────────────────────────
+
+const TEMPLATE_IDB_KEY = 'fh_project_templates_v1';
+
+async function _loadUserTemplates() {
+  try {
+    const raw = await getSetting(TEMPLATE_IDB_KEY).catch(() => null);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+async function _saveUserTemplates(templates) {
+  try {
+    await setSetting(TEMPLATE_IDB_KEY, JSON.stringify(templates));
+  } catch (e) { console.error('[projects] saveUserTemplates:', e); }
+}
+
+function _uid() {
+  return 'tpl-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+async function _renderTemplatesView(el) {
+  const userTemplates = await _loadUserTemplates();
+
+  // Render the template manager UI
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;height:100%;overflow:hidden;';
+
+  // ── Left panel: template list ──────────────────────────────
+  const sidebar = document.createElement('div');
+  sidebar.style.cssText = `
+    width:260px;flex-shrink:0;border-right:1px solid var(--color-border);
+    display:flex;flex-direction:column;overflow:hidden;
+  `;
+
+  const sideHeader = document.createElement('div');
+  sideHeader.style.cssText = 'padding:var(--space-4);border-bottom:1px solid var(--color-border);display:flex;align-items:center;justify-content:space-between;';
+  sideHeader.innerHTML = `
+    <span style="font-weight:var(--weight-semibold);font-size:var(--text-sm);">Templates</span>
+  `;
+  const newTplBtn = document.createElement('button');
+  newTplBtn.textContent = '+ New';
+  newTplBtn.style.cssText = 'padding:4px 10px;font-size:var(--text-xs);font-weight:var(--weight-semibold);background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;';
+  sideHeader.appendChild(newTplBtn);
+  sidebar.appendChild(sideHeader);
+
+  const tplList = document.createElement('div');
+  tplList.style.cssText = 'flex:1;overflow-y:auto;padding:var(--space-2);';
+  sidebar.appendChild(tplList);
+
+  // ── Right panel: template editor ──────────────────────────
+  const editor = document.createElement('div');
+  editor.style.cssText = 'flex:1;overflow-y:auto;padding:var(--space-5);';
+
+  wrap.appendChild(sidebar);
+  wrap.appendChild(editor);
+  el.appendChild(wrap);
+
+  let _selectedTplId = null;
+
+  function _renderList() {
+    tplList.innerHTML = '';
+
+    // Built-in section
+    const biLabel = document.createElement('div');
+    biLabel.style.cssText = 'font-size:10px;font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;padding:var(--space-2) var(--space-1);';
+    biLabel.textContent = 'Built-in';
+    tplList.appendChild(biLabel);
+
+    for (const tpl of BUILT_IN_TEMPLATES) {
+      const row = _makeTplRow(tpl, false);
+      tplList.appendChild(row);
+    }
+
+    if (userTemplates.length > 0) {
+      const myLabel = document.createElement('div');
+      myLabel.style.cssText = 'font-size:10px;font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;padding:var(--space-2) var(--space-1);margin-top:var(--space-2);';
+      myLabel.textContent = 'My Templates';
+      tplList.appendChild(myLabel);
+      for (const tpl of userTemplates) {
+        const row = _makeTplRow(tpl, true);
+        tplList.appendChild(row);
+      }
+    }
+  }
+
+  function _makeTplRow(tpl, isEditable) {
+    const row = document.createElement('button');
+    row.style.cssText = `
+      display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-2);
+      border-radius:var(--radius-sm);border:none;width:100%;text-align:left;cursor:pointer;
+      background:${_selectedTplId === tpl.id ? 'var(--color-accent)' : 'transparent'};
+      color:${_selectedTplId === tpl.id ? '#fff' : 'var(--color-text)'};
+      font-size:var(--text-xs);transition:background 0.12s;
+    `;
+    row.innerHTML = `
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(tpl.name)}</span>
+      ${isEditable ? '' : '<span style="opacity:0.5;font-size:9px;">built-in</span>'}
+    `;
+    row.addEventListener('click', () => {
+      _selectedTplId = tpl.id;
+      _renderList();
+      _renderEditor(tpl, isEditable);
+    });
+    return row;
+  }
+
+  function _renderEditor(tpl, isEditable) {
+    editor.innerHTML = '';
+
+    const isNew = !tpl.id;
+    const title = document.createElement('div');
+    title.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);';
+    title.innerHTML = `<span style="font-weight:var(--weight-bold);font-size:var(--text-base);">${isEditable ? (isNew ? '✨ New Template' : '✏️ Edit Template') : '👁 Preview: ' + _esc(tpl.name)}</span>`;
+
+    if (isEditable && !isNew) {
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '🗑 Delete';
+      delBtn.style.cssText = 'font-size:var(--text-xs);color:var(--color-danger);background:none;border:1px solid var(--color-danger);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;';
+      delBtn.addEventListener('click', async () => {
+        if (!window.confirm('Delete this template?')) return;
+        const idx = userTemplates.findIndex(t => t.id === tpl.id);
+        if (idx >= 0) userTemplates.splice(idx, 1);
+        await _saveUserTemplates(userTemplates);
+        _selectedTplId = null;
+        editor.innerHTML = '<div style="padding:var(--space-8);text-align:center;color:var(--color-text-muted);">Select a template to view or edit it.</div>';
+        _renderList();
+      });
+      title.appendChild(delBtn);
+    }
+
+    editor.appendChild(title);
+
+    // ── Template meta fields ──────────────────────────────────
+    const meta = document.createElement('div');
+    meta.style.cssText = 'display:flex;flex-direction:column;gap:var(--space-3);margin-bottom:var(--space-5);';
+
+    const mkField = (labelText, val, key, type = 'text') => {
+      const wrap = document.createElement('div');
+      const lbl = document.createElement('label');
+      lbl.textContent = labelText;
+      lbl.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);display:block;margin-bottom:4px;';
+      wrap.appendChild(lbl);
+      const inp = document.createElement('input');
+      inp.type = type;
+      inp.value = val || '';
+      inp.readOnly = !isEditable;
+      inp.style.cssText = `width:100%;padding:7px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:var(--text-sm);background:${isEditable ? 'var(--color-bg)' : 'var(--color-surface)'};color:var(--color-text);`;
+      inp.dataset.key = key;
+      wrap.appendChild(inp);
+      meta.appendChild(wrap);
+      return inp;
+    };
+
+    const nameInp = mkField('Template Name', tpl.name, 'name');
+    const goalInp = mkField('Default Goal', tpl.goal, 'goal');
+
+    // Completion Mode default
+    const modeWrap = document.createElement('div');
+    const modeLbl = document.createElement('label');
+    modeLbl.textContent = 'Default Task Mode';
+    modeLbl.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);display:block;margin-bottom:4px;';
+    modeWrap.appendChild(modeLbl);
+    const modeSelect = document.createElement('select');
+    modeSelect.style.cssText = 'width:100%;padding:7px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:var(--text-sm);background:var(--color-bg);color:var(--color-text);';
+    modeSelect.disabled = !isEditable;
+    ['Parallel','Sequential'].forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      if ((tpl.completionMode || 'Parallel') === m) opt.selected = true;
+      modeSelect.appendChild(opt);
+    });
+    modeWrap.appendChild(modeSelect);
+    meta.appendChild(modeWrap);
+
+    editor.appendChild(meta);
+
+    // ── Task list ─────────────────────────────────────────────
+    const taskHdr = document.createElement('div');
+    taskHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);';
+    taskHdr.innerHTML = `<span style="font-weight:var(--weight-semibold);font-size:var(--text-sm);">📋 Tasks (${(tpl.tasks||[]).length})</span>`;
+
+    const tasks = tpl.tasks ? [...tpl.tasks] : [];
+
+    if (isEditable) {
+      const addTaskBtn = document.createElement('button');
+      addTaskBtn.textContent = '+ Add Task';
+      addTaskBtn.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);background:var(--color-accent);color:#fff;border:none;padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;';
+      addTaskBtn.addEventListener('click', () => {
+        tasks.push({ title: '', daysOffset: 0, priority: 'Medium' });
+        _renderTaskList();
+      });
+      taskHdr.appendChild(addTaskBtn);
+    }
+    editor.appendChild(taskHdr);
+
+    const taskListEl = document.createElement('div');
+    taskListEl.style.cssText = 'display:flex;flex-direction:column;gap:var(--space-2);margin-bottom:var(--space-5);';
+    editor.appendChild(taskListEl);
+
+    function _renderTaskList() {
+      taskListEl.innerHTML = '';
+      if (tasks.length === 0) {
+        taskListEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--color-text-muted);padding:var(--space-2);">No tasks yet.</div>';
+        return;
+      }
+      tasks.forEach((task, idx) => {
+        const row = document.createElement('div');
+        row.style.cssText = `
+          display:grid;gap:var(--space-2);
+          grid-template-columns:1fr 80px 90px ${isEditable ? '28px' : ''};
+          align-items:center;padding:var(--space-2) var(--space-2);
+          background:var(--color-surface);border-radius:var(--radius-sm);
+          border:1px solid var(--color-border);
+        `;
+
+        // Title input
+        const titleInp = document.createElement('input');
+        titleInp.type = 'text';
+        titleInp.value = task.title || '';
+        titleInp.placeholder = 'Task title';
+        titleInp.readOnly = !isEditable;
+        titleInp.style.cssText = 'width:100%;border:none;background:transparent;font-size:var(--text-xs);color:var(--color-text);padding:2px 4px;';
+        titleInp.addEventListener('input', () => { tasks[idx].title = titleInp.value; });
+
+        // Days offset
+        const offsetWrap = document.createElement('div');
+        offsetWrap.style.cssText = 'display:flex;align-items:center;gap:4px;';
+        const offsetLbl = document.createElement('span');
+        offsetLbl.style.cssText = 'font-size:9px;color:var(--color-text-muted);white-space:nowrap;';
+        offsetLbl.textContent = 'days';
+        const offsetInp = document.createElement('input');
+        offsetInp.type = 'number';
+        offsetInp.value = task.daysOffset || 0;
+        offsetInp.readOnly = !isEditable;
+        offsetInp.style.cssText = 'width:48px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:var(--text-xs);padding:2px 4px;background:var(--color-bg);color:var(--color-text);';
+        offsetInp.title = 'Days from deadline (negative = before)';
+        offsetInp.addEventListener('input', () => { tasks[idx].daysOffset = parseInt(offsetInp.value) || 0; });
+        offsetWrap.appendChild(offsetInp);
+        offsetWrap.appendChild(offsetLbl);
+
+        // Priority
+        const prioSelect = document.createElement('select');
+        prioSelect.style.cssText = 'font-size:var(--text-xs);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:2px 4px;background:var(--color-bg);color:var(--color-text);';
+        prioSelect.disabled = !isEditable;
+        ['Critical','High','Medium','Low'].forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p; opt.textContent = p;
+          if (task.priority === p) opt.selected = true;
+          prioSelect.appendChild(opt);
+        });
+        prioSelect.addEventListener('change', () => { tasks[idx].priority = prioSelect.value; });
+
+        row.appendChild(titleInp);
+        row.appendChild(offsetWrap);
+        row.appendChild(prioSelect);
+
+        if (isEditable) {
+          const delBtn = document.createElement('button');
+          delBtn.textContent = '×';
+          delBtn.style.cssText = 'background:none;border:none;color:var(--color-danger);cursor:pointer;font-size:1.1em;font-weight:var(--weight-bold);padding:0;';
+          delBtn.addEventListener('click', () => { tasks.splice(idx, 1); _renderTaskList(); });
+          row.appendChild(delBtn);
+        }
+
+        taskListEl.appendChild(row);
+      });
+
+      // Column headers (only when tasks exist)
+      if (tasks.length > 0 && !taskListEl.querySelector('.tpl-task-hdr')) {
+        const hdr = document.createElement('div');
+        hdr.className = 'tpl-task-hdr';
+        hdr.style.cssText = `
+          display:grid;gap:var(--space-2);
+          grid-template-columns:1fr 80px 90px ${isEditable ? '28px' : ''};
+          padding:0 var(--space-2);
+        `;
+        hdr.innerHTML = `
+          <span style="font-size:9px;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Task Title</span>
+          <span style="font-size:9px;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Days</span>
+          <span style="font-size:9px;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Priority</span>
+          ${isEditable ? '<span></span>' : ''}
+        `;
+        taskListEl.insertBefore(hdr, taskListEl.firstChild);
+      }
+    }
+
+    _renderTaskList();
+
+    // ── Save / Use buttons ────────────────────────────────────
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:var(--space-3);margin-top:var(--space-4);';
+
+    if (isEditable) {
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = '💾 Save Template';
+      saveBtn.style.cssText = 'padding:8px 16px;background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-md);font-size:var(--text-sm);font-weight:var(--weight-semibold);cursor:pointer;';
+      saveBtn.addEventListener('click', async () => {
+        const name = nameInp.value.trim();
+        if (!name) { alert('Template name is required'); return; }
+        const updated = {
+          id:             tpl.id || _uid(),
+          name,
+          goal:           goalInp.value.trim(),
+          completionMode: modeSelect.value,
+          tasks:          tasks.filter(t => t.title?.trim()),
+        };
+        if (!tpl.id) {
+          userTemplates.push(updated);
+        } else {
+          const idx = userTemplates.findIndex(t => t.id === updated.id);
+          if (idx >= 0) userTemplates[idx] = updated;
+          else userTemplates.push(updated);
+        }
+        await _saveUserTemplates(userTemplates);
+        _selectedTplId = updated.id;
+        saveBtn.textContent = '✓ Saved!';
+        setTimeout(() => { saveBtn.textContent = '💾 Save Template'; }, 1500);
+        _renderList();
+        _renderEditor(updated, true);
+      });
+      btnRow.appendChild(saveBtn);
+    }
+
+    // Use template button (both built-in and user)
+    const useBtn = document.createElement('button');
+    useBtn.textContent = '🚀 Use This Template';
+    useBtn.style.cssText = `
+      padding:8px 16px;background:${isEditable ? 'var(--color-surface)' : 'var(--color-accent)'};
+      color:${isEditable ? 'var(--color-text)' : '#fff'};
+      border:1px solid var(--color-border);border-radius:var(--radius-md);
+      font-size:var(--text-sm);font-weight:var(--weight-semibold);cursor:pointer;
+    `;
+    useBtn.addEventListener('click', () => {
+      const tplToUse = {
+        ...tpl,
+        name: nameInp?.value?.trim() || tpl.name,
+        goal: goalInp?.value?.trim() || tpl.goal,
+        completionMode: modeSelect?.value || tpl.completionMode,
+        tasks: tasks.filter(t => t.title?.trim()),
+      };
+      _viewMode = 'grid';
+      _openNewProjectForm(tplToUse);
+    });
+    btnRow.appendChild(useBtn);
+
+    editor.appendChild(btnRow);
+  }
+
+  _renderList();
+  editor.innerHTML = '<div style="padding:var(--space-8);text-align:center;color:var(--color-text-muted);font-size:var(--text-sm);">← Select a template to preview or edit, or create a new one.</div>';
+
+  newTplBtn.addEventListener('click', () => {
+    _selectedTplId = null;
+    _renderList();
+    _renderEditor({ id: null, name: '', goal: '', completionMode: 'Parallel', tasks: [] }, true);
+  });
+}
+
 async function _openTemplateModal() {
   let userTemplates = [];
   try {
@@ -365,9 +725,10 @@ async function _openTemplateModal() {
 
 async function _openNewProjectForm(template) {
   const ctx = getActiveContext();
-  const prefill = { context: ctx === 'all' ? 'family' : ctx };
+  const prefill = { context: ctx === 'all' ? 'family' : ctx, status: 'Active' };
   if (template) {
-    prefill.goal = template.goal || '';
+    prefill.goal           = template.goal || '';
+    prefill.completionMode = template.completionMode || 'Parallel';
   }
   // [B-01 fix] Pass onSave callback so template tasks are created after project is saved
   openForm('project', prefill, template ? async (savedProject) => {
@@ -396,7 +757,15 @@ export async function applyTemplateToProject(project, template) {
       createdBy: account?.id,
     };
     try {
-      await saveEntity(task, account?.id);
+      const saved = await saveEntity(task, account?.id);
+      // [fix] Create graph edge so task appears as linked in entity-form and panel
+      await saveEdge({
+        fromId:   saved.id,
+        fromType: 'task',
+        toId:     project.id,
+        toType:   'project',
+        relation: 'project',
+      }, account?.id).catch(() => {});
     } catch { /* non-fatal */ }
   }
 }
@@ -890,6 +1259,40 @@ async function _buildProjectTaskEdgeMap() {
   }
 }
 
+
+// ── [MAJOR] Sequential Task Mode ──────────────────────────────
+/**
+ * For a Sequential project, determine which task is "current" (next to complete)
+ * and which are blocked behind it.
+ * Tasks are ordered by: daysOffset ASC (relative to deadline), then createdAt ASC.
+ * @param {object} project
+ * @param {object[]} tasks - all tasks for this project (filtered by project)
+ * @returns {{ currentId: string|null, blockedIds: Set<string> }}
+ */
+export function getSequentialTaskState(project, tasks) {
+  if (!project || project.completionMode !== 'Sequential') {
+    return { currentId: null, blockedIds: new Set() };
+  }
+
+  const DONE = new Set(['Done', 'Completed', 'Skipped']);
+  const pending = tasks.filter(t => !DONE.has(t.status) && !t.deleted);
+
+  if (pending.length === 0) return { currentId: null, blockedIds: new Set() };
+
+  // Sort by daysOffset (ascending) — earlier tasks come first
+  // Fall back to createdAt for tasks without an explicit offset
+  const sorted = [...pending].sort((a, b) => {
+    const aOff = typeof a.daysOffset === 'number' ? a.daysOffset : 999;
+    const bOff = typeof b.daysOffset === 'number' ? b.daysOffset : 999;
+    if (aOff !== bOff) return aOff - bOff;
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
+  });
+
+  const currentId = sorted[0].id;
+  const blockedIds = new Set(sorted.slice(1).map(t => t.id));
+  return { currentId, blockedIds };
+}
+
 function _getProjectTasks(projectId) {
   const edgeTaskIds = _projectTaskEdgeMap.get(projectId) || new Set();
   return _tasks.filter(t => t.project === projectId || edgeTaskIds.has(t.id));
@@ -941,9 +1344,9 @@ async function renderProjects(params = {}) {
   // [F5] View toggle Grid | Timeline
   const viewToggle = document.createElement('div');
   viewToggle.style.cssText = `display:flex;border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden;`;
-  ['grid','timeline'].forEach(mode => {
+  ['grid','timeline','templates'].forEach(mode => {
     const btn = document.createElement('button');
-    btn.textContent = mode === 'grid' ? '⊞ Grid' : '📅 Timeline';
+    btn.textContent = mode === 'grid' ? '⊞ Grid' : mode === 'timeline' ? '📅 Timeline' : '📋 Templates';
     btn.style.cssText = `
       padding:4px 10px;font-size:var(--text-xs);font-weight:var(--weight-semibold);border:none;cursor:pointer;
       background:${_viewMode === mode ? 'var(--color-accent)' : 'var(--color-surface)'};
@@ -1007,7 +1410,8 @@ async function renderProjects(params = {}) {
     btn.addEventListener('click', () => { _activeFilter = f; renderProjects({ _internal: true }); });
     filterBar.appendChild(btn);
   }
-  el.appendChild(filterBar);
+  // Hide filter bar in templates mode — irrelevant there
+  if (_viewMode !== 'templates') el.appendChild(filterBar);
 
   let filtered = _activeFilter === 'All' ? _projects : _projects.filter(p => p.status === _activeFilter);
 
@@ -1046,6 +1450,11 @@ async function renderProjects(params = {}) {
   }
 
   // ── [F5] Timeline Mode ──────────────────────────────────────
+  if (_viewMode === 'templates') {
+    await _renderTemplatesView(el);
+    return;
+  }
+
   if (_viewMode === 'timeline') {
     _renderTimeline(el, filtered);
     return;
@@ -1115,6 +1524,7 @@ async function renderProjects(params = {}) {
           background:${statusColor}22;color:${statusColor};white-space:nowrap;flex-shrink:0;">
           ${_esc(project.status || 'Active')}
         </span>
+        ${project.completionMode === 'Sequential' ? `<span style="padding:2px 8px;border-radius:var(--radius-full);font-size:10px;font-weight:var(--weight-bold);background:#7c3aed22;color:#7c3aed;white-space:nowrap;flex-shrink:0;">🔢 Sequential</span>` : ''}
       </div>
 
       ${project.goal ? `<div style="font-size:var(--text-xs);color:var(--color-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(project.goal)}</div>` : ''}

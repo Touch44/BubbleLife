@@ -20,7 +20,7 @@ import { getEntitiesByType, getEdgesFrom, getEdgesTo,
          getEntity, saveEntity, getSetting, setSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }                      from '../core/events.js';
 // [F3] Focus Mode integration
-import { getFocusProjectId }                     from './projects.js';
+import { getFocusProjectId, getSequentialTaskState } from './projects.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
 import { filterByContext, getActiveContext }      from '../core/context.js';
@@ -1178,7 +1178,24 @@ function _rerenderColumns() {
 
   // Apply filter tab even in kanban mode (e.g. 'completed' → only Done column tasks)
   const _tabFiltered = _applyFilterTab(mergedTasks);
-  const filtered = _applyFilters(_tabFiltered);
+  let filtered = _applyFilters(_tabFiltered);
+
+  // [Sequential mode] When filtering by a sequential project, hide blocked tasks
+  // Only the "current" (first uncompleted) task is shown; others are locked
+  if (_effectiveProjectFilter) {
+    const projEntity = _projects?.find(p => p.id === _effectiveProjectFilter);
+    if (projEntity?.completionMode === 'Sequential') {
+      try {
+        // Get all tasks for this project (including those not in current filtered set)
+        const allProjTasks = _tasks.filter(t => !t.deleted &&
+          (t.project === _effectiveProjectFilter || _taskProjectMap.get(t.id) === _effectiveProjectFilter));
+        const { blockedIds } = getSequentialTaskState(projEntity, allProjTasks);
+        if (blockedIds.size > 0) {
+          filtered = filtered.filter(t => !blockedIds.has(t.id));
+        }
+      } catch { /* non-fatal */ }
+    }
+  }
 
   // Show a friendly empty state banner when filters yield no results
   const _focusProjId = (() => { try { return getFocusProjectId(); } catch { return null; } })();

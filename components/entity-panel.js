@@ -28,6 +28,7 @@ import { getAccount }       from '../core/auth.js';
 import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getActiveNodeTypes } from './graph-canvas.js';
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { mountActivityStream, recordCreated } from './activity-stream.js';
+import { getSequentialTaskState } from '../views/projects.js'; // [v5.9.0] Sequential mode
 
 // 3P-L-03: module-scope constant for footer type exclusion
 const _NO_REMINDER_TYPES = new Set(['reminder','reminderLog','post','comment','activity','message','conversation','dailyReview','tag']);
@@ -224,6 +225,11 @@ export function initEntityPanel() {
         }
       }
       _renderActiveTab();
+    } else if (entity && _entity && _entity.type === 'project' && _activeTab === 'tasks'
+               && entity.type === 'task') {
+      // [v5.8.0] A task was saved while showing a project's Tasks tab — refresh the list
+      const c = _panelBody?.querySelector('.panel-view-container');
+      if (c) _renderProjectTasksTab(c);
     }
   });
 
@@ -675,8 +681,12 @@ export async function openPanel(entityId, entityTypeHint) {
 
     _entity    = entity;
     _config    = config;
-    // Content-first types default to 'content' view; others to 'properties'
-    _activeTab = CONTENT_FIRST_TYPES.has(entity.type) ? 'content' : 'properties';
+    // Content-first types default to 'content' view; projects default to 'tasks'; others to 'properties'
+    if (entity.type === 'project') {
+      _activeTab = 'tasks';
+    } else {
+      _activeTab = CONTENT_FIRST_TYPES.has(entity.type) ? 'content' : 'properties';
+    }
     if (entity.type === 'taskInstance') _activeTab = 'series'; // [v5.3.1]
     _dirty     = false;
     _snapshot  = JSON.stringify(entity);  // P-26: snapshot for dirty detection
@@ -831,6 +841,14 @@ function _renderHeader() {
   // [v5.3.1] Inject Series tab for recurring templates and instances
   const _showSeries = (_entity?.type === 'task' && _entity?.isRecurring) || _entity?.type === 'taskInstance';
   if (_showSeries) visibleViews.push({ key: 'series', icon: '🔁', title: 'Series' });
+
+  // [v5.8.0] Inject Tasks tab for project entities — after Details, before Connections
+  if (_entity?.type === 'project') {
+    // Insert Tasks tab at position 2 (after properties, before relations)
+    const relIdx = visibleViews.findIndex(v => v.key === 'relations');
+    const insertAt = relIdx >= 0 ? relIdx : visibleViews.length;
+    visibleViews.splice(insertAt, 0, { key: 'tasks', icon: '✅', title: 'Tasks' });
+  }
 
   for (const view of visibleViews) {
     const btn = document.createElement('button');
@@ -1368,6 +1386,7 @@ function _renderActiveTab() {
     case 'relations':  _renderRelationsTab(container);   break;
     case 'activity':   _renderActivityTab(container);    break;
     case 'series':     _renderSeriesTab(container);      break; // [v5.3.1]
+    case 'tasks':      _renderProjectTasksTab(container); break; // [v5.8.0]
     default:           _renderPropertiesTab(container);  break;
   }
 
@@ -3902,6 +3921,206 @@ function _escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+/**
+ * [v5.8.0] Tasks tab — shows all tasks linked to this project.
+ * Fetches via both graph edges ('project' + 'part of') and direct entity.project field.
+ * Groups by status. Provides inline status toggle and + Add Task button.
+ */
+async function _renderProjectTasksTab(container) {
+  if (!_entity || _entity.type !== 'project') return;
+  const projectId = _entity.id;
+  const projectTitle = _entity.name || _entity.title || 'this project';
+
+  container.innerHTML = '<div style="color:var(--color-text-muted);font-size:var(--text-xs);padding:var(--space-2);">Loading tasks…</div>';
+
+  try {
+    // ── Load all tasks linked to this project ────────────────
+    // Dual-path: graph edges (form/panel created) + direct entity.project field (template created)
+    const [allTasks, edgesProject, edgesPartOf] = await Promise.all([
+      getEntitiesByType('task').catch(() => []),
+      getEdgesTo(projectId, 'project').catch(() => []),
+      getEdgesTo(projectId, 'part of').catch(() => []),
+    ]);
+
+    if (!_entity || _entity.id !== projectId) return; // stale guard
+
+    const edgeTaskIds = new Set([...edgesProject, ...edgesPartOf].map(e => e.fromId));
+    const tasks = allTasks.filter(t =>
+      !t.deleted && (t.project === projectId || edgeTaskIds.has(t.id))
+    );
+
+    // [Sequential mode] determine which task is current and which are blocked
+    const isSequential = _entity?.completionMode === 'Sequential';
+    let _seqCurrentId  = null;
+    let _seqBlockedIds = new Set();
+    if (isSequential) {
+      try {
+        const state = getSequentialTaskState(_entity, tasks);
+        _seqCurrentId  = state.currentId;
+        _seqBlockedIds = state.blockedIds;
+      } catch { /* non-fatal */ }
+    }
+
+    container.innerHTML = '';
+
+    // ── Header row: task count + Add Task button ─────────────
+    const headerRow = document.createElement('div');
+    headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);';
+
+    const countEl = document.createElement('span');
+    countEl.style.cssText = 'font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;';
+    const doneCount = tasks.filter(t => t.status === 'Done' || t.status === 'Completed').length;
+    const modeLabel = isSequential ? ' · 🔢 Sequential' : '';
+    countEl.textContent = `${tasks.length} task${tasks.length !== 1 ? 's' : ''} · ${doneCount} done${modeLabel}`;
+    headerRow.appendChild(countEl);
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-sm btn-primary';
+    addBtn.style.cssText = 'font-size:var(--text-xs);padding:4px 10px;';
+    addBtn.innerHTML = '+ Add Task';
+    addBtn.addEventListener('click', () => {
+      openForm('task', {
+        project: projectId,
+        projectTitle,
+        context: _entity.context || 'family',
+      });
+    });
+    headerRow.appendChild(addBtn);
+    container.appendChild(headerRow);
+
+    if (tasks.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'text-align:center;padding:var(--space-6) var(--space-2);color:var(--color-text-muted);font-size:var(--text-sm);';
+      empty.innerHTML = '<div style="font-size:2rem;margin-bottom:var(--space-2);">📋</div><div>No tasks yet</div><div style="font-size:var(--text-xs);margin-top:var(--space-1);">Click + Add Task to create one</div>';
+      container.appendChild(empty);
+      return;
+    }
+
+    // ── Group tasks by status ────────────────────────────────
+    const STATUS_ORDER = ['In Progress', 'Not Started', 'Blocked', 'On Hold', 'Done', 'Completed', 'Skipped'];
+    const DONE_STATUSES = new Set(['Done', 'Completed', 'Skipped']);
+    const groups = new Map();
+    for (const status of STATUS_ORDER) groups.set(status, []);
+    for (const t of tasks) {
+      const s = t.status || 'Not Started';
+      if (!groups.has(s)) groups.set(s, []);
+      groups.get(s).push(t);
+    }
+
+    const STATUS_COLOR = {
+      'In Progress': 'var(--color-accent)',
+      'Done':        'var(--color-success,#16a34a)',
+      'Completed':   'var(--color-success,#16a34a)',
+      'Blocked':     'var(--color-danger)',
+      'Not Started': 'var(--color-text-muted)',
+      'Skipped':     'var(--color-text-muted)',
+      'On Hold':     'var(--color-warning,#d97706)',
+    };
+
+    for (const [status, statusTasks] of groups) {
+      if (statusTasks.length === 0) continue;
+
+      // Group header
+      const groupHdr = document.createElement('div');
+      groupHdr.style.cssText = 'font-size:10px;font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;padding:var(--space-1) 0;border-bottom:1px solid var(--color-border);margin-bottom:var(--space-1-5);margin-top:var(--space-3);display:flex;align-items:center;justify-content:space-between;';
+      const dotColor = STATUS_COLOR[status] || 'var(--color-text-muted)';
+      groupHdr.innerHTML = `<span style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0;"></span>${_escHtml(status)}</span><span style="font-weight:400;text-transform:none;letter-spacing:0;">${statusTasks.length}</span>`;
+      container.appendChild(groupHdr);
+
+      for (const task of statusTasks.sort((a,b) => {
+        // Sort by priority then by title
+        const PRIO = { 'Critical':0,'High':1,'Medium':2,'Low':3 };
+        const pa = PRIO[a.priority] ?? 2;
+        const pb = PRIO[b.priority] ?? 2;
+        return pa !== pb ? pa - pb : (a.title||'').localeCompare(b.title||'');
+      })) {
+        const isDone = DONE_STATUSES.has(task.status);
+        const isBlocked = isSequential && _seqBlockedIds.has(task.id);
+        const isCurrent = isSequential && _seqCurrentId === task.id;
+        const row = document.createElement('div');
+        row.style.cssText = `display:flex;align-items:center;gap:var(--space-2);padding:var(--space-1-5) var(--space-1);border-radius:var(--radius-sm);cursor:pointer;transition:background 0.12s;${isBlocked ? 'opacity:0.45;' : ''}`;
+        row.addEventListener('mouseenter', () => { row.style.background = 'var(--color-surface)'; });
+        row.addEventListener('mouseleave', () => { row.style.background = ''; });
+
+        // Checkbox for quick complete/uncomplete
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = isDone;
+        cb.style.cssText = 'flex-shrink:0;cursor:pointer;width:15px;height:15px;accent-color:var(--color-accent);';
+        cb.title = isDone ? 'Mark incomplete' : isBlocked ? 'Blocked until previous task is done' : 'Mark complete';
+        if (isBlocked) cb.disabled = true;
+        cb.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const acct = getAccount();
+          const newStatus = isDone ? 'In Progress' : 'Done';
+          try {
+            await saveEntity({ ...task, status: newStatus }, acct?.id);
+            // Re-render the tab
+            const c = _panelBody?.querySelector('.panel-view-container');
+            if (c) _renderProjectTasksTab(c);
+          } catch (err) {
+            console.error('[panel] task status toggle:', err);
+          }
+        });
+
+        // Priority dot
+        const PRIO_COLOR = { 'Critical':'#ef4444','High':'#f97316','Medium':'#f59e0b','Low':'#94a3b8' };
+        const prioColor = PRIO_COLOR[task.priority] || '#94a3b8';
+        const prioDot = document.createElement('span');
+        prioDot.style.cssText = `width:6px;height:6px;border-radius:50%;background:${prioColor};flex-shrink:0;`;
+        prioDot.title = task.priority || 'Medium';
+
+        // Task title
+        const titleEl = document.createElement('span');
+        titleEl.style.cssText = `flex:1;font-size:var(--text-sm);color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isDone ? 'text-decoration:line-through;opacity:0.55;' : ''}`;
+        titleEl.textContent = task.title || '(Untitled)';
+
+        // Sequential mode label
+        if (isCurrent && !isDone) {
+          const curTag = document.createElement('span');
+          curTag.style.cssText = 'font-size:9px;background:var(--color-accent);color:#fff;padding:1px 6px;border-radius:99px;flex-shrink:0;font-weight:600;';
+          curTag.textContent = 'Up Next';
+          titleEl.after(curTag);
+        } else if (isBlocked) {
+          const blockTag = document.createElement('span');
+          blockTag.style.cssText = 'font-size:9px;background:var(--color-surface);color:var(--color-text-muted);padding:1px 6px;border-radius:99px;flex-shrink:0;border:1px solid var(--color-border);';
+          blockTag.textContent = '🔒 Blocked';
+          titleEl.after(blockTag);
+        }
+
+        // Due date
+        const dueEl = document.createElement('span');
+        dueEl.style.cssText = 'font-size:10px;color:var(--color-text-muted);white-space:nowrap;flex-shrink:0;';
+        if (task.dueDate) {
+          const today = new Date(); today.setHours(0,0,0,0);
+          const [y,mo,d] = task.dueDate.split('-').map(Number);
+          const due = new Date(y, mo-1, d);
+          const isOverdue = !isDone && due < today;
+          const isSoon = !isDone && !isOverdue && (due - today) <= 3*86400000;
+          dueEl.textContent = `${mo}/${d}`;
+          if (isOverdue) dueEl.style.color = 'var(--color-danger)';
+          else if (isSoon) dueEl.style.color = 'var(--color-warning,#d97706)';
+        }
+
+        row.append(cb, prioDot, titleEl, dueEl);
+
+        // Click row (not checkbox) → open task in panel
+        row.addEventListener('click', (e) => {
+          if (e.target === cb) return;
+          emit(EVENTS.PANEL_OPENED, { entityId: task.id });
+        });
+
+        container.appendChild(row);
+      }
+    }
+
+  } catch (err) {
+    console.error('[panel] _renderProjectTasksTab failed:', err);
+    container.innerHTML = '<div style="color:var(--color-danger);font-size:var(--text-xs);padding:var(--space-3);">Failed to load tasks. Please try again.</div>';
+  }
+}
+
 /** Alias required by _renderSeriesTab and other inline template callers */
 const _esc = _escHtml;
 
@@ -4373,11 +4592,76 @@ async function _confirmDelete() {
   const entityLabel = _config?.label || 'entity';
   const entityTitle = _entity.title || _entity.name || _entity.body?.slice(0,40) || entityLabel;
   const entityId    = _entity.id;
+  const isProject   = _entity.type === 'project';
 
   // Capture snapshot for undo BEFORE deleting
   const snapshot = { ..._entity };
 
-  // Use dialog service if available, fall back to browser confirm
+  // ── Project delete: 3-option dialog ────────────────────────
+  if (isProject) {
+    // Show a custom modal with three choices
+    const choice = await new Promise(resolve => {
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;padding:var(--space-4);';
+      modal.innerHTML = `
+        <div style="background:var(--color-bg);border-radius:var(--radius-lg);max-width:420px;width:100%;padding:var(--space-6);box-shadow:var(--shadow-lg);">
+          <div style="font-weight:var(--weight-bold);font-size:var(--text-base);margin-bottom:var(--space-2);">🗑 Delete Project</div>
+          <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-5);">
+            What should happen to tasks linked to <strong>${_esc(entityTitle)}</strong>?
+          </div>
+          <div style="display:flex;flex-direction:column;gap:var(--space-2);">
+            <button id="pdel-delete-tasks" style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--color-danger);background:var(--color-danger);color:#fff;cursor:pointer;font-size:var(--text-sm);font-weight:var(--weight-semibold);text-align:left;">
+              🗑 Delete project and all its tasks
+            </button>
+            <button id="pdel-keep-tasks" style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);cursor:pointer;font-size:var(--text-sm);font-weight:var(--weight-semibold);text-align:left;">
+              📋 Delete project only — keep tasks (unlinked)
+            </button>
+            <button id="pdel-cancel" style="padding:8px 14px;border-radius:var(--radius-md);border:1px solid var(--color-border);background:none;color:var(--color-text-muted);cursor:pointer;font-size:var(--text-sm);text-align:center;">
+              Cancel
+            </button>
+          </div>
+        </div>
+      `;
+      modal.querySelector('#pdel-delete-tasks').addEventListener('click', () => { modal.remove(); resolve('delete-tasks'); });
+      modal.querySelector('#pdel-keep-tasks').addEventListener('click',   () => { modal.remove(); resolve('keep-tasks'); });
+      modal.querySelector('#pdel-cancel').addEventListener('click',       () => { modal.remove(); resolve('cancel'); });
+      modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+      document.body.appendChild(modal);
+    });
+
+    if (choice === 'cancel') return;
+
+    try {
+      if (choice === 'delete-tasks') {
+        // Delete all linked tasks first
+        const [edgesProject, edgesPartOf] = await Promise.all([
+          getEdgesTo(entityId, 'project').catch(() => []),
+          getEdgesTo(entityId, 'part of').catch(() => []),
+        ]);
+        const taskIds = new Set([...edgesProject, ...edgesPartOf].map(e => e.fromId));
+        // Also catch tasks with direct entity.project field
+        const allTasks = await getEntitiesByType('task').catch(() => []);
+        allTasks.filter(t => !t.deleted && t.project === entityId).forEach(t => taskIds.add(t.id));
+        // Delete each task
+        await Promise.allSettled([...taskIds].map(tid => deleteEntity(tid)));
+      } else {
+        // Keep tasks but clear their project link (edge deleted by deleteEntity, clear direct field)
+        const allTasks = await getEntitiesByType('task').catch(() => []);
+        const linked = allTasks.filter(t => !t.deleted && t.project === entityId);
+        await Promise.allSettled(linked.map(t => saveEntity({ ...t, project: null }, getAccount()?.id)));
+        // Edges from tasks to this project are automatically deleted when we delete the project below
+      }
+      await deleteEntity(entityId);
+      closePanel();
+      window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle });
+    } catch (err) {
+      console.error('[entity-panel] Project delete failed:', err);
+      showToast('Delete failed — please try again', 'error');
+    }
+    return;
+  }
+
+  // ── Standard delete (non-project) ──────────────────────────
   let confirmed = false;
   const dialogSvc = window._fhEnv?.services?.dialog;
   if (dialogSvc) {
@@ -4393,8 +4677,6 @@ async function _confirmDelete() {
   try {
     await deleteEntity(entityId);
     closePanel();
-
-    // Push to global undo stack (imported from index.html via event)
     window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle });
   } catch (err) {
     console.error('[entity-panel] Delete failed:', err);

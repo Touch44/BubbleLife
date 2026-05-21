@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '5.7.0'; // [v5.7.0] Remove sidebar graph nav; entity graph button on all types; user-type actions
+const APP_VERSION   = '5.9.1'; // [v5.9.1] Bug fixes: static imports, filter bar in template mode, sequential import
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];

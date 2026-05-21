@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v5.7.0 [MAJOR] v5.7.0: Remove sidebar graph nav; entity 🔮 graph button on all types; user-type action defaults -->
+  <!-- Build: v5.9.1 [minor] v5.9.1: Static imports, filter bar fix, sequential import fix -->
 
   <title>FamilyHub</title>
 
@@ -24,10 +24,10 @@
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 
   <!-- Styles (order matters: tokens → layout → components → dark) -->
-  <link rel="stylesheet" href="./styles/tokens.css?v=5.7.0" />
-  <link rel="stylesheet" href="./styles/layout.css?v=5.7.0" />
-  <link rel="stylesheet" href="./styles/components.css?v=5.7.0" />
-  <link rel="stylesheet" href="./styles/dark.css?v=5.7.0" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=5.9.1" />
+  <link rel="stylesheet" href="./styles/layout.css?v=5.9.1" />
+  <link rel="stylesheet" href="./styles/components.css?v=5.9.1" />
+  <link rel="stylesheet" href="./styles/dark.css?v=5.9.1" />
 </head>
 <body>
 
@@ -867,7 +867,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '5.7.0'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '5.9.1'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
@@ -1203,7 +1203,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=5.7.0', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=5.9.1', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);
