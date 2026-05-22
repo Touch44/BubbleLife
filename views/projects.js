@@ -365,7 +365,7 @@ async function _renderTemplatesView(el) {
     tplList.appendChild(biLabel);
 
     for (const tpl of BUILT_IN_TEMPLATES) {
-      const row = _makeTplRow(tpl, false);
+      const row = _makeTplRow(tpl, true);
       tplList.appendChild(row);
     }
 
@@ -375,42 +375,50 @@ async function _renderTemplatesView(el) {
       myLabel.textContent = 'My Templates';
       tplList.appendChild(myLabel);
       for (const tpl of userTemplates) {
-        const row = _makeTplRow(tpl, true);
+        const row = _makeTplRow(tpl, false);
         tplList.appendChild(row);
       }
     }
   }
 
-  function _makeTplRow(tpl, isEditable) {
+  function _makeTplRow(tpl, isBuiltIn) {
     const row = document.createElement('button');
+    const isSelected = _selectedTplId === tpl.id;
     row.style.cssText = `
       display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-2);
       border-radius:var(--radius-sm);border:none;width:100%;text-align:left;cursor:pointer;
-      background:${_selectedTplId === tpl.id ? 'var(--color-accent)' : 'transparent'};
-      color:${_selectedTplId === tpl.id ? '#fff' : 'var(--color-text)'};
+      background:${isSelected ? 'var(--color-accent)' : 'transparent'};
+      color:${isSelected ? '#fff' : 'var(--color-text)'};
       font-size:var(--text-xs);transition:background 0.12s;
     `;
     row.innerHTML = `
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(tpl.name)}</span>
-      ${isEditable ? '' : '<span style="opacity:0.5;font-size:9px;">built-in</span>'}
+      ${isBuiltIn ? '<span style="opacity:0.5;font-size:9px;">built-in</span>' : ''}
     `;
     row.addEventListener('click', () => {
       _selectedTplId = tpl.id;
       _renderList();
-      _renderEditor(tpl, isEditable);
+      _renderEditor(tpl, true, isBuiltIn);
     });
     return row;
   }
 
-  function _renderEditor(tpl, isEditable) {
+  function _renderEditor(tpl, isEditable, isBuiltIn = false) {
     editor.innerHTML = '';
 
     const isNew = !tpl.id;
     const title = document.createElement('div');
     title.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);';
-    title.innerHTML = `<span style="font-weight:var(--weight-bold);font-size:var(--text-base);">${isEditable ? (isNew ? '✨ New Template' : '✏️ Edit Template') : '👁 Preview: ' + _esc(tpl.name)}</span>`;
+    const titleText = isNew ? '✨ New Template' : isBuiltIn ? '✏️ Customize Built-in' : '✏️ Edit Template';
+    title.innerHTML = `<span style="font-weight:var(--weight-bold);font-size:var(--text-base);">${titleText}</span>`;
+    if (isBuiltIn && !isNew) {
+      const forkNote = document.createElement('span');
+      forkNote.style.cssText = 'font-size:10px;color:var(--color-text-muted);background:var(--color-surface);padding:2px 8px;border-radius:var(--radius-full);border:1px solid var(--color-border);margin-left:auto;';
+      forkNote.textContent = '→ Saves as new My Template';
+      title.appendChild(forkNote);
+    }
 
-    if (isEditable && !isNew) {
+    if (isEditable && !isNew && !isBuiltIn) {
       const delBtn = document.createElement('button');
       delBtn.textContent = '🗑 Delete';
       delBtn.style.cssText = 'font-size:var(--text-xs);color:var(--color-danger);background:none;border:1px solid var(--color-danger);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;';
@@ -505,7 +513,7 @@ async function _renderTemplatesView(el) {
         const row = document.createElement('div');
         row.style.cssText = `
           display:grid;gap:var(--space-2);
-          grid-template-columns:1fr 80px 90px ${isEditable ? '28px' : ''};
+          grid-template-columns:${isEditable ? '20px ' : ''}1fr 80px 90px ${isEditable ? '28px' : ''};
           align-items:center;padding:var(--space-2) var(--space-2);
           background:var(--color-surface);border-radius:var(--radius-sm);
           border:1px solid var(--color-border);
@@ -548,6 +556,31 @@ async function _renderTemplatesView(el) {
         });
         prioSelect.addEventListener('change', () => { tasks[idx].priority = prioSelect.value; });
 
+        if (isEditable) {
+          // Drag handle / move up-down buttons
+          const moveWrap = document.createElement('div');
+          moveWrap.style.cssText = 'display:flex;flex-direction:column;gap:0;';
+          const upBtn = document.createElement('button');
+          upBtn.textContent = '▲';
+          upBtn.title = 'Move up';
+          upBtn.style.cssText = 'background:none;border:none;color:var(--color-text-muted);cursor:pointer;font-size:8px;padding:0;line-height:1;';
+          upBtn.disabled = idx === 0;
+          upBtn.addEventListener('click', () => {
+            if (idx > 0) { [tasks[idx-1], tasks[idx]] = [tasks[idx], tasks[idx-1]]; _renderTaskList(); }
+          });
+          const dnBtn = document.createElement('button');
+          dnBtn.textContent = '▼';
+          dnBtn.title = 'Move down';
+          dnBtn.style.cssText = 'background:none;border:none;color:var(--color-text-muted);cursor:pointer;font-size:8px;padding:0;line-height:1;';
+          dnBtn.disabled = idx === tasks.length - 1;
+          dnBtn.addEventListener('click', () => {
+            if (idx < tasks.length - 1) { [tasks[idx], tasks[idx+1]] = [tasks[idx+1], tasks[idx]]; _renderTaskList(); }
+          });
+          moveWrap.appendChild(upBtn);
+          moveWrap.appendChild(dnBtn);
+          row.appendChild(moveWrap);
+        }
+
         row.appendChild(titleInp);
         row.appendChild(offsetWrap);
         row.appendChild(prioSelect);
@@ -569,10 +602,11 @@ async function _renderTemplatesView(el) {
         hdr.className = 'tpl-task-hdr';
         hdr.style.cssText = `
           display:grid;gap:var(--space-2);
-          grid-template-columns:1fr 80px 90px ${isEditable ? '28px' : ''};
+          grid-template-columns:${isEditable ? '20px ' : ''}1fr 80px 90px ${isEditable ? '28px' : ''};
           padding:0 var(--space-2);
         `;
         hdr.innerHTML = `
+          ${isEditable ? '<span></span>' : ''}
           <span style="font-size:9px;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Task Title</span>
           <span style="font-size:9px;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Days</span>
           <span style="font-size:9px;color:var(--color-text-muted);font-weight:600;text-transform:uppercase;">Priority</span>
@@ -590,31 +624,31 @@ async function _renderTemplatesView(el) {
 
     if (isEditable) {
       const saveBtn = document.createElement('button');
-      saveBtn.textContent = '💾 Save Template';
+      saveBtn.textContent = isBuiltIn ? '💾 Save as My Template' : '💾 Save Template';
       saveBtn.style.cssText = 'padding:8px 16px;background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-md);font-size:var(--text-sm);font-weight:var(--weight-semibold);cursor:pointer;';
       saveBtn.addEventListener('click', async () => {
         const name = nameInp.value.trim();
         if (!name) { alert('Template name is required'); return; }
+        // Store tasks with explicit order index so sequential mode respects it
+        const orderedTasks = tasks.filter(t => t.title?.trim()).map((t, i) => ({ ...t, order: i }));
         const updated = {
-          id:             tpl.id || _uid(),
+          // Built-ins fork: always new ID so original is preserved
+          id:             isBuiltIn ? _uid() : (tpl.id || _uid()),
           name,
           goal:           goalInp.value.trim(),
           completionMode: modeSelect.value,
-          tasks:          tasks.filter(t => t.title?.trim()),
+          tasks:          orderedTasks,
         };
-        if (!tpl.id) {
-          userTemplates.push(updated);
-        } else {
-          const idx = userTemplates.findIndex(t => t.id === updated.id);
-          if (idx >= 0) userTemplates[idx] = updated;
-          else userTemplates.push(updated);
-        }
+        const existingIdx = userTemplates.findIndex(t => t.id === updated.id);
+        if (existingIdx >= 0) userTemplates[existingIdx] = updated;
+        else userTemplates.push(updated);
         await _saveUserTemplates(userTemplates);
         _selectedTplId = updated.id;
         saveBtn.textContent = '✓ Saved!';
-        setTimeout(() => { saveBtn.textContent = '💾 Save Template'; }, 1500);
+        const origLabel = isBuiltIn ? '💾 Save as My Template' : '💾 Save Template';
+        setTimeout(() => { saveBtn.textContent = origLabel; }, 1500);
         _renderList();
-        _renderEditor(updated, true);
+        _renderEditor(updated, true, false);
       });
       btnRow.appendChild(saveBtn);
     }
@@ -650,7 +684,7 @@ async function _renderTemplatesView(el) {
   newTplBtn.addEventListener('click', () => {
     _selectedTplId = null;
     _renderList();
-    _renderEditor({ id: null, name: '', goal: '', completionMode: 'Parallel', tasks: [] }, true);
+    _renderEditor({ id: null, name: '', goal: '', completionMode: 'Parallel', tasks: [] }, true, false);
   });
 }
 
@@ -742,7 +776,8 @@ export async function applyTemplateToProject(project, template) {
   if (!template || !template.tasks) return;
   const account = getAccount();
   const deadline = project.deadline ? new Date(project.deadline + 'T00:00:00') : new Date();
-  for (const taskDef of template.tasks) {
+  for (let idx_tpl = 0; idx_tpl < template.tasks.length; idx_tpl++) {
+    const taskDef = template.tasks[idx_tpl];
     const dueDate = new Date(deadline);
     dueDate.setDate(dueDate.getDate() + (taskDef.daysOffset || 0));
     const dueDateStr = `${dueDate.getFullYear()}-${String(dueDate.getMonth()+1).padStart(2,'0')}-${String(dueDate.getDate()).padStart(2,'0')}`;
@@ -755,6 +790,9 @@ export async function applyTemplateToProject(project, template) {
       project: project.id,
       context: project.context || 'family',
       createdBy: account?.id,
+      // [v5.9.5] Store order + daysOffset so sequential mode sorts correctly
+      order:      typeof taskDef.order === 'number' ? taskDef.order : idx_tpl,
+      daysOffset: taskDef.daysOffset || 0,
     };
     try {
       const saved = await saveEntity(task, account?.id);
@@ -1279,9 +1317,17 @@ export function getSequentialTaskState(project, tasks) {
 
   if (pending.length === 0) return { currentId: null, blockedIds: new Set() };
 
-  // Sort by daysOffset (ascending) — earlier tasks come first
-  // Fall back to createdAt for tasks without an explicit offset
+  // Sort order: explicit task.order field first (set from template), then daysOffset, then createdAt
+  // This ensures sequential mode respects the user-defined task ordering in template editor
   const sorted = [...pending].sort((a, b) => {
+    const aOrd = typeof a.order === 'number' ? a.order : null;
+    const bOrd = typeof b.order === 'number' ? b.order : null;
+    // Both have explicit order → use it
+    if (aOrd !== null && bOrd !== null) return aOrd - bOrd;
+    // One has order → ordered one comes first
+    if (aOrd !== null) return -1;
+    if (bOrd !== null) return 1;
+    // Fall back to daysOffset
     const aOff = typeof a.daysOffset === 'number' ? a.daysOffset : 999;
     const bOff = typeof b.daysOffset === 'number' ? b.daysOffset : 999;
     if (aOff !== bOff) return aOff - bOff;

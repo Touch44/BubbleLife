@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '5.9.4'; // [v5.9.4] Kanban sequential filter wrapped in try-catch; cache-bust to clear stale SW
+const APP_VERSION   = '5.9.7'; // [v5.9.7] Kanban sequential filter wrapped in try-catch; cache-bust to clear stale SW
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];

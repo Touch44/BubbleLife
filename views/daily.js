@@ -31,7 +31,7 @@ import { getAccount }                      from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                            from '../core/toast.js';
 // [F3] Focus Mode integration
-import { getFocusProjectId }               from './projects.js';
+import { getFocusProjectId, getSequentialTaskState } from './projects.js'; // [v5.9.5] Sequential mode
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -240,10 +240,14 @@ async function _loadData(dateStr) {
     ...fNotes.filter(n => n.category === 'Comment'),
   ];
 
+  // [v5.9.5] Build map of sequential project entities for daily task filtering
+  const sequentialProjectMap = new Map(
+    projects.filter(p => !p.deleted && p.completionMode === 'Sequential').map(p => [p.id, p])
+  );
   return { tasks: fTasks, events: fEvents, notes: fNotes, posts: fPosts,
            appointments: fAppointments, dateEntities: fDateEntities, mealPlans: fMealPlans,
            auditLog: auditLog || [], personMap, projectMap, accountMap, allComments,
-           taskProjectEdgeMap, taskAssigneeEdgeMap };
+           taskProjectEdgeMap, taskAssigneeEdgeMap, sequentialProjectMap };
 }
 
 /**
@@ -1497,8 +1501,29 @@ function _openNoteModal(entity) {
  * Section 1: Tasks — due today or overdue, sorted overdue-first then priority.
  * personMap and projectMap resolve relation IDs to display names.
  */
-async function _renderTasks(container, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap = new Map(), taskAssigneeEdgeMap = new Map()) {
-  const filtered = _sortTasks(_filterTasks(tasks, dateStr), dateStr);
+async function _renderTasks(container, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap = new Map(), taskAssigneeEdgeMap = new Map(), sequentialProjectMap = new Map()) {
+  let filtered = _sortTasks(_filterTasks(tasks, dateStr), dateStr);
+
+  // [v5.9.5] Sequential mode: for ALL sequential projects, hide blocked tasks in daily view
+  // Only the "current" (first uncompleted in order) task for each sequential project is shown
+  try {
+    if (sequentialProjectMap.size > 0) {
+      const allBlockedIds = new Set();
+      for (const [projId, projEntity] of sequentialProjectMap) {
+        // Gather all non-deleted tasks for this project (from filtered + full task list)
+        const allProjTasks = tasks.filter(t =>
+          !t.deleted && (t.project === projId || taskProjectEdgeMap.get(t.id) === projId)
+        );
+        if (allProjTasks.length === 0) continue;
+        const { blockedIds } = getSequentialTaskState(projEntity, allProjTasks);
+        blockedIds.forEach(id => allBlockedIds.add(id));
+      }
+      if (allBlockedIds.size > 0) {
+        filtered = filtered.filter(t => !allBlockedIds.has(t.id));
+      }
+    }
+  } catch { /* non-fatal — sequential filter is enhancement only */ }
+
   const { wrapper, body } = _buildSection('tasks', '✅', 'Tasks', filtered.length);
   container.appendChild(wrapper);
 
@@ -2683,7 +2708,7 @@ async function renderDaily(params = {}) {
     // Load all data in parallel
     const { tasks, events, notes, posts, appointments, dateEntities, mealPlans, auditLog,
             personMap, projectMap, accountMap, allComments,
-            taskProjectEdgeMap, taskAssigneeEdgeMap } =
+            taskProjectEdgeMap, taskAssigneeEdgeMap, sequentialProjectMap } =
       await _loadData(dateStr);
 
     // Bug-91: bail if a newer render was started while we were loading
@@ -2718,7 +2743,7 @@ async function renderDaily(params = {}) {
     viewEl.appendChild(sections);
 
     // ── Section 1: Tasks (always first) ────────────────────
-    await _renderTasks(sections, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap, taskAssigneeEdgeMap);
+    await _renderTasks(sections, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap, taskAssigneeEdgeMap, sequentialProjectMap);
     sectionRefs.tasksBody = sections.querySelector('#daily-section-body-tasks');
 
     // ── Section 2: Events (always second) ─────────────────────

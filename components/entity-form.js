@@ -2122,7 +2122,23 @@ export function openQuickCreateModal(typeKey, prefill = {}, onCreated) {
 async function _loadExistingEdges(entityId, field) {
   try {
     const edges = await getEdgesFrom(entityId, field.key);
-    if (!edges.length) return;
+    // [v5.9.5] Fallback: if no edge exists, check entity's direct field (e.g. task.project from template)
+    if (!edges.length) {
+      const directId = _editEntity?.[field.key];
+      if (directId && typeof directId === 'string') {
+        const directEntity = await getEntity(directId).catch(() => null);
+        if (directEntity && !directEntity.deleted) {
+          const mapped = [{ id: directEntity.id, label: _getDisplayTitle(directEntity), type: directEntity.type }];
+          _relationValues.set(field.key, mapped);
+          const control = _overlay?.querySelector(`[data-field="${field.key}"] .ef-relation-control`);
+          if (control) {
+            const chipRow = control.querySelector('.ef-relation-chips');
+            if (chipRow) _refreshRelationChipsDom(chipRow, field.key);
+          }
+        }
+      }
+      return;
+    }
     const entities = await Promise.all(
       edges.map(e => getEntity(e.toId).catch(() => null))
     );
