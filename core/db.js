@@ -13,17 +13,17 @@
  *   countByType, getStorageUsage
  */
 
-// ── idb library (UMD build loaded via dynamic import from CDN) ── //
-// We load idb once and cache it. Using dynamic import keeps this file
-// a standard ES module with no build step required.
-const IDB_CDN = 'https://cdn.jsdelivr.net/npm/idb@8/build/umd.js';
+// ── idb library (vendored locally — offline-first, no CDN dependency) ── //
+// [v6.0.0] Replaced CDN fetch with local vendor file at core/vendor/idb.js
+// This ensures the DB layer works 100% offline without any network round-trip.
+// The vendor file is listed in SHELL_FILES so it is pre-cached by sw.js.
 
 /** @type {Promise<object>|null} — singleton idb load promise */
 let _idbPromise = null;
 
 /**
- * Load the idb library from CDN (once only).
- * Falls back gracefully to raw IndexedDB wrapper if CDN is unavailable.
+ * Load the vendored idb library (once only).
+ * Falls back gracefully to raw IndexedDB wrapper if the import fails.
  * @returns {Promise<{openDB: Function}>}
  */
 async function _loadIdb() {
@@ -32,26 +32,24 @@ async function _loadIdb() {
   _idbPromise = (async () => {
     try {
       // idb UMD build attaches to globalThis.idb when loaded as a script.
-      // Dynamic import of a UMD module via CDN requires a small shim:
-      // we fetch the source and evaluate it using a Blob URL so it runs
-      // in module scope without a <script> tag.
+      // We fetch the local vendor file and evaluate it via a Blob URL so it
+      // runs in module scope without a <script> tag.
       if (globalThis.idb?.openDB) return globalThis.idb;
 
-      const res  = await fetch(IDB_CDN);
-      if (!res.ok) throw new Error(`idb CDN fetch failed: ${res.status}`);
+      const res  = await fetch('./core/vendor/idb.js');
+      if (!res.ok) throw new Error(`idb vendor fetch failed: ${res.status}`);
       const text = await res.text();
       const blob = new Blob([text], { type: 'application/javascript' });
       const url  = URL.createObjectURL(blob);
 
-      // Import the blob URL — UMD attaches to globalThis.idb
       await import(/* @vite-ignore */ url);
       URL.revokeObjectURL(url);
 
       if (globalThis.idb?.openDB) return globalThis.idb;
-      throw new Error('idb did not attach to globalThis after load');
+      throw new Error('idb did not attach to globalThis after vendor load');
 
     } catch (err) {
-      console.warn('[db] idb CDN load failed, using raw IDB fallback:', err.message);
+      console.warn('[db] idb vendor load failed, using raw IDB fallback:', err.message);
       // Return a minimal openDB shim so the rest of the module works
       return { openDB: _rawOpenDB };
     }

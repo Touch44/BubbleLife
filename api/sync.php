@@ -360,9 +360,30 @@ function fh_action_pull(array $session, array $body): void {
 }
 
 // ── Utility: timestamp → MySQL datetime ──────────────────────────
-function fh_ts_to_datetime(?int $ts_ms): string {
-    if (!$ts_ms || $ts_ms <= 0) return date('Y-m-d H:i:s');
-    $ts = (int)($ts_ms / 1000);
+// Accepts EITHER a millisecond integer (from old code) OR an ISO-8601 string
+// (as stored by saveEntity: new Date().toISOString() = '2025-01-01T12:00:00.000Z').
+// Previously the function had a ?int type-hint which coerced ISO strings to the year
+// number (e.g. 2025), then divided by 1000, producing 1970-01-01 for all timestamps.
+function fh_ts_to_datetime($ts_input): string {
+    if ($ts_input === null || $ts_input === '' || $ts_input === false) {
+        return date('Y-m-d H:i:s');
+    }
+
+    // ISO-8601 string (e.g. '2025-01-01T12:00:00.000Z' or '2025-01-01T12:00:00')
+    if (is_string($ts_input) && strlen($ts_input) >= 10 && strpos($ts_input, '-') !== false) {
+        try {
+            $dt = new DateTime($ts_input, new DateTimeZone('UTC'));
+            return $dt->format('Y-m-d H:i:s');
+        } catch (Throwable $e) {
+            return date('Y-m-d H:i:s');
+        }
+    }
+
+    // Millisecond integer (legacy or numeric string)
+    $ts_ms = (int)$ts_input;
+    if ($ts_ms <= 0) return date('Y-m-d H:i:s');
+    // Distinguish ms (> 1e11) from seconds (< 1e10)
+    $ts = $ts_ms > 100000000000 ? (int)($ts_ms / 1000) : $ts_ms;
     return date('Y-m-d H:i:s', $ts);
 }
 

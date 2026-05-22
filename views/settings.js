@@ -1,14 +1,14 @@
 /**
- * FamilyHub v5.3.1 — views/settings.js
- * [MAJOR] Full tab-based settings UI: each section is its own tab.
- *         Removed duplicate Notifications section.
- *         Added Context Order setting (applies globally to sidebar + form dropdowns).
+ * FamilyHub v6.0.0 — views/settings.js
+ * [v6.0.0] Full typography control in Appearance tab:
+ *           font family, size, letter-spacing, line-height, density, accent, mode.
  */
 
 import { registerView } from '../core/router.js';
 import { exportAll, importAll, getStorageUsage, getSetting, setSetting } from '../core/db.js';
 import { getAccount, getAllAccounts, generateInvite } from '../core/auth.js';
 import { startTour } from '../core/tour.js';
+import { FONT_OPTIONS } from '../services/theme.js';
 
 // ── Inject CSS once ────────────────────────────────────────────
 (function _injectStyles() {
@@ -106,10 +106,13 @@ async function renderSettings() {
   let pushGranted = false;
   try { pushGranted = Notification?.permission === 'granted'; } catch {}
 
-  // Detect current theme
+  // Detect current theme + full typography prefs
   const env = window._fhEnv;
-  let currentMode = 'auto';
-  try { currentMode = env?.services?.theme?.getPrefs?.()?.mode || 'auto'; } catch {}
+  let themePrefs = { mode: 'auto', density: 'comfortable', fontSize: 1.0,
+                     fontFamily: 'plus-jakarta-sans', letterSpacing: 'normal', lineHeight: 'normal',
+                     accent: '#3B82F6' };
+  try { themePrefs = { ...themePrefs, ...(env?.services?.theme?.getPrefs?.() || {}) }; } catch {}
+  const currentMode = themePrefs.mode;
 
   // ── Tab definitions ─────────────────────────────────────────
   const TABS = [
@@ -142,29 +145,168 @@ async function renderSettings() {
 
     <!-- ─────────── APPEARANCE ─────────────────────────────── -->
     <div class="stab-panel${savedTab === 'appearance' ? ' active' : ''}" id="stab-appearance">
+
+      <!-- Theme mode -->
       <div class="srow">
         <div>
-          <div class="srow-label">Theme</div>
-          <div class="srow-hint">Choose light, dark, or follow system setting</div>
+          <div class="srow-label">Color Mode</div>
+          <div class="srow-hint">Light, dark, or follow system setting</div>
         </div>
         <div class="srow-ctrl" style="gap:6px;">
-          <button id="settings-theme-light" class="btn btn-sm" style="
-            font-weight:600;
+          <button id="settings-theme-light" class="btn btn-sm" style="font-weight:600;
             background:${currentMode === 'light' ? 'var(--color-accent)' : 'var(--color-surface)'};
-            color:${currentMode === 'light' ? '#fff' : 'var(--color-text)'};
-          ">☀️ Light</button>
-          <button id="settings-theme-dark" class="btn btn-sm" style="
-            font-weight:600;
+            color:${currentMode === 'light' ? '#fff' : 'var(--color-text)'};">☀️ Light</button>
+          <button id="settings-theme-dark" class="btn btn-sm" style="font-weight:600;
             background:${currentMode === 'dark' ? 'var(--color-accent)' : 'var(--color-surface)'};
-            color:${currentMode === 'dark' ? '#fff' : 'var(--color-text)'};
-          ">🌙 Dark</button>
-          <button id="settings-theme-auto" class="btn btn-sm" style="
-            font-weight:600;
+            color:${currentMode === 'dark' ? '#fff' : 'var(--color-text)'};">🌙 Dark</button>
+          <button id="settings-theme-auto" class="btn btn-sm" style="font-weight:600;
             background:${currentMode === 'auto' ? 'var(--color-accent)' : 'var(--color-surface)'};
-            color:${currentMode === 'auto' ? '#fff' : 'var(--color-text)'};
-          ">⚙️ Auto</button>
+            color:${currentMode === 'auto' ? '#fff' : 'var(--color-text)'};">⚙️ Auto</button>
         </div>
       </div>
+
+      <!-- Accent colour -->
+      <div class="srow">
+        <div>
+          <div class="srow-label">Accent Color</div>
+          <div class="srow-hint">Primary color used for buttons, links and highlights</div>
+        </div>
+        <div class="srow-ctrl" style="gap:8px;align-items:center;">
+          <div id="accent-swatches" style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${['#3B82F6','#6366F1','#8B5CF6','#EC4899','#10B981','#F59E0B','#EF4444','#0EA5E9','#14B8A6','#F97316'].map(c => `
+              <button class="accent-swatch" data-accent="${c}" title="${c}" style="
+                width:22px;height:22px;border-radius:50%;background:${c};border:none;cursor:pointer;
+                box-shadow: ${themePrefs.accent === c ? '0 0 0 3px var(--color-bg), 0 0 0 5px ' + c : 'none'};
+                transition: box-shadow 0.15s;
+              "></button>
+            `).join('')}
+          </div>
+          <input id="settings-accent-custom" type="color" value="${themePrefs.accent || '#3B82F6'}"
+            title="Custom accent color"
+            style="width:28px;height:28px;border:none;border-radius:6px;padding:0;cursor:pointer;background:none;">
+        </div>
+      </div>
+
+      <!-- Density -->
+      <div class="srow">
+        <div>
+          <div class="srow-label">Density</div>
+          <div class="srow-hint">Controls spacing throughout the interface</div>
+        </div>
+        <div class="srow-ctrl" style="gap:6px;">
+          ${['compact','comfortable','spacious'].map(d => `
+            <button class="btn btn-sm density-btn" data-density="${d}" style="font-weight:600;
+              background:${themePrefs.density === d ? 'var(--color-accent)' : 'var(--color-surface)'};
+              color:${themePrefs.density === d ? '#fff' : 'var(--color-text)'};">
+              ${d === 'compact' ? '▪ Compact' : d === 'comfortable' ? '▫ Default' : '□ Spacious'}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Section divider -->
+      <div style="margin:var(--space-4) 0 var(--space-2);padding-bottom:var(--space-2);
+        border-bottom:2px solid var(--color-border);">
+        <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.08em;
+          text-transform:uppercase;color:var(--color-text-muted);">Typography</div>
+      </div>
+
+      <!-- Font family -->
+      <div class="srow" style="align-items:start;">
+        <div>
+          <div class="srow-label">Font Family</div>
+          <div class="srow-hint">System-wide typeface. Plus Jakarta Sans is self-hosted and works offline.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;min-width:0;">
+          ${FONT_OPTIONS.map(f => `
+            <button class="font-family-btn" data-font="${f.key}" style="
+              display:flex;align-items:center;gap:10px;
+              padding:9px 14px;border-radius:var(--radius-md);
+              border:2px solid ${themePrefs.fontFamily === f.key ? 'var(--color-accent)' : 'var(--color-border)'};
+              background:${themePrefs.fontFamily === f.key ? 'var(--color-accent-muted)' : 'var(--color-surface)'};
+              cursor:pointer;text-align:left;width:100%;transition:all 0.15s;min-width:220px;
+            ">
+              <span style="font-family:${f.stack};font-size:1.1rem;font-weight:600;color:var(--color-text);line-height:1;">Aa</span>
+              <span style="display:flex;flex-direction:column;gap:1px;">
+                <span style="font-size:var(--text-sm);font-weight:600;color:var(--color-text);font-family:${f.stack};">${f.label}</span>
+                <span style="font-size:var(--text-xs);color:var(--color-text-muted);">${f.tag}${f.googleUrl ? ' · requires network' : ' · offline-ready'}</span>
+              </span>
+              ${themePrefs.fontFamily === f.key ? '<span style="margin-left:auto;color:var(--color-accent);font-size:1rem;">✓</span>' : ''}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Font size -->
+      <div class="srow">
+        <div>
+          <div class="srow-label">Font Size</div>
+          <div class="srow-hint">Scale text across the entire app (80 – 130%)</div>
+        </div>
+        <div class="srow-ctrl" style="gap:10px;flex-direction:column;align-items:flex-end;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:var(--text-xs);color:var(--color-text-muted);">A</span>
+            <input type="range" id="settings-font-size" min="80" max="130" step="5"
+              value="${Math.round((themePrefs.fontSize || 1.0) * 100)}"
+              style="width:140px;cursor:pointer;">
+            <span style="font-size:var(--text-lg);font-weight:600;color:var(--color-text-muted);">A</span>
+          </div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);">
+            Current: <strong id="font-size-display">${Math.round((themePrefs.fontSize || 1.0) * 100)}%</strong>
+          </div>
+          <!-- Live preview -->
+          <div id="font-preview" style="
+            padding:10px 14px;border-radius:var(--radius-md);
+            background:var(--color-surface);border:1px solid var(--color-border);
+            width:100%;box-sizing:border-box;margin-top:4px;
+          ">
+            <div style="font-size:var(--text-xl);font-weight:700;letter-spacing:-0.03em;color:var(--color-text);">FamilyHub</div>
+            <div style="font-size:var(--text-sm);color:var(--color-text-muted);">Tasks · Calendar · Budget · Recipes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Letter spacing -->
+      <div class="srow">
+        <div>
+          <div class="srow-label">Letter Spacing</div>
+          <div class="srow-hint">Controls character spacing across headings and body text</div>
+        </div>
+        <div class="srow-ctrl" style="gap:6px;">
+          ${[['tight','Tight'],['normal','Default'],['wide','Wide']].map(([k,l]) => `
+            <button class="btn btn-sm letter-spacing-btn" data-ls="${k}" style="font-weight:600;
+              background:${themePrefs.letterSpacing === k ? 'var(--color-accent)' : 'var(--color-surface)'};
+              color:${themePrefs.letterSpacing === k ? '#fff' : 'var(--color-text)'};">
+              ${l}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Line height -->
+      <div class="srow">
+        <div>
+          <div class="srow-label">Line Height</div>
+          <div class="srow-hint">Controls vertical spacing between lines of text</div>
+        </div>
+        <div class="srow-ctrl" style="gap:6px;">
+          ${[['compact','Compact'],['normal','Default'],['relaxed','Relaxed']].map(([k,l]) => `
+            <button class="btn btn-sm line-height-btn" data-lh="${k}" style="font-weight:600;
+              background:${themePrefs.lineHeight === k ? 'var(--color-accent)' : 'var(--color-surface)'};
+              color:${themePrefs.lineHeight === k ? '#fff' : 'var(--color-text)'};">
+              ${l}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Reset typography -->
+      <div style="padding:var(--space-3) 0;">
+        <button id="settings-typography-reset" class="btn btn-sm" style="color:var(--color-danger);">
+          ↺ Reset typography to defaults
+        </button>
+      </div>
+
     </div>
 
     <!-- ─────────── ACCOUNT ───────────────────────────────── -->
@@ -469,23 +611,80 @@ async function renderSettings() {
     });
   });
 
-  // ── Theme ──────────────────────────────────────────────────
-  const _applyTheme = (mode) => {
+  // ── Theme + Typography wiring ─────────────────────────────
+  const _applyThemePatch = async (patch) => {
     if (env?.services?.theme) {
-      env.services.theme.setTheme({ mode });
-      renderSettings();
+      await env.services.theme.setTheme(patch);
     } else {
-      const html = document.documentElement;
-      html.setAttribute('data-theme', mode === 'auto'
-        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-        : mode);
-      try { localStorage.setItem('settings:theme', JSON.stringify({ mode })); } catch {}
-      renderSettings();
+      // Fallback when theme service not ready
+      if (patch.mode) {
+        const html = document.documentElement;
+        html.setAttribute('data-theme', patch.mode === 'auto'
+          ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : patch.mode);
+        try { localStorage.setItem('settings:theme', JSON.stringify({ mode: patch.mode })); } catch {}
+      }
     }
+    renderSettings();
   };
-  el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyTheme('light'));
-  el.querySelector('#settings-theme-dark')?.addEventListener('click',  () => _applyTheme('dark'));
-  el.querySelector('#settings-theme-auto')?.addEventListener('click',  () => _applyTheme('auto'));
+
+  // Color mode
+  el.querySelector('#settings-theme-light')?.addEventListener('click', () => _applyThemePatch({ mode: 'light' }));
+  el.querySelector('#settings-theme-dark')?.addEventListener('click',  () => _applyThemePatch({ mode: 'dark' }));
+  el.querySelector('#settings-theme-auto')?.addEventListener('click',  () => _applyThemePatch({ mode: 'auto' }));
+
+  // Accent colour swatches
+  el.querySelectorAll('.accent-swatch').forEach(btn => {
+    btn.addEventListener('click', () => _applyThemePatch({ accent: btn.dataset.accent }));
+  });
+  el.querySelector('#settings-accent-custom')?.addEventListener('input', (e) => {
+    _applyThemePatch({ accent: e.target.value });
+  });
+
+  // Density
+  el.querySelectorAll('.density-btn').forEach(btn => {
+    btn.addEventListener('click', () => _applyThemePatch({ density: btn.dataset.density }));
+  });
+
+  // Font family
+  el.querySelectorAll('.font-family-btn').forEach(btn => {
+    btn.addEventListener('click', () => _applyThemePatch({ fontFamily: btn.dataset.font }));
+  });
+
+  // Font size slider — live preview without full re-render
+  const fontSizeSlider = el.querySelector('#settings-font-size');
+  const fontSizeDisplay = el.querySelector('#font-size-display');
+  if (fontSizeSlider) {
+    fontSizeSlider.addEventListener('input', () => {
+      const pct = parseInt(fontSizeSlider.value, 10);
+      if (fontSizeDisplay) fontSizeDisplay.textContent = pct + '%';
+      // Live preview — update font-size-scale immediately without re-render
+      document.documentElement.style.setProperty('--font-size-scale', String(pct / 100));
+      document.documentElement.style.fontSize = `calc(16px * ${pct / 100})`;
+    });
+    fontSizeSlider.addEventListener('change', () => {
+      const pct = parseInt(fontSizeSlider.value, 10);
+      _applyThemePatch({ fontSize: pct / 100 });
+    });
+  }
+
+  // Letter spacing
+  el.querySelectorAll('.letter-spacing-btn').forEach(btn => {
+    btn.addEventListener('click', () => _applyThemePatch({ letterSpacing: btn.dataset.ls }));
+  });
+
+  // Line height
+  el.querySelectorAll('.line-height-btn').forEach(btn => {
+    btn.addEventListener('click', () => _applyThemePatch({ lineHeight: btn.dataset.lh }));
+  });
+
+  // Reset typography
+  el.querySelector('#settings-typography-reset')?.addEventListener('click', async () => {
+    await _applyThemePatch({
+      fontFamily: 'plus-jakarta-sans', fontSize: 1.0,
+      letterSpacing: 'normal', lineHeight: 'normal', density: 'comfortable',
+    });
+  });
 
   // ── Account ────────────────────────────────────────────────
   (async () => {
