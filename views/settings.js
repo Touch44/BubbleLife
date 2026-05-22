@@ -637,7 +637,16 @@ async function renderSettings() {
   el.querySelectorAll('.accent-swatch').forEach(btn => {
     btn.addEventListener('click', () => _applyThemePatch({ accent: btn.dataset.accent }));
   });
+  // Accent custom picker: live-preview via CSS var on 'input' (no re-render — avoids
+  // hundreds of re-renders while dragging). Persist + re-render only on 'change'.
   el.querySelector('#settings-accent-custom')?.addEventListener('input', (e) => {
+    const hex = e.target.value;
+    document.documentElement.style.setProperty('--color-accent', hex);
+    // Derive muted (12% opacity) inline for live feedback
+    document.documentElement.style.setProperty('--color-accent-muted',
+      hex + '1f'); // appended alpha for hex8 fallback — theme.js will set proper rgba on change
+  });
+  el.querySelector('#settings-accent-custom')?.addEventListener('change', (e) => {
     _applyThemePatch({ accent: e.target.value });
   });
 

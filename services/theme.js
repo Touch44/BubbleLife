@@ -7,7 +7,7 @@
  *   mode         — 'light'|'dark'|'auto'
  *   density      — 'compact'|'comfortable'|'spacious'
  *   fontSize     — 0.80–1.30 multiplier  (was 0.85–1.15)
- *   fontFamily   — 'plus-jakarta-sans'|'inter'|'dm-sans'|'system'|'geist'|'outfit'
+ *   fontFamily   — 'plus-jakarta-sans'|'inter'|'dm-sans'|'outfit'|'system'
  *   letterSpacing— 'tight'|'normal'|'wide'
  *   lineHeight   — 'compact'|'normal'|'relaxed'
  */
@@ -143,14 +143,16 @@ body, input, button, select, textarea {
   line-height: ${lh.body};
 }
 h1, h2, h3, h4, h5, h6,
-.view-title, .page-title, .stab-label,
-.entity-panel-title, .modal-title {
+.ef-modal-title, #entity-panel-title,
+.modal-title, .etv-header > h2,
+.dash-section-title {
   font-family: ${stack};
   letter-spacing: ${ls.heading};
   line-height: ${lh.heading};
 }
-.nav-label, .col-header, .srow-label,
-.badge, .tab-btn, .stab-btn {
+.srow-label, .col-header,
+.stab-btn, .tab-label,
+.badge, .chip {
   font-family: ${stack};
   letter-spacing: ${ls.label};
 }

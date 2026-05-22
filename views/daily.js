@@ -244,7 +244,8 @@ async function _loadData(dateStr) {
   const sequentialProjectMap = new Map(
     projects.filter(p => !p.deleted && p.completionMode === 'Sequential').map(p => [p.id, p])
   );
-  return { tasks: fTasks, events: fEvents, notes: fNotes, posts: fPosts,
+  return { tasks: fTasks, taskInstances,  // [v6.0.2] taskInstances returned for _syncDailyReviewLinks
+           events: fEvents, notes: fNotes, posts: fPosts,
            appointments: fAppointments, dateEntities: fDateEntities, mealPlans: fMealPlans,
            auditLog: auditLog || [], personMap, projectMap, accountMap, allComments,
            taskProjectEdgeMap, taskAssigneeEdgeMap, sequentialProjectMap };
@@ -2706,7 +2707,7 @@ async function renderDaily(params = {}) {
 
   try {
     // Load all data in parallel
-    const { tasks, events, notes, posts, appointments, dateEntities, mealPlans, auditLog,
+    const { tasks, taskInstances, events, notes, posts, appointments, dateEntities, mealPlans, auditLog,
             personMap, projectMap, accountMap, allComments,
             taskProjectEdgeMap, taskAssigneeEdgeMap, sequentialProjectMap } =
       await _loadData(dateStr);

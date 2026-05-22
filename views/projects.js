@@ -59,51 +59,12 @@ export function setFocusProject(id) {
 }
 export function clearFocusProject() { setFocusProject(null); }
 
+// [v6.0.2] Focus banner now owned by core/banner.js (global across all views).
+// _renderFocusBanner() is kept as a thin shim so existing call-sites do not break.
 function _renderFocusBanner() {
-  let banner = document.getElementById('focus-mode-banner');
-  const focusId = getFocusProjectId();
-  if (!focusId) {
-    if (banner) banner.remove();
-    _applyBannerOffset(false);
-    return;
-  }
-  const proj = _projects.find(p => p.id === focusId);
-  const name = proj ? (proj.name || proj.title || 'Project') : 'Project…';
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'focus-mode-banner';
-    banner.style.cssText = `
-      position:fixed;top:0;left:0;right:0;z-index:450;
-      background:var(--color-accent);color:#fff;
-      padding:6px 16px;display:flex;align-items:center;gap:10px;
-      font-size:var(--text-sm);font-weight:var(--weight-semibold);
-      box-shadow:0 2px 8px rgba(0,0,0,0.2);
-    `;
-    document.body.appendChild(banner);
-    // push app content down
-    _applyBannerOffset(true);
-  }
-  banner.innerHTML = `
-    <span>🎯</span>
-    <span>Focus Mode: <strong>${_esc(name)}</strong></span>
-    <span style="margin-left:auto;opacity:0.8;font-size:var(--text-xs);">All views filtered to this project</span>
-    <button id="focus-exit-btn" style="
-      background:rgba(255,255,255,0.2);border:none;color:#fff;cursor:pointer;
-      padding:2px 10px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:var(--weight-bold);">
-      ✕ Exit Focus
-    </button>
-  `;
-  banner.querySelector('#focus-exit-btn').addEventListener('click', () => clearFocusProject());
+  import('../core/banner.js').then(({ renderBanner }) => renderBanner()).catch(() => {});
 }
 
-function _applyBannerOffset(show) {
-  // Focus banner sits at top:0 above the topbar. Offset the topbar and main grid down.
-  const topbar = document.getElementById('topbar');
-  const appEl  = document.getElementById('app');
-  const OFFSET = '36px';
-  if (topbar) topbar.style.marginTop = show ? OFFSET : '';
-  if (appEl)  appEl.style.marginTop  = show ? OFFSET : '';
-}
 
 // ── [F1] Health Score ──────────────────────────────────────────
 function _computeHealthScore(project, projTasks) {
@@ -1613,12 +1574,17 @@ async function renderProjects(params = {}) {
           color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:var(--radius-full);cursor:pointer;">
           ⚡ What's next?
         </button>
+        <button class="proj-analytics-btn" data-project-id="${_esc(project.id)}"
+          style="padding:3px 10px;font-size:10px;font-weight:var(--weight-semibold);background:var(--color-surface);
+          color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:var(--radius-full);cursor:pointer;">
+          📊 Analytics
+        </button>
       </div>
     `;
 
     // Card click → panel
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.proj-add-task-btn,.proj-focus-btn,.proj-next-btn')) return;
+      if (e.target.closest('.proj-add-task-btn,.proj-focus-btn,.proj-next-btn,.proj-analytics-btn')) return;
       emit(EVENTS.PANEL_OPENED, { entityId: project.id });
     });
 
@@ -1650,10 +1616,319 @@ async function renderProjects(params = {}) {
       _showNextActionsPopover(nextBtn, project.id);
     });
 
+    // [v6.0.2] Analytics modal
+    const analyticsBtn = card.querySelector('.proj-analytics-btn');
+    analyticsBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _showProjectAnalytics(project.id);
+    });
+
     grid.appendChild(card);
   }
 
   el.appendChild(grid);
+}
+
+// ── [v6.0.2] Project Analytics Modal ─────────────────────────────
+async function _showProjectAnalytics(projectId) {
+  const overlay = document.createElement('div');
+  overlay.id = 'proj-analytics-overlay';
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:var(--z-modal);
+    background:var(--color-overlay);
+    display:flex;align-items:center;justify-content:center;
+    padding:var(--space-4);
+  `;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    background:var(--color-bg);border-radius:var(--radius-lg);
+    width:100%;max-width:700px;max-height:85vh;
+    display:flex;flex-direction:column;
+    box-shadow:var(--shadow-2xl);overflow:hidden;
+  `;
+  modal.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--color-border);
+      flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:var(--space-2);">
+        <span style="font-size:1.2rem;">📊</span>
+        <span style="font-size:var(--text-lg);font-weight:var(--weight-bold);">Project Analytics</span>
+      </div>
+      <button id="pa-close" style="background:none;border:none;cursor:pointer;font-size:1.2rem;
+        color:var(--color-text-muted);padding:4px 8px;border-radius:var(--radius-sm);">✕</button>
+    </div>
+    <div id="pa-body" style="flex:1;overflow-y:auto;padding:var(--space-5);">
+      <div style="color:var(--color-text-muted);text-align:center;padding:var(--space-8);">Loading analytics…</div>
+    </div>
+  `;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  modal.querySelector('#pa-close').addEventListener('click', () => overlay.remove());
+
+  // Compute analytics async
+  try {
+    const proj     = _projects.find(p => p.id === projectId);
+    const projTasks = _getProjectTasks(projectId);
+    const body      = modal.querySelector('#pa-body');
+    body.innerHTML  = _buildAnalyticsHTML(proj, projTasks);
+    _renderBurndownChart(body.querySelector('#pa-burndown-canvas'), projTasks);
+  } catch (err) {
+    console.error('[projects] analytics error:', err);
+    modal.querySelector('#pa-body').innerHTML =
+      `<div style="color:var(--color-danger);padding:var(--space-4);">Failed to load analytics: ${_esc(err.message)}</div>`;
+  }
+}
+
+function _buildAnalyticsHTML(proj, tasks) {
+  if (!proj) return `<div style="color:var(--color-text-muted);text-align:center;">Project not found.</div>`;
+
+  const total    = tasks.length;
+  const done     = tasks.filter(t => _isTaskDone(t)).length;
+  const inProg   = tasks.filter(t => t.status === 'In Progress' || t.status === 'Next Up').length;
+  const blocked  = tasks.filter(t => t.blocked).length;
+  const overdue  = tasks.filter(t => _isOverdue(t.dueDate) && !_isTaskDone(t)).length;
+  const pct      = total > 0 ? Math.round((done / total) * 100) : 0;
+  const health   = _computeHealthScore(proj, tasks);
+  const healthColor = _healthColor(health);
+
+  // Priority breakdown
+  const PRIOS = ['Critical','High','Medium','Low'];
+  const prioCount = {};
+  PRIOS.forEach(p => { prioCount[p] = tasks.filter(t => t.priority === p && !_isTaskDone(t)).length; });
+
+  // Status breakdown
+  const STATUS_LIST = ['Not Started','Next Up','In Progress','Blocked','Done'];
+  const statusCount = {};
+  STATUS_LIST.forEach(s => { statusCount[s] = tasks.filter(t => (t.status || 'Not Started') === s).length; });
+
+  // Deadline
+  const deadlineStr = proj.deadline ? new Date(proj.deadline + 'T00:00:00').toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'}) : 'No deadline';
+  const isOverdueProj = _isOverdue(proj.deadline);
+
+  // Days remaining
+  let daysRemaining = null;
+  if (proj.deadline) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const dl    = new Date(proj.deadline + 'T00:00:00');
+    daysRemaining = Math.round((dl - today) / 86400000);
+  }
+
+  const PRIO_COLORS = { Critical:'#dc2626', High:'#f97316', Medium:'#f59e0b', Low:'#6b7280' };
+  const STATUS_COLORS_MAP = {
+    'Not Started':'#94a3b8', 'Next Up':'#60a5fa', 'In Progress':'#3b82f6',
+    'Blocked':'#ef4444', 'Done':'#10b981',
+  };
+
+  return `
+    <!-- Header card -->
+    <div style="display:flex;align-items:center;gap:var(--space-4);margin-bottom:var(--space-5);
+      padding:var(--space-4);background:var(--color-surface);border-radius:var(--radius-lg);
+      border:1px solid var(--color-border);">
+      ${_healthRingSvg(health)}
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:var(--text-lg);font-weight:var(--weight-bold);color:var(--color-text);
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(proj.name || proj.title || 'Untitled')}</div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px;">
+          ${_esc(proj.status || 'Active')} · Deadline: <span style="color:${isOverdueProj ? 'var(--color-danger)' : 'var(--color-text)'};">${deadlineStr}</span>
+          ${daysRemaining !== null ? `· <strong style="color:${daysRemaining < 0 ? 'var(--color-danger)' : daysRemaining <= 7 ? 'var(--color-warning)' : 'var(--color-success)'};">${daysRemaining < 0 ? Math.abs(daysRemaining) + 'd overdue' : daysRemaining + 'd left'}</strong>` : ''}
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:${healthColor};">${pct}%</div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);">complete</div>
+      </div>
+    </div>
+
+    <!-- Progress bar -->
+    <div style="margin-bottom:var(--space-5);">
+      <div style="display:flex;justify-content:space-between;margin-bottom:var(--space-1);">
+        <span style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;">Progress</span>
+        <span style="font-size:var(--text-xs);color:var(--color-text-muted);">${done} of ${total} tasks done</span>
+      </div>
+      <div style="height:10px;background:var(--color-surface-2);border-radius:var(--radius-full);overflow:hidden;border:1px solid var(--color-border);">
+        <div style="height:100%;width:${pct}%;background:${healthColor};border-radius:var(--radius-full);transition:width 0.4s;"></div>
+      </div>
+    </div>
+
+    <!-- Key metrics row -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-3);margin-bottom:var(--space-5);">
+      ${[
+        { label:'Total Tasks', val: total, color:'var(--color-text)' },
+        { label:'In Progress', val: inProg, color:'#3b82f6' },
+        { label:'Overdue',     val: overdue, color: overdue > 0 ? 'var(--color-danger)' : 'var(--color-text-muted)' },
+        { label:'Blocked',     val: blocked, color: blocked > 0 ? 'var(--color-warning)' : 'var(--color-text-muted)' },
+      ].map(m => `
+        <div style="padding:var(--space-3);background:var(--color-surface);border-radius:var(--radius-md);
+          border:1px solid var(--color-border);text-align:center;">
+          <div style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:${m.color};">${m.val}</div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px;">${m.label}</div>
+        </div>
+      `).join('')}
+    </div>
+
+    <!-- Status breakdown -->
+    <div style="margin-bottom:var(--space-5);">
+      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);
+        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);">Status Breakdown</div>
+      <div style="display:flex;flex-direction:column;gap:var(--space-2);">
+        ${STATUS_LIST.filter(s => statusCount[s] > 0).map(s => {
+          const cnt = statusCount[s];
+          const pctS = total > 0 ? Math.round((cnt / total) * 100) : 0;
+          const col = STATUS_COLORS_MAP[s] || '#94a3b8';
+          return `
+            <div style="display:flex;align-items:center;gap:var(--space-3);">
+              <span style="width:90px;font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">${s}</span>
+              <div style="flex:1;height:8px;background:var(--color-surface-2);border-radius:var(--radius-full);overflow:hidden;">
+                <div style="height:100%;width:${pctS}%;background:${col};border-radius:var(--radius-full);"></div>
+              </div>
+              <span style="width:28px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:right;">${cnt}</span>
+            </div>
+          `;
+        }).join('')}
+        ${STATUS_LIST.every(s => !statusCount[s]) ? '<div style="color:var(--color-text-muted);font-size:var(--text-sm);">No tasks yet.</div>' : ''}
+      </div>
+    </div>
+
+    <!-- Priority breakdown (open tasks only) -->
+    ${PRIOS.some(p => prioCount[p] > 0) ? `
+    <div style="margin-bottom:var(--space-5);">
+      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);
+        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);">Open Tasks by Priority</div>
+      <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
+        ${PRIOS.filter(p => prioCount[p] > 0).map(p => `
+          <div style="padding:var(--space-2) var(--space-3);border-radius:var(--radius-full);
+            background:${PRIO_COLORS[p]}22;border:1px solid ${PRIO_COLORS[p]}44;
+            display:flex;align-items:center;gap:6px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${PRIO_COLORS[p]};display:inline-block;"></span>
+            <span style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:${PRIO_COLORS[p]};">${p}</span>
+            <span style="font-size:var(--text-xs);color:var(--color-text-muted);">${prioCount[p]}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Burndown canvas -->
+    <div style="margin-bottom:var(--space-5);">
+      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);
+        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);">Task Completion Timeline</div>
+      <canvas id="pa-burndown-canvas" height="160"
+        style="width:100%;border-radius:var(--radius-md);background:var(--color-surface);
+          border:1px solid var(--color-border);display:block;"></canvas>
+    </div>
+
+    <!-- Goal -->
+    ${proj.goal ? `
+    <div style="padding:var(--space-4);background:var(--color-surface);border-radius:var(--radius-md);
+      border-left:3px solid var(--color-accent);margin-bottom:var(--space-4);">
+      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-accent);
+        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-1);">Goal</div>
+      <div style="font-size:var(--text-sm);color:var(--color-text);line-height:1.5;">${_esc(proj.goal)}</div>
+    </div>` : ''}
+  `;
+}
+
+function _renderBurndownChart(canvas, tasks) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  // Get completed tasks with completion dates — use updatedAt as proxy
+  const completedWithDate = tasks
+    .filter(t => _isTaskDone(t) && (t.completedAt || t.updatedAt))
+    .map(t => {
+      const dateStr = (t.completedAt || t.updatedAt || '').slice(0, 10);
+      return { date: dateStr };
+    })
+    .filter(t => t.date)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (completedWithDate.length === 0) {
+    ctx.fillStyle = 'var(--color-text-muted)';
+    ctx.font = '13px var(--font-body, sans-serif)';
+    ctx.textAlign = 'center';
+    ctx.fillText('No completed tasks yet', canvas.width / 2, 80);
+    return;
+  }
+
+  // Build cumulative by date
+  const dateMap = {};
+  completedWithDate.forEach(({ date }) => {
+    dateMap[date] = (dateMap[date] || 0) + 1;
+  });
+  const dates = Object.keys(dateMap).sort();
+
+  let cumulative = 0;
+  const points = dates.map(d => { cumulative += dateMap[d]; return { date: d, count: cumulative }; });
+
+  // Draw
+  const W = canvas.offsetWidth || 640;
+  const H = 160;
+  canvas.width  = W;
+  canvas.height = H;
+
+  const PAD = { top: 16, right: 16, bottom: 32, left: 40 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+  const maxVal = points[points.length - 1].count;
+
+  // Grid lines
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 1;
+  [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+    const y = PAD.top + chartH - f * chartH;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(f * maxVal), PAD.left - 6, y + 3);
+  });
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  points.forEach(({ count }, i) => {
+    const x = PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
+    const y = PAD.top  + chartH - (count / maxVal) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Fill
+  ctx.beginPath();
+  points.forEach(({ count }, i) => {
+    const x = PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
+    const y = PAD.top  + chartH - (count / maxVal) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(PAD.left + chartW, PAD.top + chartH);
+  ctx.lineTo(PAD.left, PAD.top + chartH);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(59,130,246,0.12)';
+  ctx.fill();
+
+  // Dots
+  ctx.fillStyle = '#3b82f6';
+  points.forEach(({ count }, i) => {
+    const x = PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
+    const y = PAD.top  + chartH - (count / maxVal) * chartH;
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // X-axis labels (first and last date)
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  if (dates.length > 0) {
+    ctx.fillText(dates[0].slice(5), PAD.left, H - 6);
+  }
+  if (dates.length > 1) {
+    ctx.textAlign = 'right';
+    ctx.fillText(dates[dates.length - 1].slice(5), W - PAD.right, H - 6);
+  }
 }
 
 // ── Module-level listeners ─────────────────────────────────────

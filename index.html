@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v6.0.0 [v6.0.0] Self-hosted PJS font + vendored idb + full typography settings -->
+  <!-- Build: v6.0.2 [v6.0.2] Global context+focus banner + project analytics -->
 
   <title>FamilyHub</title>
 
@@ -753,6 +753,7 @@
   import { initSearch }              from './components/search.js';
   import { initAuth }                from './core/auth.js';
   import { initContext }             from './core/context.js';   // CS-01
+  import { initBanner } from './core/banner.js';                  // [v6.0.2] global context+focus banner
   import { buildEnv }                from './core/env.js';      // P-01
   import { initTabs }                from './core/tabs.js';     // [MAJOR] tab system
   import { dataServiceDescriptor }    from './core/db.js';        // P-06
@@ -1006,6 +1007,7 @@
         console.error('[tabs] initTabs failed:', tabErr);
       }
       initContext();                       // CS-01: restore active context from localStorage
+      initBanner();                        // [v6.0.2] global context + focus mode banner
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions

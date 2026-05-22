@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.0.0'; // [v6.0.0] Self-hosted PJS fonts + vendored idb + typography settings
+const APP_VERSION   = '6.0.3'; // [v6.0.3] fix: taskInstances ReferenceError in daily.js; // [v6.0.2] Global context+focus banner + project analytics
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -17,6 +17,7 @@ const SHELL_FILES = [
   './core/i18n.js', './core/signals.js', './core/toast.js', './core/events.js',
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
   './core/context.js', './core/object-type-registry.js', './core/tabs.js',
+  './core/banner.js',      // [v6.0.2] global context+focus banner
   './services/notification.js', './services/dialog.js', './services/hotkey.js',
   './services/history.js', './services/command.js', './services/effects.js',
   './services/theme.js', './services/sync.js', './services/activity.js',
