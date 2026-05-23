@@ -4511,12 +4511,6 @@ function _fieldKeyToRelLabel(key, fieldConfig) {
   return key;
 }
 
- */
-function _fieldKeyToRelLabel(key, fieldConfig) {
-  // Always return the field key — consistent with how all readers query edges
-  return key;
-}
-
 // ── [v6.2.0] Task Period Overlap Checking ────────────────────────────────────
 
 /**
