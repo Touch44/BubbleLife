@@ -255,13 +255,10 @@
 }
 
 /* ── Global font application ────────────────────────────────── */
-/* Applied at root level so all elements inherit PJS by default  */
-html {
-  font-size: calc(16px * var(--font-size-scale));
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
+/* layout.css sets html{font-size:16px} as the static baseline.  */
+/* theme.js injects fh-theme-overrides which scales it at runtime */
+/* via: html { font-size: calc(16px * var(--font-size-scale)) }  */
+/* Smoothing/rendering are on body in layout.css — not duplicated */
 
 body,
 input, button, select, textarea, optgroup {

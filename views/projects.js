@@ -20,6 +20,8 @@
 
 import { registerView } from '../core/router.js';
 import { getEntitiesByType, getEdgesTo, getEdgesFrom, saveEntity, saveEdge, getSetting, setSetting } from '../core/db.js';
+import { getGamificationState, getProjectStreak, getMemberStats, getLeaderboard,
+         awardXP, BADGE_DEFS, LEVELS, _levelFor, _nextLevel, XP } from '../services/gamification.js';
 import { emit, on, EVENTS } from '../core/events.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { openForm } from '../components/entity-form.js';
@@ -1631,58 +1633,127 @@ async function renderProjects(params = {}) {
 
 // ── [v6.0.2] Project Analytics Modal ─────────────────────────────
 async function _showProjectAnalytics(projectId) {
+  // Remove any existing overlay
+  document.getElementById('proj-analytics-overlay')?.remove();
+
   const overlay = document.createElement('div');
   overlay.id = 'proj-analytics-overlay';
   overlay.style.cssText = `
     position:fixed;inset:0;z-index:var(--z-modal);
     background:var(--color-overlay);
     display:flex;align-items:center;justify-content:center;
-    padding:var(--space-4);
+    padding:var(--space-4);animation:fadeIn 0.15s ease;
   `;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
   const modal = document.createElement('div');
   modal.style.cssText = `
     background:var(--color-bg);border-radius:var(--radius-lg);
-    width:100%;max-width:700px;max-height:85vh;
+    width:100%;max-width:860px;max-height:90vh;
     display:flex;flex-direction:column;
     box-shadow:var(--shadow-2xl);overflow:hidden;
   `;
   modal.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;
-      padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--color-border);
-      flex-shrink:0;">
-      <div style="display:flex;align-items:center;gap:var(--space-2);">
-        <span style="font-size:1.2rem;">📊</span>
-        <span style="font-size:var(--text-lg);font-weight:var(--weight-bold);">Project Analytics</span>
+    <div id="pa-header" style="display:flex;align-items:center;justify-content:space-between;
+      padding:14px 20px;border-bottom:1px solid var(--color-border);flex-shrink:0;
+      background:var(--color-surface);">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:1.3rem;">📊</span>
+        <div>
+          <div style="font-size:var(--text-lg);font-weight:var(--weight-bold);line-height:1.2;" id="pa-title">Analytics</div>
+          <div style="font-size:var(--text-xs);color:var(--color-text-muted);" id="pa-subtitle">Project Intelligence</div>
+        </div>
       </div>
-      <button id="pa-close" style="background:none;border:none;cursor:pointer;font-size:1.2rem;
-        color:var(--color-text-muted);padding:4px 8px;border-radius:var(--radius-sm);">✕</button>
+      <button id="pa-close" style="background:none;border:none;cursor:pointer;font-size:1.3rem;
+        color:var(--color-text-muted);padding:6px 10px;border-radius:var(--radius-md);
+        transition:background 0.12s;" onmouseover="this.style.background='var(--color-surface-2)'"
+        onmouseout="this.style.background='none'">✕</button>
     </div>
-    <div id="pa-body" style="flex:1;overflow-y:auto;padding:var(--space-5);">
-      <div style="color:var(--color-text-muted);text-align:center;padding:var(--space-8);">Loading analytics…</div>
+    <div id="pa-tabs" style="display:flex;border-bottom:1px solid var(--color-border);
+      flex-shrink:0;background:var(--color-surface);padding:0 20px;gap:2px;">
+      ${['overview','timeline','team','badges'].map((t,i) => `
+        <button class="pa-tab" data-tab="${t}" style="
+          padding:10px 16px;font-size:var(--text-sm);font-weight:var(--weight-medium);
+          border:none;cursor:pointer;border-bottom:2px solid ${i===0?'var(--color-accent)':'transparent'};
+          background:none;color:${i===0?'var(--color-accent)':'var(--color-text-muted)'};
+          transition:all 0.12s;white-space:nowrap;
+        ">
+          ${t==='overview'?'📈 Overview':t==='timeline'?'📅 Timeline':t==='team'?'👥 Team':'🏆 Badges'}
+        </button>
+      `).join('')}
+    </div>
+    <div id="pa-body" style="flex:1;overflow-y:auto;padding:20px;">
+      <div style="color:var(--color-text-muted);text-align:center;padding:40px;">
+        <div style="font-size:2rem;margin-bottom:8px;">⏳</div>
+        Loading analytics…
+      </div>
     </div>
   `;
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
-  modal.querySelector('#pa-close').addEventListener('click', () => overlay.remove());
 
-  // Compute analytics async
+  // Wire close
+  modal.querySelector('#pa-close').addEventListener('click', () => overlay.remove());
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); }
+  });
+
+  // Wire tabs
+  let _activeTab = 'overview';
+  const proj       = _projects.find(p => p.id === projectId);
+  const projTasks  = _getProjectTasks(projectId);
+
+  // Load gamification data
+  let gamState = null, projStreak = null, leaderboard = null, memberStats = {};
   try {
-    const proj     = _projects.find(p => p.id === projectId);
-    const projTasks = _getProjectTasks(projectId);
-    const body      = modal.querySelector('#pa-body');
-    body.innerHTML  = _buildAnalyticsHTML(proj, projTasks);
-    _renderBurndownChart(body.querySelector('#pa-burndown-canvas'), projTasks);
-  } catch (err) {
-    console.error('[projects] analytics error:', err);
-    modal.querySelector('#pa-body').innerHTML =
-      `<div style="color:var(--color-danger);padding:var(--space-4);">Failed to load analytics: ${_esc(err.message)}</div>`;
+    [gamState, projStreak, leaderboard] = await Promise.all([
+      getGamificationState(),
+      getProjectStreak(projectId),
+      getLeaderboard(),
+    ]);
+    // Load per-member stats for team members
+    const members = _projectMemberEdgeMap.get(projectId) || [];
+    for (const mid of members) {
+      memberStats[mid] = await getMemberStats(mid).catch(() => null);
+    }
+  } catch(e) { console.warn('[analytics] gamification load error', e); }
+
+  if (proj) {
+    modal.querySelector('#pa-title').textContent   = proj.name || proj.title || 'Project';
+    modal.querySelector('#pa-subtitle').textContent = `${proj.status || 'Active'} · ${projTasks.length} tasks`;
   }
+
+  async function renderTab(tab) {
+    _activeTab = tab;
+    modal.querySelectorAll('.pa-tab').forEach(btn => {
+      const active = btn.dataset.tab === tab;
+      btn.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
+      btn.style.color             = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
+      btn.style.fontWeight        = active ? 'var(--weight-semibold)' : 'var(--weight-medium)';
+    });
+    const body = modal.querySelector('#pa-body');
+    body.innerHTML = '';
+    try {
+      if (tab === 'overview')  { body.innerHTML = _buildOverviewHTML(proj, projTasks, projStreak); _renderAllCharts(body, projTasks, proj); }
+      if (tab === 'timeline')  { body.innerHTML = _buildTimelineHTML(proj, projTasks); _renderTimelineCharts(body, projTasks, proj); }
+      if (tab === 'team')      { body.innerHTML = _buildTeamHTML(proj, projectId, leaderboard, memberStats); }
+      if (tab === 'badges')    { body.innerHTML = _buildBadgesHTML(gamState, leaderboard, projStreak); }
+    } catch(err) {
+      body.innerHTML = `<div style="color:var(--color-danger);padding:20px;">Error: ${_esc(err.message)}</div>`;
+      console.error('[analytics] tab render error:', err);
+    }
+  }
+
+  modal.querySelectorAll('.pa-tab').forEach(btn => {
+    btn.addEventListener('click', () => renderTab(btn.dataset.tab));
+  });
+
+  await renderTab('overview');
 }
 
-function _buildAnalyticsHTML(proj, tasks) {
-  if (!proj) return `<div style="color:var(--color-text-muted);text-align:center;">Project not found.</div>`;
+// ── Overview Tab ──────────────────────────────────────────────────
+function _buildOverviewHTML(proj, tasks, projStreak) {
+  if (!proj) return '<div style="color:var(--color-text-muted);text-align:center;padding:40px;">Project not found.</div>';
 
   const total    = tasks.length;
   const done     = tasks.filter(t => _isTaskDone(t)).length;
@@ -1691,244 +1762,568 @@ function _buildAnalyticsHTML(proj, tasks) {
   const overdue  = tasks.filter(t => _isOverdue(t.dueDate) && !_isTaskDone(t)).length;
   const pct      = total > 0 ? Math.round((done / total) * 100) : 0;
   const health   = _computeHealthScore(proj, tasks);
-  const healthColor = _healthColor(health);
-
-  // Priority breakdown
-  const PRIOS = ['Critical','High','Medium','Low'];
-  const prioCount = {};
-  PRIOS.forEach(p => { prioCount[p] = tasks.filter(t => t.priority === p && !_isTaskDone(t)).length; });
-
-  // Status breakdown
-  const STATUS_LIST = ['Not Started','Next Up','In Progress','Blocked','Done'];
-  const statusCount = {};
-  STATUS_LIST.forEach(s => { statusCount[s] = tasks.filter(t => (t.status || 'Not Started') === s).length; });
-
-  // Deadline
-  const deadlineStr = proj.deadline ? new Date(proj.deadline + 'T00:00:00').toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'}) : 'No deadline';
-  const isOverdueProj = _isOverdue(proj.deadline);
+  const hColor   = _healthColor(health);
+  const hLabel   = _healthLabel(health);
 
   // Days remaining
-  let daysRemaining = null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  let daysRemaining = null, dlStr = 'No deadline', dlOverdue = false;
   if (proj.deadline) {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const dl    = new Date(proj.deadline + 'T00:00:00');
+    const dl = new Date(proj.deadline + 'T00:00:00');
     daysRemaining = Math.round((dl - today) / 86400000);
+    dlStr = dl.toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'});
+    dlOverdue = daysRemaining < 0;
   }
 
+  // Velocity: tasks completed in last 7 days
+  const SEVEN_DAYS = 7*86400000;
+  const recentDone = tasks.filter(t => _isTaskDone(t) && t.updatedAt &&
+    (Date.now() - new Date(t.updatedAt).getTime()) < SEVEN_DAYS).length;
+
+  // Predicted completion
+  let predicted = '';
+  if (total > done && recentDone > 0) {
+    const remaining = total - done;
+    const daysToComplete = Math.ceil(remaining / (recentDone / 7));
+    const pd = new Date(); pd.setDate(pd.getDate() + daysToComplete);
+    predicted = pd.toLocaleDateString(undefined, {month:'short',day:'numeric'});
+  } else if (done === total && total > 0) {
+    predicted = '✓ Complete';
+  }
+
+  // Risk signals
+  const risks = [];
+  if (overdue > 0)  risks.push({ icon:'🚨', msg:`${overdue} overdue task${overdue>1?'s':''}`, sev:'danger' });
+  if (blocked > 0)  risks.push({ icon:'🔒', msg:`${blocked} blocked task${blocked>1?'s':''}`, sev:'warning' });
+  if (dlOverdue)    risks.push({ icon:'📅', msg:'Project deadline passed', sev:'danger' });
+  if (recentDone === 0 && done < total) risks.push({ icon:'😴', msg:'No activity in 7 days', sev:'warning' });
+  if (daysRemaining !== null && daysRemaining <= 7 && done < total)
+    risks.push({ icon:'⏰', msg:'Less than 7 days to deadline', sev:'warning' });
+
+  const streak = projStreak || { current: 0, best: 0 };
+
+  const SEV_COLORS = { danger:'var(--color-danger)', warning:'var(--color-warning)' };
+  const SEV_BG     = { danger:'var(--color-danger-bg)', warning:'var(--color-warning-bg)' };
+
   const PRIO_COLORS = { Critical:'#dc2626', High:'#f97316', Medium:'#f59e0b', Low:'#6b7280' };
-  const STATUS_COLORS_MAP = {
-    'Not Started':'#94a3b8', 'Next Up':'#60a5fa', 'In Progress':'#3b82f6',
-    'Blocked':'#ef4444', 'Done':'#10b981',
-  };
+  const STATUS_COLORS = { 'Not Started':'#94a3b8','Next Up':'#60a5fa','In Progress':'#3b82f6','Blocked':'#ef4444','Done':'#10b981' };
+  const STATUS_LIST   = ['Not Started','Next Up','In Progress','Blocked','Done'];
+  const statusCount   = {}; STATUS_LIST.forEach(s => { statusCount[s] = tasks.filter(t => (t.status||'Not Started')===s).length; });
+  const PRIOS         = ['Critical','High','Medium','Low'];
+  const prioCount     = {}; PRIOS.forEach(p => { prioCount[p] = tasks.filter(t=>t.priority===p&&!_isTaskDone(t)).length; });
 
   return `
-    <!-- Header card -->
-    <div style="display:flex;align-items:center;gap:var(--space-4);margin-bottom:var(--space-5);
-      padding:var(--space-4);background:var(--color-surface);border-radius:var(--radius-lg);
-      border:1px solid var(--color-border);">
-      ${_healthRingSvg(health)}
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:var(--text-lg);font-weight:var(--weight-bold);color:var(--color-text);
-          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(proj.name || proj.title || 'Untitled')}</div>
-        <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px;">
-          ${_esc(proj.status || 'Active')} · Deadline: <span style="color:${isOverdueProj ? 'var(--color-danger)' : 'var(--color-text)'};">${deadlineStr}</span>
-          ${daysRemaining !== null ? `· <strong style="color:${daysRemaining < 0 ? 'var(--color-danger)' : daysRemaining <= 7 ? 'var(--color-warning)' : 'var(--color-success)'};">${daysRemaining < 0 ? Math.abs(daysRemaining) + 'd overdue' : daysRemaining + 'd left'}</strong>` : ''}
+    <!-- Hero metrics row -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;">
+      <!-- Health score -->
+      <div style="grid-column:1;padding:16px;background:var(--color-surface);border-radius:var(--radius-lg);
+        border:1px solid var(--color-border);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;">
+        ${_healthRingSvg(health)}
+        <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:${hColor};text-transform:uppercase;letter-spacing:0.06em;">${hLabel}</div>
+        <div style="font-size:10px;color:var(--color-text-muted);">Health Score</div>
+      </div>
+      <!-- Progress -->
+      <div style="padding:16px;background:var(--color-surface);border-radius:var(--radius-lg);border:1px solid var(--color-border);">
+        <div style="font-size:2rem;font-weight:var(--weight-bold);color:${hColor};line-height:1;">${pct}%</div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin:4px 0 10px;">Complete</div>
+        <div style="height:6px;background:var(--color-surface-2);border-radius:99px;overflow:hidden;">
+          <div style="height:100%;width:${pct}%;background:${hColor};border-radius:99px;"></div>
         </div>
+        <div style="font-size:10px;color:var(--color-text-muted);margin-top:6px;">${done} of ${total} tasks</div>
       </div>
-      <div style="text-align:right;flex-shrink:0;">
-        <div style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:${healthColor};">${pct}%</div>
-        <div style="font-size:var(--text-xs);color:var(--color-text-muted);">complete</div>
+      <!-- Deadline -->
+      <div style="padding:16px;background:var(--color-surface);border-radius:var(--radius-lg);border:1px solid var(--color-border);">
+        <div style="font-size:1.4rem;font-weight:var(--weight-bold);
+          color:${dlOverdue?'var(--color-danger)':daysRemaining!==null&&daysRemaining<=7?'var(--color-warning)':'var(--color-text)'};line-height:1;">
+          ${daysRemaining===null?'—':Math.abs(daysRemaining)}
+        </div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin:4px 0 6px;">
+          ${daysRemaining===null?'No deadline':dlOverdue?'days overdue':'days left'}
+        </div>
+        <div style="font-size:10px;color:var(--color-text-muted);">${dlStr}</div>
+        ${predicted?`<div style="font-size:10px;color:var(--color-text-muted);margin-top:4px;">Est. done: <strong>${_esc(predicted)}</strong></div>`:''}
+      </div>
+      <!-- Streak -->
+      <div style="padding:16px;background:var(--color-surface);border-radius:var(--radius-lg);border:1px solid var(--color-border);">
+        <div style="font-size:1.8rem;line-height:1;">${streak.current >= 3 ? '🔥' : '📆'}</div>
+        <div style="font-size:1.4rem;font-weight:var(--weight-bold);color:${streak.current>=7?'#f97316':streak.current>=3?'#f59e0b':'var(--color-text)'};margin:4px 0 2px;">${streak.current}d</div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);">Current streak</div>
+        <div style="font-size:10px;color:var(--color-text-muted);margin-top:4px;">Best: ${streak.best}d</div>
       </div>
     </div>
 
-    <!-- Progress bar -->
-    <div style="margin-bottom:var(--space-5);">
-      <div style="display:flex;justify-content:space-between;margin-bottom:var(--space-1);">
-        <span style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.06em;">Progress</span>
-        <span style="font-size:var(--text-xs);color:var(--color-text-muted);">${done} of ${total} tasks done</span>
-      </div>
-      <div style="height:10px;background:var(--color-surface-2);border-radius:var(--radius-full);overflow:hidden;border:1px solid var(--color-border);">
-        <div style="height:100%;width:${pct}%;background:${healthColor};border-radius:var(--radius-full);transition:width 0.4s;"></div>
-      </div>
-    </div>
-
-    <!-- Key metrics row -->
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-3);margin-bottom:var(--space-5);">
+    <!-- Secondary metrics -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
       ${[
-        { label:'Total Tasks', val: total, color:'var(--color-text)' },
-        { label:'In Progress', val: inProg, color:'#3b82f6' },
-        { label:'Overdue',     val: overdue, color: overdue > 0 ? 'var(--color-danger)' : 'var(--color-text-muted)' },
-        { label:'Blocked',     val: blocked, color: blocked > 0 ? 'var(--color-warning)' : 'var(--color-text-muted)' },
-      ].map(m => `
-        <div style="padding:var(--space-3);background:var(--color-surface);border-radius:var(--radius-md);
-          border:1px solid var(--color-border);text-align:center;">
-          <div style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:${m.color};">${m.val}</div>
-          <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px;">${m.label}</div>
+        { icon:'⚡', val:inProg,     label:'In Progress', c:inProg>0?'#3b82f6':'var(--color-text-muted)' },
+        { icon:'🚨', val:overdue,    label:'Overdue',     c:overdue>0?'var(--color-danger)':'var(--color-text-muted)' },
+        { icon:'🔒', val:blocked,    label:'Blocked',     c:blocked>0?'var(--color-warning)':'var(--color-text-muted)' },
+        { icon:'📈', val:recentDone, label:'This Week',   c:recentDone>0?'var(--color-success)':'var(--color-text-muted)' },
+      ].map(m=>`
+        <div style="padding:12px;background:var(--color-surface);border-radius:var(--radius-md);border:1px solid var(--color-border);text-align:center;">
+          <div style="font-size:1.1rem;margin-bottom:4px;">${m.icon}</div>
+          <div style="font-size:1.4rem;font-weight:var(--weight-bold);color:${m.c};">${m.val}</div>
+          <div style="font-size:10px;color:var(--color-text-muted);">${m.label}</div>
         </div>
       `).join('')}
     </div>
 
-    <!-- Status breakdown -->
-    <div style="margin-bottom:var(--space-5);">
-      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);
-        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);">Status Breakdown</div>
-      <div style="display:flex;flex-direction:column;gap:var(--space-2);">
-        ${STATUS_LIST.filter(s => statusCount[s] > 0).map(s => {
-          const cnt = statusCount[s];
-          const pctS = total > 0 ? Math.round((cnt / total) * 100) : 0;
-          const col = STATUS_COLORS_MAP[s] || '#94a3b8';
-          return `
-            <div style="display:flex;align-items:center;gap:var(--space-3);">
-              <span style="width:90px;font-size:var(--text-xs);color:var(--color-text-muted);flex-shrink:0;">${s}</span>
-              <div style="flex:1;height:8px;background:var(--color-surface-2);border-radius:var(--radius-full);overflow:hidden;">
-                <div style="height:100%;width:${pctS}%;background:${col};border-radius:var(--radius-full);"></div>
-              </div>
-              <span style="width:28px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:right;">${cnt}</span>
-            </div>
-          `;
-        }).join('')}
-        ${STATUS_LIST.every(s => !statusCount[s]) ? '<div style="color:var(--color-text-muted);font-size:var(--text-sm);">No tasks yet.</div>' : ''}
-      </div>
-    </div>
-
-    <!-- Priority breakdown (open tasks only) -->
-    ${PRIOS.some(p => prioCount[p] > 0) ? `
-    <div style="margin-bottom:var(--space-5);">
-      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);
-        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);">Open Tasks by Priority</div>
-      <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;">
-        ${PRIOS.filter(p => prioCount[p] > 0).map(p => `
-          <div style="padding:var(--space-2) var(--space-3);border-radius:var(--radius-full);
-            background:${PRIO_COLORS[p]}22;border:1px solid ${PRIO_COLORS[p]}44;
-            display:flex;align-items:center;gap:6px;">
-            <span style="width:8px;height:8px;border-radius:50%;background:${PRIO_COLORS[p]};display:inline-block;"></span>
-            <span style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:${PRIO_COLORS[p]};">${p}</span>
-            <span style="font-size:var(--text-xs);color:var(--color-text-muted);">${prioCount[p]}</span>
+    <!-- Risk signals -->
+    ${risks.length > 0 ? `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:8px;">⚠ Risk Signals</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${risks.map(r=>`
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;
+            background:${SEV_BG[r.sev]};border-radius:var(--radius-md);
+            border-left:3px solid ${SEV_COLORS[r.sev]};">
+            <span>${r.icon}</span>
+            <span style="font-size:var(--text-sm);color:${SEV_COLORS[r.sev]};font-weight:var(--weight-medium);">${_esc(r.msg)}</span>
           </div>
         `).join('')}
       </div>
-    </div>` : ''}
+    </div>` : `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--color-success-bg);
+      border-radius:var(--radius-md);border-left:3px solid var(--color-success);margin-bottom:20px;">
+      <span>✅</span><span style="font-size:var(--text-sm);color:var(--color-success-text);font-weight:500;">No risk signals — project is on track</span>
+    </div>`}
 
-    <!-- Burndown canvas -->
-    <div style="margin-bottom:var(--space-5);">
-      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);
-        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-3);">Task Completion Timeline</div>
-      <canvas id="pa-burndown-canvas" height="160"
-        style="width:100%;border-radius:var(--radius-md);background:var(--color-surface);
-          border:1px solid var(--color-border);display:block;"></canvas>
+    <!-- Status breakdown -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+      <div>
+        <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:10px;">Status Breakdown</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${STATUS_LIST.filter(s=>statusCount[s]>0).map(s => {
+            const cnt  = statusCount[s];
+            const pctS = total > 0 ? Math.round((cnt/total)*100) : 0;
+            const col  = STATUS_COLORS[s]||'#94a3b8';
+            return `
+              <div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+                  <span style="font-size:var(--text-xs);color:var(--color-text-muted);">${s}</span>
+                  <span style="font-size:var(--text-xs);font-weight:600;color:${col};">${cnt}</span>
+                </div>
+                <div style="height:7px;background:var(--color-surface-2);border-radius:99px;overflow:hidden;">
+                  <div style="height:100%;width:${pctS}%;background:${col};border-radius:99px;"></div>
+                </div>
+              </div>`;
+          }).join('')}
+          ${STATUS_LIST.every(s=>!statusCount[s])?'<div style="color:var(--color-text-muted);font-size:var(--text-sm);">No tasks yet</div>':''}
+        </div>
+      </div>
+      <div>
+        <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:10px;">Open Tasks by Priority</div>
+        ${PRIOS.some(p=>prioCount[p]>0) ? `<div style="display:flex;flex-direction:column;gap:8px;">
+          ${PRIOS.filter(p=>prioCount[p]>0).map(p => {
+            const cnt  = prioCount[p];
+            const open = tasks.filter(t=>!_isTaskDone(t)).length;
+            const pctP = open > 0 ? Math.round((cnt/open)*100) : 0;
+            return `
+              <div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+                  <span style="font-size:var(--text-xs);color:${PRIO_COLORS[p]};">${p}</span>
+                  <span style="font-size:var(--text-xs);font-weight:600;color:${PRIO_COLORS[p]};">${cnt}</span>
+                </div>
+                <div style="height:7px;background:var(--color-surface-2);border-radius:99px;overflow:hidden;">
+                  <div style="height:100%;width:${pctP}%;background:${PRIO_COLORS[p]};border-radius:99px;"></div>
+                </div>
+              </div>`;
+          }).join('')}</div>` : '<div style="color:var(--color-text-muted);font-size:var(--text-sm);">No open tasks</div>'}
+      </div>
+    </div>
+
+    <!-- Completion velocity chart -->
+    <div style="margin-bottom:16px;">
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:8px;">Completion Velocity</div>
+      <canvas id="pa-velocity-canvas" height="140" style="width:100%;display:block;border-radius:var(--radius-md);background:var(--color-surface);border:1px solid var(--color-border);"></canvas>
     </div>
 
     <!-- Goal -->
     ${proj.goal ? `
-    <div style="padding:var(--space-4);background:var(--color-surface);border-radius:var(--radius-md);
-      border-left:3px solid var(--color-accent);margin-bottom:var(--space-4);">
-      <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-accent);
-        text-transform:uppercase;letter-spacing:0.06em;margin-bottom:var(--space-1);">Goal</div>
-      <div style="font-size:var(--text-sm);color:var(--color-text);line-height:1.5;">${_esc(proj.goal)}</div>
+    <div style="padding:14px 16px;background:var(--color-surface);border-radius:var(--radius-md);
+      border-left:3px solid var(--color-accent);">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-accent);margin-bottom:6px;">🎯 Project Goal</div>
+      <div style="font-size:var(--text-sm);color:var(--color-text);line-height:1.6;">${_esc(proj.goal)}</div>
     </div>` : ''}
   `;
 }
 
+// ── Timeline Tab ──────────────────────────────────────────────────
+function _buildTimelineHTML(proj, tasks) {
+  const hasTasks = tasks.length > 0;
+  return `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:8px;">Cumulative Completions</div>
+      <canvas id="pa-burndown-canvas" height="180" style="width:100%;display:block;border-radius:var(--radius-md);background:var(--color-surface);border:1px solid var(--color-border);"></canvas>
+    </div>
+    <div style="margin-bottom:20px;">
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:8px;">Weekly Activity Heatmap</div>
+      <div id="pa-heatmap" style="overflow-x:auto;"></div>
+    </div>
+    <div>
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:10px;">Task History</div>
+      <div style="display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;">
+        ${tasks.filter(t=>_isTaskDone(t)).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||'')).slice(0,20).map(t=>{
+          const d = (t.completedAt||t.updatedAt||'').slice(0,10);
+          const PRIO_C = { Critical:'#dc2626',High:'#f97316',Medium:'#f59e0b',Low:'#6b7280' };
+          return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;
+            background:var(--color-surface);border-radius:var(--radius-md);border:1px solid var(--color-border);">
+            <span style="font-size:0.9rem;">✅</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:var(--text-sm);font-weight:500;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(t.title||t.name||'Task')}</div>
+              ${t.priority?`<div style="font-size:10px;color:${PRIO_C[t.priority]||'#94a3b8'};">${t.priority}</div>`:''}
+            </div>
+            <div style="font-size:10px;color:var(--color-text-muted);flex-shrink:0;">${d}</div>
+          </div>`;
+        }).join('')}
+        ${tasks.filter(t=>_isTaskDone(t)).length===0?'<div style="color:var(--color-text-muted);font-size:var(--text-sm);text-align:center;padding:20px;">No completed tasks yet</div>':''}
+      </div>
+    </div>
+  `;
+}
+
+// ── Team Tab ──────────────────────────────────────────────────────
+function _buildTeamHTML(proj, projectId, leaderboard, memberStats) {
+  const memberIds = _projectMemberEdgeMap.get(projectId) || [];
+  if (memberIds.length === 0) {
+    return `<div style="text-align:center;padding:40px;color:var(--color-text-muted);">
+      <div style="font-size:3rem;margin-bottom:12px;">👥</div>
+      <div style="font-size:var(--text-md);font-weight:500;">No team members assigned</div>
+      <div style="font-size:var(--text-sm);margin-top:6px;">Add members to this project via the entity panel</div>
+    </div>`;
+  }
+
+  const lbByMember = new Map((leaderboard||[]).map(r=>[r.memberId, r]));
+  return `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:12px;">Family Leaderboard</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${(leaderboard||[]).slice(0,8).map((r,i)=>{
+          const lv = r;
+          const isMember = memberIds.includes(r.memberId);
+          return `
+          <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;
+            background:${isMember?'var(--color-accent-muted)':'var(--color-surface)'};
+            border-radius:var(--radius-md);border:1px solid ${isMember?'var(--color-accent)':'var(--color-border)'};
+            ${isMember?'box-shadow:0 0 0 2px var(--color-accent)22;':''}">
+            <div style="width:24px;height:24px;border-radius:50%;background:${i===0?'#f59e0b':i===1?'#94a3b8':i===2?'#b45309':'var(--color-surface-2)'};
+              display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;color:#fff;flex-shrink:0;">
+              ${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}
+            </div>
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--color-accent-muted);
+              display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0;">
+              ${r.avatar||'👤'}
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:var(--text-sm);font-weight:600;color:var(--color-text);">${_esc(r.name)}</div>
+              <div style="font-size:10px;color:var(--color-text-muted);">${r.levelIcon} ${r.levelTitle} · Lv ${r.level}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-size:var(--text-sm);font-weight:700;color:var(--color-accent);">${r.xp.toLocaleString()} XP</div>
+              <div style="font-size:10px;color:var(--color-text-muted);">${r.tasksDone} tasks · ${r.badges} badges</div>
+            </div>
+          </div>`;
+        }).join('')}
+        ${(leaderboard||[]).length===0?'<div style="color:var(--color-text-muted);text-align:center;padding:20px;">No leaderboard data yet — complete some tasks!</div>':''}
+      </div>
+    </div>
+
+    <!-- Project members detail -->
+    <div>
+      <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--color-text-muted);margin-bottom:12px;">Project Members</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+        ${memberIds.map(mid => {
+          const lb  = lbByMember.get(mid);
+          const ms  = memberStats[mid];
+          if (!lb) return `<div style="padding:14px;background:var(--color-surface);border-radius:var(--radius-md);border:1px solid var(--color-border);">
+            <div style="font-size:var(--text-xs);color:var(--color-text-muted);">Member ID: ${_esc(mid.slice(0,8))}…</div></div>`;
+          const nxt = ms?.nextLevel;
+          const xpPct = nxt ? Math.round(((ms.xp - (ms.level?.xp||0)) / (nxt.xp - (ms.level?.xp||0))) * 100) : 100;
+          return `
+          <div style="padding:14px;background:var(--color-surface);border-radius:var(--radius-lg);border:1px solid var(--color-border);">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <div style="width:36px;height:36px;border-radius:50%;background:var(--color-accent-muted);
+                display:flex;align-items:center;justify-content:center;font-size:1.3rem;">${lb.avatar||'👤'}</div>
+              <div>
+                <div style="font-size:var(--text-sm);font-weight:600;color:var(--color-text);">${_esc(lb.name)}</div>
+                <div style="font-size:10px;color:var(--color-text-muted);">${lb.levelIcon} Lv ${lb.level}</div>
+              </div>
+            </div>
+            <div style="margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-muted);margin-bottom:3px;">
+                <span>${lb.xp.toLocaleString()} XP</span>
+                ${nxt?`<span>→ Lv ${nxt.level}: ${nxt.xp.toLocaleString()}</span>`:'<span>Max Level</span>'}
+              </div>
+              <div style="height:5px;background:var(--color-surface-2);border-radius:99px;overflow:hidden;">
+                <div style="height:100%;width:${Math.min(xpPct,100)}%;background:var(--color-accent);border-radius:99px;"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;font-size:10px;color:var(--color-text-muted);">
+              <span>✅ ${lb.tasksDone}</span>
+              <span>🏅 ${lb.badges}</span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ── Badges Tab ────────────────────────────────────────────────────
+function _buildBadgesHTML(gamState, leaderboard, projStreak) {
+  const allEarned = new Set();
+  for (const m of Object.values(gamState?.members||{})) {
+    (m.earnedBadgeIds||[]).forEach(id => allEarned.add(id));
+  }
+
+  // Group badges
+  const groups = [
+    { label:'🏁 Task Milestones', ids:['first_task','tasks_10','tasks_50','tasks_100','tasks_250','tasks_500'] },
+    { label:'🔥 Streaks',          ids:['streak_3','streak_7','streak_14','streak_30'] },
+    { label:'🚀 Projects',         ids:['proj_first','proj_5','proj_on_time','proj_speedrun'] },
+    { label:'🚨 Priority',         ids:['critical_5','critical_20'] },
+    { label:'⭐ Levels',           ids:['level_5','level_10','level_15'] },
+  ];
+
+  const streak = projStreak || { current: 0, best: 0 };
+
+  return `
+    <!-- Streak spotlight -->
+    <div style="display:flex;align-items:center;gap:14px;padding:16px 20px;
+      background:${streak.current>=3?'linear-gradient(135deg,#f97316 0%,#f59e0b 100%)':'var(--color-surface)'};
+      border-radius:var(--radius-lg);border:1px solid ${streak.current>=3?'transparent':'var(--color-border)'};
+      margin-bottom:24px;color:${streak.current>=3?'#fff':'var(--color-text)'};">
+      <div style="font-size:3rem;line-height:1;">${streak.current>=7?'🔥':streak.current>=3?'⚡':'📅'}</div>
+      <div>
+        <div style="font-size:1.6rem;font-weight:var(--weight-bold);line-height:1;">${streak.current} day${streak.current!==1?'s':''}</div>
+        <div style="font-size:var(--text-sm);opacity:${streak.current>=3?0.9:1};color:${streak.current>=3?'inherit':'var(--color-text-muted)'};">
+          ${streak.current===0?'Start your streak by completing a task today':'Current project streak'}
+        </div>
+        <div style="font-size:10px;opacity:0.75;margin-top:2px;">All-time best: ${streak.best} days</div>
+      </div>
+    </div>
+
+    <!-- Badge groups -->
+    ${groups.map(group => `
+      <div style="margin-bottom:20px;">
+        <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.07em;text-transform:uppercase;
+          color:var(--color-text-muted);margin-bottom:10px;">${group.label}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;">
+          ${group.ids.map(id => {
+            const def    = BADGE_DEFS.find(b=>b.id===id);
+            const earned = allEarned.has(id);
+            if (!def) return '';
+            return `
+            <div style="padding:12px;background:${earned?def.color+'14':'var(--color-surface)'};
+              border-radius:var(--radius-md);border:1.5px solid ${earned?def.color:'var(--color-border)'};
+              opacity:${earned?1:0.45};text-align:center;transition:all 0.2s;
+              ${earned?'box-shadow:0 2px 8px '+def.color+'28;':''}">
+              <div style="font-size:1.8rem;margin-bottom:6px;">${def.icon}</div>
+              <div style="font-size:var(--text-xs);font-weight:${earned?600:400};color:${earned?def.color:'var(--color-text-muted)'};line-height:1.3;">${def.label}</div>
+              <div style="font-size:10px;color:var(--color-text-muted);margin-top:4px;line-height:1.3;">${def.desc}</div>
+              ${earned?`<div style="font-size:10px;font-weight:700;color:${def.color};margin-top:6px;">✓ Earned</div>`:''}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `).join('')}
+
+    <!-- Family total badges -->
+    <div style="padding:14px 16px;background:var(--color-surface);border-radius:var(--radius-md);border:1px solid var(--color-border);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);">Family badges earned</div>
+      <div style="font-size:var(--text-lg);font-weight:var(--weight-bold);color:var(--color-accent);">
+        ${allEarned.size} / ${BADGE_DEFS.length}
+      </div>
+    </div>
+  `;
+}
+
+// ── Chart renderers ───────────────────────────────────────────────
+function _renderAllCharts(body, tasks, proj) {
+  _renderVelocityChart(body.querySelector('#pa-velocity-canvas'), tasks);
+}
+
+function _renderTimelineCharts(body, tasks, proj) {
+  _renderBurndownChart(body.querySelector('#pa-burndown-canvas'), tasks);
+  _renderHeatmap(body.querySelector('#pa-heatmap'), tasks);
+}
+
+function _renderVelocityChart(canvas, tasks) {
+  if (!canvas) return;
+  const W = canvas.offsetWidth || 800; const H = 140;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // Build weekly buckets: completions per week over last 10 weeks
+  const WEEKS = 10;
+  const now = new Date(); now.setHours(0,0,0,0);
+  const buckets = Array.from({length:WEEKS}, (_,i) => {
+    const end = new Date(now); end.setDate(end.getDate() - i*7);
+    const start = new Date(end); start.setDate(start.getDate() - 7);
+    const count = tasks.filter(t => {
+      if (!_isTaskDone(t)) return false;
+      const d = new Date(t.updatedAt||'');
+      return !isNaN(d) && d >= start && d < end;
+    }).length;
+    const label = end.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+    return { label, count };
+  }).reverse();
+
+  const maxVal = Math.max(...buckets.map(b=>b.count), 1);
+  const PAD = {top:16, right:16, bottom:28, left:32};
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top  - PAD.bottom;
+  const barW = cW / WEEKS * 0.6;
+  const barGap = cW / WEEKS;
+
+  // Grid
+  ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+  [0,0.5,1].forEach(f => {
+    const y = PAD.top + cH - f*cH;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W-PAD.right, y); ctx.stroke();
+    ctx.fillStyle='#94a3b8'; ctx.font='10px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(Math.round(f*maxVal), PAD.left-4, y+3);
+  });
+
+  // Bars with gradient
+  buckets.forEach(({label,count},i) => {
+    const x = PAD.left + i*barGap + (barGap-barW)/2;
+    const bH = cH * (count/maxVal);
+    const y  = PAD.top + cH - bH;
+    const grad = ctx.createLinearGradient(x, y, x, y+bH);
+    grad.addColorStop(0, '#3b82f6');
+    grad.addColorStop(1, '#3b82f680');
+    ctx.fillStyle = count > 0 ? grad : '#e2e8f0';
+    const r = Math.min(4, barW/2);
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.lineTo(x+barW-r,y);
+    ctx.arcTo(x+barW,y,x+barW,y+r,r);
+    ctx.lineTo(x+barW,y+bH); ctx.lineTo(x,y+bH);
+    ctx.arcTo(x,y,x+r,y,r); ctx.closePath();
+    ctx.fill();
+
+    if (count > 0) {
+      ctx.fillStyle='#1e293b'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
+      ctx.fillText(count, x+barW/2, y-3);
+    }
+
+    ctx.fillStyle='#94a3b8'; ctx.font='9px sans-serif'; ctx.textAlign='center';
+    if (i%2===0) ctx.fillText(label.split(' ')[0], x+barW/2, H-4);
+  });
+}
+
 function _renderBurndownChart(canvas, tasks) {
   if (!canvas) return;
+  const W = canvas.offsetWidth || 800; const H = 180;
+  canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
 
-  // Get completed tasks with completion dates — use updatedAt as proxy
-  const completedWithDate = tasks
-    .filter(t => _isTaskDone(t) && (t.completedAt || t.updatedAt))
-    .map(t => {
-      const dateStr = (t.completedAt || t.updatedAt || '').slice(0, 10);
-      return { date: dateStr };
-    })
-    .filter(t => t.date)
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const completed = tasks
+    .filter(t => _isTaskDone(t) && (t.completedAt||t.updatedAt))
+    .map(t => (t.completedAt||t.updatedAt||'').slice(0,10))
+    .filter(Boolean).sort();
 
-  if (completedWithDate.length === 0) {
-    ctx.fillStyle = 'var(--color-text-muted)';
-    ctx.font = '13px var(--font-body, sans-serif)';
-    ctx.textAlign = 'center';
-    ctx.fillText('No completed tasks yet', canvas.width / 2, 80);
+  if (completed.length === 0) {
+    ctx.fillStyle='#94a3b8'; ctx.font='13px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('No completed tasks yet', W/2, H/2);
     return;
   }
 
-  // Build cumulative by date
   const dateMap = {};
-  completedWithDate.forEach(({ date }) => {
-    dateMap[date] = (dateMap[date] || 0) + 1;
-  });
+  completed.forEach(d => { dateMap[d] = (dateMap[d]||0)+1; });
   const dates = Object.keys(dateMap).sort();
+  let cum = 0;
+  const points = dates.map(d => { cum += dateMap[d]; return {date:d, count:cum}; });
 
-  let cumulative = 0;
-  const points = dates.map(d => { cumulative += dateMap[d]; return { date: d, count: cumulative }; });
+  const PAD = {top:16, right:16, bottom:32, left:40};
+  const cW = W-PAD.left-PAD.right; const cH = H-PAD.top-PAD.bottom;
+  const maxV = points[points.length-1].count;
 
-  // Draw
-  const W = canvas.offsetWidth || 640;
-  const H = 160;
-  canvas.width  = W;
-  canvas.height = H;
-
-  const PAD = { top: 16, right: 16, bottom: 32, left: 40 };
-  const chartW = W - PAD.left - PAD.right;
-  const chartH = H - PAD.top - PAD.bottom;
-  const maxVal = points[points.length - 1].count;
-
-  // Grid lines
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 1;
-  [0, 0.25, 0.5, 0.75, 1].forEach(f => {
-    const y = PAD.top + chartH - f * chartH;
-    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(Math.round(f * maxVal), PAD.left - 6, y + 3);
+  ctx.strokeStyle='#e2e8f0'; ctx.lineWidth=1;
+  [0,0.25,0.5,0.75,1].forEach(f => {
+    const y = PAD.top+cH-f*cH;
+    ctx.beginPath(); ctx.moveTo(PAD.left,y); ctx.lineTo(W-PAD.right,y); ctx.stroke();
+    ctx.fillStyle='#94a3b8'; ctx.font='10px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(Math.round(f*maxV), PAD.left-6, y+3);
   });
 
-  // Line
-  ctx.beginPath();
-  ctx.strokeStyle = '#3b82f6';
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  points.forEach(({ count }, i) => {
-    const x = PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
-    const y = PAD.top  + chartH - (count / maxVal) * chartH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+  const px = i => PAD.left + (i/Math.max(points.length-1,1))*cW;
+  const py = v => PAD.top + cH - (v/maxV)*cH;
 
   // Fill
   ctx.beginPath();
-  points.forEach(({ count }, i) => {
-    const x = PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
-    const y = PAD.top  + chartH - (count / maxVal) * chartH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.lineTo(PAD.left + chartW, PAD.top + chartH);
-  ctx.lineTo(PAD.left, PAD.top + chartH);
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(59,130,246,0.12)';
-  ctx.fill();
+  points.forEach(({count},i) => { i===0 ? ctx.moveTo(px(i),py(count)) : ctx.lineTo(px(i),py(count)); });
+  ctx.lineTo(px(points.length-1), PAD.top+cH); ctx.lineTo(px(0), PAD.top+cH); ctx.closePath();
+  ctx.fillStyle='rgba(59,130,246,0.12)'; ctx.fill();
+
+  // Line
+  ctx.beginPath(); ctx.strokeStyle='#3b82f6'; ctx.lineWidth=2.5; ctx.lineJoin='round';
+  points.forEach(({count},i) => { i===0 ? ctx.moveTo(px(i),py(count)) : ctx.lineTo(px(i),py(count)); });
+  ctx.stroke();
 
   // Dots
-  ctx.fillStyle = '#3b82f6';
-  points.forEach(({ count }, i) => {
-    const x = PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
-    const y = PAD.top  + chartH - (count / maxVal) * chartH;
-    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
-  });
+  ctx.fillStyle='#3b82f6';
+  points.forEach(({count},i) => { ctx.beginPath(); ctx.arc(px(i),py(count),3.5,0,Math.PI*2); ctx.fill(); });
 
-  // X-axis labels (first and last date)
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '10px sans-serif';
-  ctx.textAlign = 'left';
-  if (dates.length > 0) {
-    ctx.fillText(dates[0].slice(5), PAD.left, H - 6);
+  // X labels
+  ctx.fillStyle='#94a3b8'; ctx.font='10px sans-serif';
+  ctx.textAlign='left';  if(dates.length>0) ctx.fillText(dates[0].slice(5), PAD.left, H-4);
+  ctx.textAlign='right'; if(dates.length>1) ctx.fillText(dates[dates.length-1].slice(5), W-PAD.right, H-4);
+}
+
+function _renderHeatmap(container, tasks) {
+  if (!container) return;
+  // Build last 12 weeks heatmap
+  const WEEKS = 12; const DAYS = 7;
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const countMap = {};
+  tasks.filter(t => _isTaskDone(t) && (t.completedAt||t.updatedAt)).forEach(t => {
+    const d = (t.completedAt||t.updatedAt||'').slice(0,10);
+    countMap[d] = (countMap[d]||0)+1;
+  });
+  const maxCount = Math.max(...Object.values(countMap), 1);
+
+  const cells = [];
+  for (let w=WEEKS-1; w>=0; w--) {
+    const week = [];
+    for (let d=0; d<DAYS; d++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - w*7 - (today.getDay()-d+7)%7);
+      const key = date.toISOString().slice(0,10);
+      week.push({ key, count: countMap[key]||0, future: date > today });
+    }
+    cells.push(week);
   }
-  if (dates.length > 1) {
-    ctx.textAlign = 'right';
-    ctx.fillText(dates[dates.length - 1].slice(5), W - PAD.right, H - 6);
-  }
+
+  const DAYS_LABEL = ['S','M','T','W','T','F','S'];
+  const size = 14; const gap = 3;
+
+  let html = `<div style="display:flex;gap:${gap}px;align-items:flex-start;">
+    <div style="display:flex;flex-direction:column;gap:${gap}px;margin-top:18px;">
+      ${DAYS_LABEL.map(l=>`<div style="height:${size}px;font-size:9px;color:var(--color-text-muted);line-height:${size}px;">${l}</div>`).join('')}
+    </div>`;
+  cells.forEach((week, wi) => {
+    const firstDay = week[0];
+    const monthLabel = wi===0 || (firstDay.key.slice(5,7) !== (cells[wi-1]?.[0]?.key.slice(5,7)||''))
+      ? new Date(firstDay.key+'T00:00:00').toLocaleDateString(undefined,{month:'short'}) : '';
+    html += `<div>
+      <div style="height:16px;font-size:9px;color:var(--color-text-muted);text-align:center;">${monthLabel}</div>
+      <div style="display:flex;flex-direction:column;gap:${gap}px;">
+        ${week.map(cell => {
+          const intensity = cell.future ? 0 : Math.min(cell.count/maxCount, 1);
+          const bg = cell.future ? 'var(--color-surface)'
+            : intensity===0 ? 'var(--color-surface-2)'
+            : `rgba(59,130,246,${0.15 + intensity*0.85})`;
+          const title = cell.future ? 'Future' : cell.count===0 ? 'No activity' : `${cell.count} task${cell.count>1?'s':''} on ${cell.key}`;
+          return `<div title="${title}" style="width:${size}px;height:${size}px;border-radius:3px;background:${bg};
+            border:1px solid var(--color-border);flex-shrink:0;cursor:default;"></div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  container.innerHTML = html;
 }
 
 // ── Module-level listeners ─────────────────────────────────────

@@ -753,7 +753,8 @@
   import { initSearch }              from './components/search.js';
   import { initAuth }                from './core/auth.js';
   import { initContext }             from './core/context.js';   // CS-01
-  import { initBanner } from './core/banner.js';                  // [v6.0.2] global context+focus banner
+  import { initBanner }        from './core/banner.js';             // [v6.0.2] global context+focus banner
+  import { initGamification } from './services/gamification.js';   // [v6.1.0] gamification engine
   import { buildEnv }                from './core/env.js';      // P-01
   import { initTabs }                from './core/tabs.js';     // [MAJOR] tab system
   import { dataServiceDescriptor }    from './core/db.js';        // P-06
@@ -1008,6 +1009,7 @@
       }
       initContext();                       // CS-01: restore active context from localStorage
       initBanner();                        // [v6.0.2] global context + focus mode banner
+      initGamification().catch(e => console.warn('[boot] gamification init:', e)); // [v6.1.0]
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions

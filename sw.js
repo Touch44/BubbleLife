@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.0.3'; // [v6.0.3] fix: taskInstances ReferenceError in daily.js; // [v6.0.2] Global context+focus banner + project analytics
+const APP_VERSION   = '6.1.0'; // [v6.1.0] Gamification engine + enhanced analytics (4-tab modal, velocity chart, heatmap, leaderboard, badges)
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -18,6 +18,7 @@ const SHELL_FILES = [
   './core/router.js', './core/db.js', './core/auth.js', './core/graph-engine.js',
   './core/context.js', './core/object-type-registry.js', './core/tabs.js',
   './core/banner.js',      // [v6.0.2] global context+focus banner
+  './services/gamification.js', // [v6.1.0] gamification engine
   './services/notification.js', './services/dialog.js', './services/hotkey.js',
   './services/history.js', './services/command.js', './services/effects.js',
   './services/theme.js', './services/sync.js', './services/activity.js',

@@ -22,7 +22,7 @@ body {
   color: var(--color-text);
   background: var(--color-bg);
   line-height: var(--leading-normal);
-  letter-spacing: -0.011em;
+  letter-spacing: var(--tracking-snug, -0.01em); /* overridden by theme.js at runtime */
   font-feature-settings: "cv11", "ss01";
   font-optical-sizing: auto;
   overflow: hidden;
