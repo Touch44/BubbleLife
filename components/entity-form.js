@@ -730,6 +730,34 @@ function _buildAndMount(config) {
         actionBar.appendChild(statusBtn);
       }
 
+      // ── Complete Project button ──────────────────────────────
+      if (_editEntity?.type === 'project') {
+        const isDoneProj = _editEntity.status === 'Completed' || _editEntity.status === 'Done';
+        if (!isDoneProj) {
+          const completeBtn = document.createElement('button');
+          completeBtn.style.cssText = [
+            'display: inline-flex; align-items: center; gap: 6px;',
+            'padding: 5px 12px; border-radius: var(--radius-md); cursor: pointer;',
+            'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
+            'background: var(--color-success-bg,#f0fdf4); color: var(--color-success-text,#15803d);',
+            'border: 1px solid var(--color-success-text,#15803d);',
+          ].join(' ');
+          completeBtn.innerHTML = '<span>✓</span><span>Complete Project</span>';
+          completeBtn.title = 'Mark project complete and optionally create a new cycle';
+          completeBtn.addEventListener('click', async () => {
+            completeBtn.disabled = true;
+            try {
+              await _completeProjectFlow(_editEntity);
+            } catch (err) {
+              console.error('[entity-form] complete project failed:', err);
+              toast.error('Could not complete project');
+              completeBtn.disabled = false;
+            }
+          });
+          actionBar.appendChild(completeBtn);
+        }
+      }
+
       // ── Open Graph button ────────────────────────────────────
       if (_editEntity?.id) {
         const graphBtn = document.createElement('button');
@@ -4839,4 +4867,121 @@ function _getDisplayTitle(entity) {
     if (plain) return plain;
   }
   return entity.title || entity.name || 'Untitled';
+}
+
+// ── [v6.1.1] Complete Project Flow ─────────────────────────────── //
+
+async function _completeProjectFlow(project) {
+  if (!project?.id) return;
+  const account = getAccount();
+  const completedProj = { ...project, status: 'Completed' };
+  await saveEntity(completedProj, account?.id);
+
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'position:fixed;inset:0;z-index:900;background:rgba(15,23,42,0.5);display:flex;align-items:center;justify-content:center;padding:20px;';
+  const pName = String(project.name || project.title || 'Project').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  dialog.innerHTML = `<div style="background:var(--color-bg);border-radius:var(--radius-lg);max-width:460px;width:100%;padding:28px;box-shadow:var(--shadow-2xl);font-family:var(--font-body);">
+    <div style="font-size:1.6rem;margin-bottom:12px;">🎉</div>
+    <div style="font-size:var(--text-lg);font-weight:var(--weight-bold);margin-bottom:8px;">Project Completed!</div>
+    <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:20px;line-height:1.6;">
+      <strong>${pName}</strong> has been marked complete. Would you like to start a new cycle?
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+      <button id="cpf-no" style="padding:8px 18px;border-radius:var(--radius-md);border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);cursor:pointer;font-size:var(--text-sm);">No, just complete</button>
+      <button id="cpf-yes" style="padding:8px 18px;border-radius:var(--radius-md);border:none;background:var(--color-accent);color:#fff;cursor:pointer;font-size:var(--text-sm);font-weight:600;">✨ Yes, create new cycle</button>
+    </div>
+  </div>`;
+  document.body.appendChild(dialog);
+
+  const choice = await new Promise(resolve => {
+    dialog.querySelector('#cpf-no').addEventListener('click',  () => { dialog.remove(); resolve(false); });
+    dialog.querySelector('#cpf-yes').addEventListener('click', () => { dialog.remove(); resolve(true); });
+  });
+
+  if (!choice) { toast.success('Project completed ✓'); closeForm(); return; }
+  await _duplicateProjectCycle(project, account);
+}
+
+async function _duplicateProjectCycle(origProj, account) {
+  // ── Count same-base-title siblings ──────────────────────────
+  const allProjects = (await getEntitiesByType('project')).filter(p => !p.deleted);
+  const baseTitle   = String(origProj.name || origProj.title || 'Project').replace(/\s+\d+$/, '').trim();
+  const siblings    = allProjects.filter(p => {
+    const b = String(p.name || p.title || '').replace(/\s+\d+$/, '').trim();
+    return b.toLowerCase() === baseTitle.toLowerCase();
+  });
+  const newTitle = `${baseTitle} ${siblings.length + 1}`;
+
+  // ── Duplicate project ────────────────────────────────────────
+  const dupProj = { ...origProj };
+  delete dupProj.id; delete dupProj.createdAt; delete dupProj.updatedAt;
+  dupProj.name = newTitle; dupProj.title = newTitle;
+  dupProj.status = 'Not Started'; dupProj.deadline = null;
+  dupProj.createdBy = account?.id;
+  dupProj._lastProgressSnapshot = null; dupProj._lastProgressSnapshotAt = null;
+  const savedDup = await saveEntity(dupProj, account?.id);
+
+  // ── Get original tasks via both project field and edge ───────
+  const allTasks   = (await getEntitiesByType('task')).filter(t => !t.deleted);
+  const origEdges  = await import('../core/db.js').then(m => m.getEdgesTo(origProj.id, 'project')).catch(() => []);
+  const origEdgeIds = new Set(origEdges.map(e => e.fromId));
+  const origTasks  = allTasks.filter(t => t.project === origProj.id || origEdgeIds.has(t.id));
+
+  // ── Compute date offsets from original earliest task ─────────
+  const origDates    = origTasks.map(t => t.dueDate).filter(Boolean).sort();
+  const origEarliest = origDates[0] || null;
+  const origEarliestMs = origEarliest ? new Date(origEarliest + 'T00:00:00').getTime() : Date.now();
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const newAnchor = new Date(today); newAnchor.setDate(newAnchor.getDate() + 3);
+  const _fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+  const newTaskDates = [];
+  for (const origTask of origTasks) {
+    const dayOffset = origTask.dueDate
+      ? Math.round((new Date(origTask.dueDate + 'T00:00:00').getTime() - origEarliestMs) / 86400000)
+      : 0;
+    const newDue = new Date(newAnchor); newDue.setDate(newDue.getDate() + dayOffset);
+    const newDueStr = _fmt(newDue);
+    newTaskDates.push(newDueStr);
+
+    const dupTask = { ...origTask };
+    delete dupTask.id; delete dupTask.createdAt; delete dupTask.updatedAt;
+    dupTask.project = savedDup.id; dupTask.dueDate = newDueStr;
+    dupTask.status = 'Not Started'; dupTask.completedAt = null;
+    dupTask.createdBy = account?.id;
+    const savedTask = await saveEntity(dupTask, account?.id);
+    await import('../core/db.js').then(m => m.saveEdge({
+      fromId: savedTask.id, fromType: 'task', toId: savedDup.id, toType: 'project', relation: 'project',
+    }, account?.id)).catch(() => {});
+  }
+
+  // ── Set deadline to latest task date ─────────────────────────
+  const latestDate = newTaskDates.filter(Boolean).sort().pop() || null;
+  if (latestDate) {
+    await saveEntity({ ...savedDup, deadline: latestDate }, account?.id).catch(() => {});
+  }
+
+  // ── Copy reminders ────────────────────────────────────────────
+  const origReminders = (await getEntitiesByType('reminder')).filter(r =>
+    !r.deleted && r.targetEntityId === origProj.id);
+  for (const r of origReminders) {
+    const dupRem = { ...r };
+    delete dupRem.id; delete dupRem.createdAt; delete dupRem.updatedAt;
+    dupRem.targetEntityId = savedDup.id; dupRem.status = 'active';
+    dupRem.fireCount = 0; dupRem.lastFiredAt = null;
+    dupRem.dismissedAt = null; dupRem.snoozeUntil = null;
+    await saveEntity(dupRem, account?.id).catch(() => {});
+  }
+
+  // ── Link all same-title projects as connections ───────────────
+  for (const sib of siblings) {
+    await import('../core/db.js').then(async m => {
+      await m.saveEdge({ fromId:savedDup.id, fromType:'project', toId:sib.id, toType:'project', relation:'related to' }, account?.id).catch(() => {});
+      await m.saveEdge({ fromId:sib.id, fromType:'project', toId:savedDup.id, toType:'project', relation:'related to' }, account?.id).catch(() => {});
+    }).catch(() => {});
+  }
+
+  toast.success(`✨ Created "${newTitle}" — ${origTasks.length} tasks copied`);
+  closeForm();
 }

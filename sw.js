@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.1.0'; // [v6.1.0] Gamification engine + enhanced analytics (4-tab modal, velocity chart, heatmap, leaderboard, badges)
+const APP_VERSION   = '6.1.1'; // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];

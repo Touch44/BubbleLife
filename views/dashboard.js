@@ -212,7 +212,7 @@ function _injectStyles() {
 .dash-scroll-btn-right { margin-left:  var(--space-2); }
 
 .dash-card {
-  flex: 0 0 230px;
+  flex: 0 0 248px;  /* [v6.1.1] wider to prevent button label cutoff */
   min-width: 0;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -260,8 +260,7 @@ function _injectStyles() {
   line-height: 1.25;
   word-break: break-word;
   overflow-wrap: break-word;
-  max-height: 3.2em;
-  overflow: hidden;
+  /* [v6.1.1] removed max-height clipping — allow full text to show */
 }
 .dash-card-stat.text-stat {
   font-size: var(--text-md);
@@ -324,7 +323,7 @@ function _injectStyles() {
 }
 @media (max-width: 640px) {
   .dash-grid { grid-template-columns: 1fr; }
-  .dash-card { flex: 0 0 200px; }
+  .dash-card { flex: 0 0 220px; } /* [v6.1.1] */
 }
 
 .dash-widget {

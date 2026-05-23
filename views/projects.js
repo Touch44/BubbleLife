@@ -2328,6 +2328,53 @@ function _renderHeatmap(container, tasks) {
 
 // ── Module-level listeners ─────────────────────────────────────
 let _projRefreshTimer = null;
+/** [v6.1.1] Auto-update project deadline to the latest task dueDate in real-time.
+ *  Called whenever a task is saved (even without explicitly saving the project).
+ *  Only writes if the new latest date differs from the current project deadline. */
+async function _autoUpdateProjectDeadline(savedTask) {
+  // Find which project this task belongs to
+  const projId = savedTask.project || (() => {
+    for (const [pid, ids] of _projectTaskEdgeMap) {
+      if (ids.has(savedTask.id)) return pid;
+    }
+    return null;
+  })();
+  if (!projId) return;
+
+  const proj = _projects.find(p => p.id === projId);
+  if (!proj) return;
+
+  // Gather all tasks for this project (including the just-saved one)
+  const projTasks = _getProjectTasks(projId);
+  // Also include the saved task (may not be in _tasks yet if first save)
+  const allTasks  = projTasks.find(t => t.id === savedTask.id)
+    ? projTasks
+    : [...projTasks, savedTask];
+
+  const validDates = allTasks
+    .map(t => t.dueDate)
+    .filter(d => d && /^\d{4}-\d{2}-\d{2}/.test(String(d)));
+
+  if (validDates.length === 0) return;
+
+  const latestDate = validDates.reduce((max, d) => d > max ? d : max, validDates[0]);
+
+  // Only write if deadline actually changes
+  if (proj.deadline === latestDate) return;
+
+  const account = getAccount();
+  const updated = { ...proj, deadline: latestDate };
+  try {
+    const saved = await saveEntity(updated, account?.id);
+    // Update in-memory immediately for real-time feel
+    const idx = _projects.findIndex(p => p.id === projId);
+    if (idx >= 0) _projects[idx] = saved;
+    console.log(`[projects] auto-deadline: ${proj.name} → ${latestDate}`);
+  } catch (err) {
+    console.warn('[projects] auto-deadline save failed:', err);
+  }
+}
+
 function _debouncedProjectRefresh() {
   if (!document.getElementById('view-projects')?.classList.contains('active')) return;
   clearTimeout(_projRefreshTimer);
@@ -2340,8 +2387,11 @@ function _registerListeners() {
 
   on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
     const PROJ_REFRESH_TYPES = new Set(['project', 'task', 'person']);
-    // (projects:focusChanged handled separately below)
     if (entity && !PROJ_REFRESH_TYPES.has(entity.type)) return;
+    // [v6.1.1] Auto-update project deadline when a task dueDate changes
+    if (entity?.type === 'task' && entity.dueDate) {
+      _autoUpdateProjectDeadline(entity).catch(() => {});
+    }
     _debouncedProjectRefresh();
   });
 
