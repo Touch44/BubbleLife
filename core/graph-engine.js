@@ -143,6 +143,7 @@ const BUILT_IN_ENTITY_TYPES = [
       field('isRecurring',   'checkbox', { label: 'Repeating Task', defaultValue: false }),
       field('executionDate', 'date',     { label: 'Planned For' }),
       field('executionTime', 'time',     { label: 'Planned Time', placeholder: '06:00', helpText: 'Date and time this task will be worked on' }),
+      field('plannedDuration', 'select', { label: 'Time Block', options: ['15 min','30 min','45 min','1 hour','1.5 hours','2 hours','3 hours','4 hours','6 hours','8 hours'], helpText: 'Duration reserved for this task — used for overlap checking' }),
       field('assignedTo',    'relation', { label: 'Assigned To', relatesTo: 'person' }),
       field('tags',          'tags',     { label: 'Tags' }),
       field('details',    'richtext',   { label: 'Activity', isTitle: false }),

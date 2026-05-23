@@ -13,7 +13,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <!-- Build: v6.0.2 [v6.0.2] Global context+focus banner + project analytics -->
+  <!-- Build: v6.2.1 [v6.2.1] Bug audit: listener leaks, badge CSS, panel open, pre-select fixes -->
 
   <title>FamilyHub</title>
 
@@ -177,6 +177,21 @@
 
     <!-- Systray — ambient awareness bar (P-19) — initSystray() populates this -->
     <div id="topbar-systray" class="st-bar" aria-label="Awareness indicators"></div>
+
+    <!-- Timer button [v6.2.0] — opens floating timer panel -->
+    <button id="topbar-timer-btn" aria-label="Active timers" title="Active timers (click to open panel)"
+            style="position:relative;background:none;border:none;padding:6px;border-radius:var(--radius-sm);
+                   cursor:pointer;color:var(--color-text-muted);font-size:1.1rem;
+                   transition:background var(--transition-fast),color var(--transition-fast);">
+      ⏱️
+      <span class="topbar-timer-badge" aria-hidden="true" style="
+        display:none;position:absolute;top:2px;right:2px;
+        min-width:15px;height:15px;background:var(--color-accent);color:#fff;
+        font-size:9px;font-weight:700;border-radius:999px;
+        align-items:center;justify-content:center;padding:0 3px;
+        line-height:1;pointer-events:none;
+      "></span>
+    </button>
 
     <!-- Sync indicator -->
     <span id="topbar-sync-indicator" title="Sync status" aria-live="polite" aria-label="Sync status: idle">
@@ -751,7 +766,7 @@
   import { initEntityForm }          from './components/entity-form.js';
   import { initFab }                 from './components/fab.js';
   import { initSearch }              from './components/search.js';
-  import { initAuth }                from './core/auth.js';
+  import { initAuth, getAccount }    from './core/auth.js';
   import { initContext }             from './core/context.js';   // CS-01
   import { initBanner }        from './core/banner.js';             // [v6.0.2] global context+focus banner
   import { initGamification } from './services/gamification.js';   // [v6.1.0] gamification engine
@@ -764,6 +779,7 @@
   import { initSearchBar }            from './components/search-bar.js';      // P-17
   import { initCommandPalette }       from './components/command-palette.js'; // P-18
   import { initSystray }              from './components/systray.js';          // P-19
+  import { initTimerPanel, toggleTimerPanel } from './components/timer-panel.js'; // [v6.2.0] floating timer panel
   import { notificationServiceDescriptor } from './services/notification.js'; // P-07
   import { dialogServiceDescriptor }      from './services/dialog.js';       // P-08
   import { hotkeyServiceDescriptor }      from './services/hotkey.js';       // P-09
@@ -869,7 +885,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '5.9.7'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '6.2.1'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
@@ -1001,9 +1017,10 @@
       initSystray(env);                   // P-19: systray awareness bar
       await initAuth();
       // [MAJOR] Init tab system — renders tab bar using already-imported navigate + getCurrentView.
-      // Called synchronously (no dynamic import) so errors surface immediately.
+      // await needed: initTabs is async to load per-account pinned tabs from IDB.
       try {
-        initTabs({ navigate, getCurrentView });
+        const _tabAcct = getAccount();
+        await initTabs({ navigate, getCurrentView, accountId: _tabAcct?.id || null });
       } catch (tabErr) {
         console.error('[tabs] initTabs failed:', tabErr);
       }
@@ -1013,6 +1030,9 @@
       initActivityService(); // [MAJOR] system activity feed (after auth so getAccount() works)
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
+      initTimerPanel();      // [v6.2.0] floating timer panel
+      // Wire topbar timer button
+      document.getElementById('topbar-timer-btn')?.addEventListener('click', toggleTimerPanel);
       initReminderService(); // [v5.3.1] reminder scheduler + SW sync
       initRecurrenceService(); // [v5.3.1] recurring task ghost-instance scheduler
       mountAlertDrawer();    // [v5.3.1] alert drawer component

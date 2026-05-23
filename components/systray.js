@@ -246,7 +246,9 @@ function _buildTimerItem() {
   });
 
   el.addEventListener('click', () => {
-    navigate(VIEW_KEYS.KANBAN, { filterTab: 'today' });
+    import('./timer-panel.js').then(m => m.toggleTimerPanel()).catch(() => {
+      navigate(VIEW_KEYS.KANBAN, { filterTab: 'today' }); // fallback
+    });
   });
 
   return el;

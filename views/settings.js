@@ -586,7 +586,7 @@ async function renderSettings() {
       <div class="srow">
         <div>
           <div class="srow-label">Version</div>
-          <div class="srow-hint">FamilyHub v5.9.7 — Multi-context family management PWA</div>
+          <div class="srow-hint">FamilyHub v6.2.1 — Multi-context family management PWA</div>
         </div>
       </div>
       <div class="srow">

@@ -356,9 +356,10 @@ function _applyFilters(tasks) {
     if (_filterPriority && t.priority !== _filterPriority) return false;
     if (_filterOverdue) {
       const today = _todayStr();
-      // Overdue means past the execution/scheduled date
-      const overdueDate = _getExecDate(t);
-      if (!overdueDate || overdueDate > today) return false;
+      // [v6.1.7] Overdue = STRICTLY before today (< today, not <= today).
+      // Using >= today excludes tasks due today so filter is meaningful on all tabs.
+      const overdueDate = _getExecDate(t); // returns executionDate || dueDate
+      if (!overdueDate || overdueDate >= today) return false;
     }
     // Scheduled tab time-context filter (boundaries cached outside loop by closure)
     if (_filterScheduledRange && _filterTab === 'scheduled') {

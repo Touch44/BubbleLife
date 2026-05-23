@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.1.1'; // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
+const APP_VERSION   = '6.2.1'; // [v6.2.1] Bug audit: timer listener leaks x3, badge CSS, panel open UX, entity-panel plannedDuration pre-select, getSession ref // [v6.2.0] Tab pinning (per-account), floating timer panel, task period overlap checking, context banner fix, dashboard timer widget // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -29,7 +29,7 @@ const SHELL_FILES = [
   './components/search.js', './components/search-bar.js', './components/command-palette.js',
   './components/systray.js', './components/graph-canvas.js',
   './components/activity-stream.js', './components/view-switcher.js',
-  './components/type-editor-modal.js',
+  './components/type-editor-modal.js', './components/timer-panel.js',
   './core/debug.js', './core/tour.js', './core/pwa.js',
   './views/daily.js', './views/kanban.js', './views/calendar.js',
   './views/family-wall.js', './views/stub-views.js',

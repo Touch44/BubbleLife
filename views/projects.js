@@ -1325,6 +1325,11 @@ async function renderProjects(params = {}) {
   // [F3] Restore focus banner if active
   _renderFocusBanner();
 
+  // [v6.1.3] Auto-switch to a specific tab if requested (e.g. after converting to template)
+  if (params._tab && ['grid','timeline','templates'].includes(params._tab)) {
+    _viewMode = params._tab;
+  }
+
   el.innerHTML = '';
 
   const focusId = getFocusProjectId();
@@ -1595,10 +1600,12 @@ async function renderProjects(params = {}) {
     addTaskBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       const ctx = getActiveContext();
+      const _acct = getAccount();
       openForm('task', {
-        project: project.id,
+        project:      project.id,
         projectTitle: project.name || project.title,
-        context: ctx === 'all' ? 'family' : ctx,
+        context:      ctx === 'all' ? 'family' : ctx,
+        ...(_acct?.memberId ? { assignedTo: _acct.memberId } : {}),
       });
     });
 

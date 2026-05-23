@@ -3073,6 +3073,28 @@ async function _buildTimeTrackerUI(container, entity) {
     o.textContent = opt.label;
     blockSelect.appendChild(o);
   }
+
+  // [v6.2.0] Pre-select from plannedDuration field if set — "use task time block as default duration"
+  if (_entity?.plannedDuration && !getSession(_entity.id)) {
+    const pd = String(_entity.plannedDuration).toLowerCase();
+    let targetSecs = 0;
+    const minM = pd.match(/^(\d+)\s*min/);   if (minM) targetSecs = parseInt(minM[1], 10) * 60;
+    const hrM  = pd.match(/^([\d.]+)\s*hour/); if (hrM) targetSecs = Math.round(parseFloat(hrM[1]) * 3600);
+    if (targetSecs > 0) {
+      const match = [...blockSelect.options].find(o => o.value === String(targetSecs));
+      if (match) blockSelect.value = String(targetSecs);
+    }
+  }
+  // Fallback: pre-select from saved default if no plannedDuration match
+  getSetting('taskDefaultTimeBlock').then(defaultSecs => {
+    if (defaultSecs && !getSession(_entity?.id)) {
+      const val = String(defaultSecs);
+      if ([...blockSelect.options].some(o => o.value === val)) {
+        if (blockSelect.value === blockSelect.options[0]?.value) blockSelect.value = val;
+      }
+    }
+  }).catch(() => {});
+
   blockRow.appendChild(blockSelect);
 
   const startBlockBtn = mkBtn('▶ Start Block', true);
@@ -4597,67 +4619,10 @@ async function _confirmDelete() {
   // Capture snapshot for undo BEFORE deleting
   const snapshot = { ..._entity };
 
-  // ── Project delete: 3-option dialog ────────────────────────
+  // ── Project delete: delegated to shared flow ───────────────
   if (isProject) {
-    // Show a custom modal with three choices
-    const choice = await new Promise(resolve => {
-      const modal = document.createElement('div');
-      modal.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;padding:var(--space-4);';
-      modal.innerHTML = `
-        <div style="background:var(--color-bg);border-radius:var(--radius-lg);max-width:420px;width:100%;padding:var(--space-6);box-shadow:var(--shadow-lg);">
-          <div style="font-weight:var(--weight-bold);font-size:var(--text-base);margin-bottom:var(--space-2);">🗑 Delete Project</div>
-          <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-5);">
-            What should happen to tasks linked to <strong>${_esc(entityTitle)}</strong>?
-          </div>
-          <div style="display:flex;flex-direction:column;gap:var(--space-2);">
-            <button id="pdel-delete-tasks" style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--color-danger);background:var(--color-danger);color:#fff;cursor:pointer;font-size:var(--text-sm);font-weight:var(--weight-semibold);text-align:left;">
-              🗑 Delete project and all its tasks
-            </button>
-            <button id="pdel-keep-tasks" style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--color-border);background:var(--color-surface);color:var(--color-text);cursor:pointer;font-size:var(--text-sm);font-weight:var(--weight-semibold);text-align:left;">
-              📋 Delete project only — keep tasks (unlinked)
-            </button>
-            <button id="pdel-cancel" style="padding:8px 14px;border-radius:var(--radius-md);border:1px solid var(--color-border);background:none;color:var(--color-text-muted);cursor:pointer;font-size:var(--text-sm);text-align:center;">
-              Cancel
-            </button>
-          </div>
-        </div>
-      `;
-      modal.querySelector('#pdel-delete-tasks').addEventListener('click', () => { modal.remove(); resolve('delete-tasks'); });
-      modal.querySelector('#pdel-keep-tasks').addEventListener('click',   () => { modal.remove(); resolve('keep-tasks'); });
-      modal.querySelector('#pdel-cancel').addEventListener('click',       () => { modal.remove(); resolve('cancel'); });
-      modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
-      document.body.appendChild(modal);
-    });
-
-    if (choice === 'cancel') return;
-
-    try {
-      if (choice === 'delete-tasks') {
-        // Delete all linked tasks first
-        const [edgesProject, edgesPartOf] = await Promise.all([
-          getEdgesTo(entityId, 'project').catch(() => []),
-          getEdgesTo(entityId, 'part of').catch(() => []),
-        ]);
-        const taskIds = new Set([...edgesProject, ...edgesPartOf].map(e => e.fromId));
-        // Also catch tasks with direct entity.project field
-        const allTasks = await getEntitiesByType('task').catch(() => []);
-        allTasks.filter(t => !t.deleted && t.project === entityId).forEach(t => taskIds.add(t.id));
-        // Delete each task
-        await Promise.allSettled([...taskIds].map(tid => deleteEntity(tid)));
-      } else {
-        // Keep tasks but clear their project link (edge deleted by deleteEntity, clear direct field)
-        const allTasks = await getEntitiesByType('task').catch(() => []);
-        const linked = allTasks.filter(t => !t.deleted && t.project === entityId);
-        await Promise.allSettled(linked.map(t => saveEntity({ ...t, project: null }, getAccount()?.id)));
-        // Edges from tasks to this project are automatically deleted when we delete the project below
-      }
-      await deleteEntity(entityId);
-      closePanel();
-      window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle });
-    } catch (err) {
-      console.error('[entity-panel] Project delete failed:', err);
-      showToast('Delete failed — please try again', 'error');
-    }
+    await _deleteProjectWithTaskFlow(entityId, entityTitle, snapshot, entityLabel,
+      () => { closePanel(); window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle }); });
     return;
   }
 
@@ -5206,4 +5171,314 @@ function _truncate(str, max) {
 function _capitalize(str) {
   if (!str) return '';
   return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// ════════════════════════════════════════════════════════════
+// [v6.1.8] SHARED PROJECT DELETE WITH TASK LIST PREVIEW
+// Called from both entity-panel._confirmDelete and
+// entity-form delete toolbar button (for project entities).
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Full project delete flow:
+ *  Step 1 → 3-option dialog: delete tasks / keep tasks / cancel
+ *  Step 2 (if delete-tasks) → task list preview with checkboxes + final confirm
+ *  Step 3 → execute chosen action and call onComplete()
+ *
+ * @param {string}   projectId    - ID of the project to delete
+ * @param {string}   projectTitle - Display name for the project
+ * @param {object}   snapshot     - Entity snapshot for undo
+ * @param {string}   entityLabel  - e.g. "Project"
+ * @param {Function} onComplete   - Called after successful delete (e.g. closePanel / closeForm)
+ */
+export async function _deleteProjectWithTaskFlow(projectId, projectTitle, snapshot, entityLabel, onComplete) {
+  // ── STEP 1: 3-option dialog ──────────────────────────────
+  const choice = await new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.style.cssText = [
+      'position:fixed;inset:0;z-index:var(--z-modal,700);',
+      'background:rgba(15,23,42,0.5);',
+      'display:flex;align-items:center;justify-content:center;padding:20px;',
+    ].join('');
+    const title = _esc(projectTitle);
+    modal.innerHTML = `
+      <div style="background:var(--color-bg);border-radius:var(--radius-lg);
+        max-width:440px;width:100%;padding:26px;box-shadow:var(--shadow-2xl);
+        font-family:var(--font-body);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:1.4rem;">🗑️</span>
+          <span style="font-size:var(--text-lg);font-weight:var(--weight-bold);">Delete Project</span>
+        </div>
+        <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:20px;line-height:1.6;">
+          What should happen to tasks linked to <strong>${title}</strong>?
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <button id="pdel-delete-tasks" style="
+            padding:11px 14px;border-radius:var(--radius-md);cursor:pointer;
+            border:1.5px solid var(--color-danger);
+            background:var(--color-danger-bg,#fef2f2);
+            color:var(--color-danger);
+            font-size:var(--text-sm);font-weight:600;text-align:left;
+            display:flex;align-items:center;gap:10px;transition:background 0.12s;">
+            <span>🗑️</span>
+            <div>
+              <div>Delete project <em>and</em> all its tasks</div>
+              <div style="font-weight:400;font-size:var(--text-xs);opacity:0.75;margin-top:2px;">
+                You'll see a task list and confirm before anything is deleted
+              </div>
+            </div>
+          </button>
+          <button id="pdel-keep-tasks" style="
+            padding:11px 14px;border-radius:var(--radius-md);cursor:pointer;
+            border:1.5px solid var(--color-border);background:var(--color-surface);
+            color:var(--color-text);font-size:var(--text-sm);font-weight:600;text-align:left;
+            display:flex;align-items:center;gap:10px;transition:background 0.12s;">
+            <span>📋</span>
+            <div>
+              <div>Delete project only — keep tasks</div>
+              <div style="font-weight:400;font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px;">
+                Tasks become unlinked (no project)
+              </div>
+            </div>
+          </button>
+          <button id="pdel-cancel" style="
+            padding:8px 14px;border-radius:var(--radius-md);
+            border:1px solid var(--color-border);background:none;
+            color:var(--color-text-muted);cursor:pointer;font-size:var(--text-sm);">
+            Cancel
+          </button>
+        </div>
+      </div>
+    `;
+    modal.querySelector('#pdel-delete-tasks').addEventListener('click', () => { modal.remove(); resolve('delete-tasks'); });
+    modal.querySelector('#pdel-keep-tasks').addEventListener('click',   () => { modal.remove(); resolve('keep-tasks'); });
+    modal.querySelector('#pdel-cancel').addEventListener('click',       () => { modal.remove(); resolve('cancel'); });
+    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+    document.body.appendChild(modal);
+  });
+
+  if (choice === 'cancel') return;
+
+  // ── STEP 2 (delete-tasks only): load tasks + show preview list ──
+  let tasksToDelete = [];
+  if (choice === 'delete-tasks') {
+    // Gather task IDs from both edges and direct field
+    const [edgesProject, edgesPartOf, allTasks] = await Promise.all([
+      getEdgesTo(projectId, 'project').catch(() => []),
+      getEdgesTo(projectId, 'part of').catch(() => []),
+      getEntitiesByType('task').catch(() => []),
+    ]);
+    const taskIds = new Set([...edgesProject, ...edgesPartOf].map(e => e.fromId));
+    allTasks.filter(t => !t.deleted && t.project === projectId).forEach(t => taskIds.add(t.id));
+    tasksToDelete = allTasks.filter(t => !t.deleted && taskIds.has(t.id));
+
+    // Sort: done last, then by status, then title
+    const STATUS_ORDER = { 'In Progress':0,'Not Started':1,'Next Up':1,'Blocked':2,'Done':9,'Completed':9 };
+    tasksToDelete.sort((a,b) => {
+      const sa = STATUS_ORDER[a.status] ?? 5;
+      const sb = STATUS_ORDER[b.status] ?? 5;
+      if (sa !== sb) return sa - sb;
+      return (a.title||'').localeCompare(b.title||'');
+    });
+
+    // ── STEP 2 modal: task list with checkboxes ──────────────
+    const confirmed = await new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = [
+        'position:fixed;inset:0;z-index:calc(var(--z-modal,700) + 1);',
+        'background:rgba(15,23,42,0.55);',
+        'display:flex;align-items:center;justify-content:center;padding:20px;',
+      ].join('');
+
+      const STATUS_C = {
+        'Done':'#10b981','Completed':'#10b981','In Progress':'#3b82f6',
+        'Not Started':'#94a3b8','Next Up':'#60a5fa','Blocked':'#ef4444',
+      };
+      const PRIO_C = { Critical:'#dc2626',High:'#f97316',Medium:'#f59e0b',Low:'#6b7280' };
+
+      overlay.innerHTML = `
+        <div style="background:var(--color-bg);border-radius:var(--radius-lg);
+          width:100%;max-width:560px;max-height:85vh;
+          display:flex;flex-direction:column;box-shadow:var(--shadow-2xl);
+          font-family:var(--font-body);overflow:hidden;">
+
+          <!-- Header -->
+          <div style="padding:18px 22px 14px;border-bottom:1px solid var(--color-border);flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+              <span style="font-size:1.3rem;">⚠️</span>
+              <span style="font-size:var(--text-lg);font-weight:var(--weight-bold);color:var(--color-danger);">
+                Confirm Task Deletion
+              </span>
+            </div>
+            <div style="font-size:var(--text-sm);color:var(--color-text-muted);line-height:1.5;">
+              The following <strong>${tasksToDelete.length} task${tasksToDelete.length!==1?'s':''}</strong>
+              linked to <strong>${_esc(projectTitle)}</strong> will be permanently deleted.
+              Uncheck any tasks you want to keep.
+            </div>
+          </div>
+
+          <!-- Task list -->
+          <div style="flex:1;overflow-y:auto;padding:12px 22px;" id="pdel-task-list">
+            ${tasksToDelete.length === 0
+              ? `<div style="text-align:center;padding:24px;color:var(--color-text-muted);">
+                   No tasks linked to this project.
+                 </div>`
+              : tasksToDelete.map((t,i) => {
+                  const statusColor = STATUS_C[t.status] || '#94a3b8';
+                  const prioColor   = PRIO_C[t.priority] || '#94a3b8';
+                  const isDone      = t.status === 'Done' || t.status === 'Completed';
+                  return `
+                    <label style="
+                      display:flex;align-items:flex-start;gap:10px;
+                      padding:9px 10px;margin-bottom:5px;
+                      border-radius:var(--radius-md);cursor:pointer;
+                      background:var(--color-surface);border:1px solid var(--color-border);
+                      transition:background 0.1s;
+                    " onmouseover="this.style.background='var(--color-surface-2)'"
+                       onmouseout="this.style.background='var(--color-surface)'">
+                      <input type="checkbox" data-task-id="${_esc(t.id)}" checked
+                        style="margin-top:2px;width:15px;height:15px;cursor:pointer;
+                          accent-color:var(--color-danger);flex-shrink:0;">
+                      <div style="flex:1;min-width:0;">
+                        <div style="
+                          font-size:var(--text-sm);font-weight:500;
+                          color:var(--color-text);line-height:1.3;
+                          text-decoration:${isDone?'line-through':'none'};
+                          opacity:${isDone?0.6:1};
+                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                          ${_esc(t.title||t.name||'Untitled task')}
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-top:3px;flex-wrap:wrap;">
+                          <span style="font-size:10px;padding:1px 6px;border-radius:9px;
+                            background:${statusColor}22;color:${statusColor};font-weight:600;">
+                            ${_esc(t.status||'Not Started')}
+                          </span>
+                          ${t.priority?`<span style="font-size:10px;color:${prioColor};">${_esc(t.priority)}</span>`:''}
+                          ${t.dueDate?`<span style="font-size:10px;color:var(--color-text-muted);">📅 ${_esc(t.dueDate)}</span>`:''}
+                        </div>
+                      </div>
+                    </label>`;
+                }).join('')
+            }
+          </div>
+
+          <!-- Select all / none -->
+          ${tasksToDelete.length > 0 ? `
+          <div style="padding:8px 22px;border-top:1px solid var(--color-border);
+            display:flex;align-items:center;gap:12px;flex-shrink:0;
+            background:var(--color-surface);">
+            <button id="pdel-select-all" style="font-size:var(--text-xs);padding:3px 10px;
+              border-radius:var(--radius-sm);border:1px solid var(--color-border);
+              background:none;cursor:pointer;color:var(--color-text-muted);">
+              Select all
+            </button>
+            <button id="pdel-select-none" style="font-size:var(--text-xs);padding:3px 10px;
+              border-radius:var(--radius-sm);border:1px solid var(--color-border);
+              background:none;cursor:pointer;color:var(--color-text-muted);">
+              Select none
+            </button>
+            <span id="pdel-sel-count" style="font-size:var(--text-xs);color:var(--color-text-muted);margin-left:auto;">
+              ${tasksToDelete.length} selected
+            </span>
+          </div>` : ''}
+
+          <!-- Footer -->
+          <div style="padding:14px 22px;border-top:1px solid var(--color-border);
+            display:flex;gap:10px;justify-content:flex-end;flex-shrink:0;">
+            <button id="pdel-back" style="padding:7px 16px;border-radius:var(--radius-md);
+              border:1px solid var(--color-border);background:var(--color-surface);
+              color:var(--color-text);cursor:pointer;font-size:var(--text-sm);">
+              ← Back
+            </button>
+            <button id="pdel-confirm" style="padding:7px 18px;border-radius:var(--radius-md);
+              border:none;background:var(--color-danger);color:#fff;
+              cursor:pointer;font-size:var(--text-sm);font-weight:600;">
+              🗑️ Delete ${tasksToDelete.length} task${tasksToDelete.length!==1?'s':''} + project
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(overlay);
+
+      // Wire select-all / select-none
+      const getCheckboxes = () => [...overlay.querySelectorAll('input[type="checkbox"][data-task-id]')];
+      const updateCount = () => {
+        const count = getCheckboxes().filter(cb => cb.checked).length;
+        const selCount = overlay.querySelector('#pdel-sel-count');
+        if (selCount) selCount.textContent = `${count} selected`;
+        const confirmBtn = overlay.querySelector('#pdel-confirm');
+        if (confirmBtn) {
+          confirmBtn.textContent = `🗑️ Delete ${count} task${count!==1?'s':''} + project`;
+          confirmBtn.style.opacity = count === 0 ? '0.6' : '1';
+        }
+      };
+
+      overlay.querySelector('#pdel-select-all')?.addEventListener('click', () => {
+        getCheckboxes().forEach(cb => cb.checked = true); updateCount();
+      });
+      overlay.querySelector('#pdel-select-none')?.addEventListener('click', () => {
+        getCheckboxes().forEach(cb => cb.checked = false); updateCount();
+      });
+      getCheckboxes().forEach(cb => cb.addEventListener('change', updateCount));
+
+      overlay.querySelector('#pdel-back').addEventListener('click', () => { overlay.remove(); resolve(null); });
+      overlay.querySelector('#pdel-confirm').addEventListener('click', () => {
+        // Return the IDs that are still checked
+        const selected = getCheckboxes().filter(cb => cb.checked).map(cb => cb.dataset.taskId);
+        overlay.remove();
+        resolve(selected);
+      });
+      overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+    });
+
+    // null = user hit Back or dismissed → restart? No — just cancel the whole operation
+    if (confirmed === null) return;
+
+    // ── STEP 3: Execute deletion ─────────────────────────────
+    try {
+      // Delete only the checked task IDs
+      if (confirmed.length > 0) {
+        await Promise.allSettled(confirmed.map(tid => deleteEntity(tid)));
+      }
+      // Unlink any unchecked tasks (keep but remove project association)
+      const uncheckedIds = new Set(tasksToDelete.map(t => t.id).filter(id => !confirmed.includes(id)));
+      if (uncheckedIds.size > 0) {
+        await Promise.allSettled(
+          [...uncheckedIds].map(tid => {
+            const t = tasksToDelete.find(x => x.id === tid);
+            if (!t) return Promise.resolve();
+            return saveEntity({ ...t, project: null }, getAccount()?.id).catch(() => {});
+          })
+        );
+      }
+      await deleteEntity(projectId);
+      showToast(
+        confirmed.length > 0
+          ? `Project deleted with ${confirmed.length} task${confirmed.length!==1?'s':''}`
+          : 'Project deleted — tasks unlinked',
+        'success'
+      );
+      if (typeof onComplete === 'function') onComplete();
+      window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle: projectTitle });
+    } catch (err) {
+      console.error('[entity-panel] Project + tasks delete failed:', err);
+      showToast('Delete failed — please try again', 'error');
+    }
+    return;
+  }
+
+  // ── STEP 3 (keep-tasks path): just unlink then delete project ──
+  try {
+    const allTasksKeep = await getEntitiesByType('task').catch(() => []);
+    const linked = allTasksKeep.filter(t => !t.deleted && t.project === projectId);
+    await Promise.allSettled(linked.map(t => saveEntity({ ...t, project: null }, getAccount()?.id)));
+    await deleteEntity(projectId);
+    showToast('Project deleted — tasks unlinked', 'success');
+    if (typeof onComplete === 'function') onComplete();
+    window.FH?._pushUndoDelete?.({ snapshot, entityLabel, entityTitle: projectTitle });
+  } catch (err) {
+    console.error('[entity-panel] Project delete (keep-tasks) failed:', err);
+    showToast('Delete failed — please try again', 'error');
+  }
 }

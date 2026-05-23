@@ -164,14 +164,13 @@ function _ensureBanner() {
 }
 
 function _applyOffset(show) {
-  const topbar = document.getElementById('topbar');
-  const appEl  = document.getElementById('app');
-  const sidebar = document.getElementById('sidebar');
-  const px = show ? `${BANNER_H}px` : '';
-  if (topbar)  topbar.style.marginTop  = px;
-  if (appEl)   appEl.style.marginTop   = px;
-  if (sidebar) sidebar.style.paddingTop = px;
-  // On mobile, sidebar doesn't exist in grid — also offset the body for the app grid
+  // [v6.2.0] Only offset #app (the CSS grid root) — all rows (topbar, tab-bar, main) shift
+  // down together with the grid. Never set topbar.marginTop: topbar is position:sticky inside
+  // the grid, so adding marginTop shifts it within its 48px row and causes it to visually
+  // overlap the tab-bar row below.
+  const appEl = document.getElementById('app');
+  const px    = show ? `${BANNER_H}px` : '';
+  if (appEl) appEl.style.marginTop = px;
   document.documentElement.style.setProperty('--banner-offset', show ? `${BANNER_H}px` : '0px');
 }
 

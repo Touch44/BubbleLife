@@ -212,8 +212,10 @@ function _injectStyles() {
 .dash-scroll-btn-right { margin-left:  var(--space-2); }
 
 .dash-card {
-  flex: 0 0 248px;  /* [v6.1.1] wider to prevent button label cutoff */
+  flex: 0 0 264px;
   min-width: 0;
+  max-width: 264px;                 /* [v6.2.0] hard cap prevents content spill */
+  overflow: hidden;                 /* [v6.2.0] clip any overflowing stat text */
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -254,13 +256,14 @@ function _injectStyles() {
   color: var(--color-text);
 }
 .dash-card-stat {
-  font-size: var(--text-xl);
+  font-size: var(--text-lg);        /* [v6.2.0] 18px max — wraps cleanly for long stat text */
   font-weight: var(--weight-bold);
   color: var(--color-accent);
-  line-height: 1.25;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  /* [v6.1.1] removed max-height clipping — allow full text to show */
+  line-height: 1.3;
+  overflow-wrap: break-word;        /* [v6.2.0] allow wrapping — prevents stat text overflow */
+  white-space: normal;              /* [v6.2.0] allow line breaks for long text like "1 conversation" */
+  overflow: hidden;
+  min-width: 0;
 }
 .dash-card-stat.text-stat {
   font-size: var(--text-md);
@@ -273,6 +276,9 @@ function _injectStyles() {
   color: var(--color-text-muted);
   flex: 1;
   line-height: 1.5;
+  overflow-wrap: break-word;
+  word-break: normal;
+  min-width: 0;
 }
 .dash-card-cta {
   margin-top: var(--space-2);
@@ -323,7 +329,7 @@ function _injectStyles() {
 }
 @media (max-width: 640px) {
   .dash-grid { grid-template-columns: 1fr; }
-  .dash-card { flex: 0 0 220px; } /* [v6.1.1] */
+  .dash-card { flex: 0 0 240px; } /* [v6.1.2] */
 }
 
 .dash-widget {
@@ -807,9 +813,13 @@ async function renderDashboard() {
     }
 
     _buildTimerWidget();
-    on(_tt_TIMER_TICK,  () => { for (const [tid] of _rowRefs) _tickTimerRow(tid); }); // badge-only, no DOM rebuild
-    on(_tt_TIMER_ALARM, _buildTimerWidget); // structural refresh
-    on(_tt_TIMER_SAVED, _buildTimerWidget);
+    // [v6.2.0 fix] Guard against listener accumulation — only register once per session
+    if (!renderDashboard._timerListenersRegistered) {
+      renderDashboard._timerListenersRegistered = true;
+      on(_tt_TIMER_TICK,  () => { for (const [tid] of _rowRefs) _tickTimerRow(tid); });
+      on(_tt_TIMER_ALARM, _buildTimerWidget);
+      on(_tt_TIMER_SAVED, _buildTimerWidget);
+    }
   }
 
   // Wire scroll buttons for cards strip
@@ -910,6 +920,7 @@ async function _loadAndPopulate(el) {
     _populateProjectsWidget(el, data.projects);
     _populateDatesWidget(el, data.dateEntities, data.persons);
     _populateNotesWidget(el, data.notes);
+    _populateTimersWidget(el); // [v6.2.0] active timers widget
 
   } catch (err) {
     console.error('[dashboard] Data load failed:', err);
@@ -1398,6 +1409,61 @@ function _populateNotesWidget(el, notes) {
   list.querySelectorAll('.dash-widget-row').forEach(row => {
     row.addEventListener('click', () => emit(EVENTS.PANEL_OPENED, { entityId: row.dataset.noteId }));
   });
+}
+
+// ── Timers widget [v6.2.0] ────────────────────────────────────────────────────
+
+async function _populateTimersWidget(el) {
+  const widget = el.querySelector('#dash-widget-timers');
+  const list   = el.querySelector('#dash-timers-list');
+  if (!widget || !list) return;
+
+  let tt;
+  try {
+    tt = await import('../services/time-tracker.js');
+  } catch { return; }
+
+  const sessions = Object.values(tt.sessionsSignal?.value || {});
+  const active   = sessions.filter(s => s.running);
+  const alarmed  = sessions.filter(s => s.alarmed);
+  const paused   = sessions.filter(s => !s.running && !s.alarmed && (s.baseSecs || 0) > 0);
+  const all      = [...alarmed, ...active, ...paused];
+
+  if (all.length === 0) {
+    widget.style.display = 'none';
+    return;
+  }
+
+  widget.style.display = '';
+
+  list.innerHTML = all.map(s => {
+    const elapsed   = tt.getElapsed(s);
+    const remaining = tt.getRemaining(s);
+    const isBlock   = s.mode === 'block';
+    const timeStr   = isBlock && remaining != null
+      ? tt.formatDurationCompact(remaining) + ' left'
+      : tt.formatDurationCompact(elapsed);
+    const statusIcon = s.alarmed ? '🔔' : s.running ? '▶' : '⏸';
+    const statusClr  = s.alarmed ? 'var(--color-danger)' : s.running ? 'var(--color-accent)' : 'var(--color-text-muted)';
+    return '<div class="dash-widget-row dash-timer-row" data-timer-id="' + _esc(s.taskId) + '" style="cursor:pointer;">' +
+      '<span class="dash-widget-row-label" title="' + _esc(s.taskTitle || 'Untitled') + '">' +
+        '<span style="margin-right:4px;">' + statusIcon + '</span>' + _esc(s.taskTitle || 'Untitled') +
+      '</span>' +
+      '<span class="dash-widget-row-badge dash-timer-time" data-tid="' + _esc(s.taskId) + '" style="color:' + statusClr + ';font-variant-numeric:tabular-nums;font-weight:600;">' +
+        _esc(timeStr) +
+      '</span>' +
+    '</div>';
+  }).join('');
+
+  // Navigate to task on row click — open timer panel
+  list.querySelectorAll('.dash-timer-row').forEach(row => {
+    row.addEventListener('click', () => {
+      import('../components/timer-panel.js').then(m => m.openTimerPanel()).catch(() => {});
+    });
+  });
+
+  // Live tick updates handled by the module-level _buildTimerWidget listener (registered once).
+  // No per-call listener registration here to avoid O(N) listener accumulation.
 }
 
 // ── Banner populator ──────────────────────────────────────────────────────────

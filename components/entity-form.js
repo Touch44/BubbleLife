@@ -730,32 +730,99 @@ function _buildAndMount(config) {
         actionBar.appendChild(statusBtn);
       }
 
-      // ── Complete Project button ──────────────────────────────
+      // ── Complete / Set Active toggle (projects only) ────────────
       if (_editEntity?.type === 'project') {
         const isDoneProj = _editEntity.status === 'Completed' || _editEntity.status === 'Done';
-        if (!isDoneProj) {
-          const completeBtn = document.createElement('button');
-          completeBtn.style.cssText = [
+        const toggleBtn  = document.createElement('button');
+
+        const _styleToggle = (done) => {
+          toggleBtn.style.cssText = [
             'display: inline-flex; align-items: center; gap: 6px;',
             'padding: 5px 12px; border-radius: var(--radius-md); cursor: pointer;',
             'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
-            'background: var(--color-success-bg,#f0fdf4); color: var(--color-success-text,#15803d);',
-            'border: 1px solid var(--color-success-text,#15803d);',
+            done
+              ? 'background: var(--color-surface-2); color: var(--color-text-muted); border: 1px solid var(--color-border);'
+              : 'background: var(--color-success-bg,#f0fdf4); color: var(--color-success-text,#15803d); border: 1px solid var(--color-success-text,#15803d);',
           ].join(' ');
-          completeBtn.innerHTML = '<span>✓</span><span>Complete Project</span>';
-          completeBtn.title = 'Mark project complete and optionally create a new cycle';
-          completeBtn.addEventListener('click', async () => {
-            completeBtn.disabled = true;
-            try {
-              await _completeProjectFlow(_editEntity);
-            } catch (err) {
-              console.error('[entity-form] complete project failed:', err);
-              toast.error('Could not complete project');
-              completeBtn.disabled = false;
+          toggleBtn.innerHTML = done
+            ? '<span>↩</span><span>Set Active</span>'
+            : '<span>✓</span><span>Complete Project</span>';
+          toggleBtn.title = done
+            ? 'Mark project active again'
+            : 'Mark project complete and optionally create a new cycle';
+        };
+
+        _styleToggle(isDoneProj);
+
+        toggleBtn.addEventListener('click', async () => {
+          toggleBtn.disabled = true;
+          const isNowDone = _editEntity.status === 'Completed' || _editEntity.status === 'Done';
+          try {
+            if (isNowDone) {
+              // Toggle back to Active
+              const updated = { ..._editEntity, status: 'Active' };
+              const saved   = await saveEntity(updated, getAccount()?.id);
+              _editEntity   = saved;
+              _draft.status = 'Active';
+              const statusSelect = _overlay?.querySelector('#ef-field-status');
+              if (statusSelect) statusSelect.value = 'Active';
+              toast.success('Project set to Active');
+              _styleToggle(false);
+              toggleBtn.disabled = false;
+            } else {
+              // Complete flow (may close form) — pass _buildTab1ActionBar as callback
+              // so the top-level function can trigger a closure-internal re-render
+              await _completeProjectFlow(_editEntity, _buildTab1ActionBar);
+              // If form still open (user chose no-duplicate), re-style
+              const stillDone = _editEntity.status === 'Completed' || _editEntity.status === 'Done';
+              if (document.contains(toggleBtn)) {
+                _styleToggle(stillDone);
+                toggleBtn.disabled = false;
+              }
             }
-          });
-          actionBar.appendChild(completeBtn);
-        }
+          } catch (err) {
+            console.error('[entity-form] project toggle failed:', err);
+            toast.error('Could not update project status');
+            toggleBtn.disabled = false;
+          }
+        });
+
+        actionBar.appendChild(toggleBtn);
+      }
+
+      // ── Convert to Template button (projects only) ────────────
+      if (_editEntity?.type === 'project') {
+        const tplBtn = document.createElement('button');
+        tplBtn.style.cssText = [
+          'display: inline-flex; align-items: center; gap: 6px;',
+          'padding: 5px 12px; border-radius: var(--radius-md); cursor: pointer;',
+          'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
+          'background: var(--color-surface); color: var(--color-text-muted);',
+          'border: 1px solid var(--color-border);',
+        ].join(' ');
+        tplBtn.innerHTML = '<span>📋</span><span>Save as Template</span>';
+        tplBtn.title = 'Convert this project into a reusable template';
+        tplBtn.addEventListener('mouseenter', () => {
+          tplBtn.style.borderColor = 'var(--color-accent)';
+          tplBtn.style.color = 'var(--color-accent)';
+        });
+        tplBtn.addEventListener('mouseleave', () => {
+          tplBtn.style.borderColor = 'var(--color-border)';
+          tplBtn.style.color = 'var(--color-text-muted)';
+        });
+        tplBtn.addEventListener('click', async () => {
+          tplBtn.disabled = true;
+          tplBtn.innerHTML = '<span>⏳</span><span>Building…</span>';
+          try {
+            await _convertProjectToTemplate(_editEntity);
+          } catch (err) {
+            console.error('[entity-form] convert to template failed:', err);
+            toast.error('Could not save template');
+          }
+          tplBtn.disabled = false;
+          tplBtn.innerHTML = '<span>📋</span><span>Save as Template</span>';
+        });
+        actionBar.appendChild(tplBtn);
       }
 
       // ── Open Graph button ────────────────────────────────────
@@ -2717,15 +2784,33 @@ async function _buildFormTimeTrackerUI(container, entity) {
     op.textContent = o.l;
     blockSelect.appendChild(op);
   }
-  // Apply saved default time block setting (items 4 & 5) — only for NEW tasks (no existing sessions)
-  getSetting('taskDefaultTimeBlock').then(defaultSecs => {
-    if (defaultSecs && !_ftGetSession(taskId)) {
-      const val = String(defaultSecs);
-      if ([...blockSelect.options].some(o => o.value === val)) {
-        blockSelect.value = val;
-      }
+  // [v6.2.0] Pre-select from plannedDuration field if set on the task entity
+  // This makes the task's time block the default for the timer — "use time block as default duration".
+  const plannedMins = entity?.plannedDuration
+    ? (() => {
+        const s = String(entity.plannedDuration).toLowerCase();
+        const m = s.match(/^(\d+)\s*min/);   if (m) return parseInt(m[1], 10) * 60;
+        const h = s.match(/^([\d.]+)\s*hour/); if (h) return Math.round(parseFloat(h[1]) * 3600);
+        return 0;
+      })()
+    : 0;
+  if (plannedMins > 0 && !_ftGetSession(taskId)) {
+    const val = String(plannedMins);
+    if ([...blockSelect.options].some(o => o.value === val)) {
+      blockSelect.value = val;
     }
-  }).catch(() => {});
+  }
+  // Fall back to saved default time block setting
+  if (!plannedMins) {
+    getSetting('taskDefaultTimeBlock').then(defaultSecs => {
+      if (defaultSecs && !_ftGetSession(taskId)) {
+        const val = String(defaultSecs);
+        if ([...blockSelect.options].some(o => o.value === val)) {
+          blockSelect.value = val;
+        }
+      }
+    }).catch(() => {});
+  }
   blockRow.appendChild(blockSelect);
 
   const startBlockBtn = _mkBtn('▶ Start Block', true);
@@ -3521,8 +3606,20 @@ async function _buildRelationsTab(container) {
     if (actions.includes('delete')) {
       const btn = _mkB('🗑️', 'Delete', true);
       btn.addEventListener('click', () => _guardR(async () => {
-        const et = _editEntity.title || _editEntity.name || config?.label || 'entity';
+        const et  = _editEntity.title || _editEntity.name || config?.label || 'entity';
         const snap = { ..._editEntity };
+
+        // [v6.1.8] Projects use the shared task-list flow (dynamic import to avoid circular dep)
+        if (_editEntity.type === 'project') {
+          const { _deleteProjectWithTaskFlow } = await import('./entity-panel.js');
+          await _deleteProjectWithTaskFlow(
+            _editEntity.id, et, snap, config?.label || 'Project',
+            () => closeForm()
+          );
+          return;
+        }
+
+        // Standard delete for all other entity types
         if (!window.confirm(`Delete "${et}"? Press Cmd+Z immediately after to undo.`)) return;
         try {
           await deleteEntity(_editEntity.id);
@@ -3971,10 +4068,12 @@ async function _buildFormTasksTab(container, project) {
     addBtn.textContent = '+ Add Task';
     addBtn.style.cssText = 'padding:4px 10px;font-size:var(--text-xs);font-weight:600;background:var(--color-accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;';
     addBtn.addEventListener('click', () => {
+      const acct = getAccount();
       openForm('task', {
-        project: project.id,
+        project:    project.id,
         projectTitle: project.name || project.title,
-        context: project.context || 'family',
+        context:    project.context || 'family',
+        ...(acct?.memberId ? { assignedTo: acct.memberId } : {}),
       });
     });
     hdr.appendChild(addBtn);
@@ -4412,6 +4511,188 @@ function _fieldKeyToRelLabel(key, fieldConfig) {
   return key;
 }
 
+ */
+function _fieldKeyToRelLabel(key, fieldConfig) {
+  // Always return the field key — consistent with how all readers query edges
+  return key;
+}
+
+// ── [v6.2.0] Task Period Overlap Checking ────────────────────────────────────
+
+/**
+ * Parse plannedDuration label → minutes
+ * e.g. '30 min' → 30, '1.5 hours' → 90
+ */
+function _parseDurationMins(label) {
+  if (!label) return 0;
+  const s = String(label).toLowerCase().trim();
+  const minMatch = s.match(/^(\d+)\s*min/);
+  if (minMatch) return parseInt(minMatch[1], 10);
+  const hrMatch = s.match(/^([\d.]+)\s*hour/);
+  if (hrMatch) return Math.round(parseFloat(hrMatch[1]) * 60);
+  return 0;
+}
+
+/**
+ * Parse 'YYYY-MM-DD' + 'HH:MM' into epoch ms (local time).
+ */
+function _toEpochMs(dateStr, timeStr) {
+  if (!dateStr) return null;
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const [h, mi]    = (timeStr || '06:00').split(':').map(Number);
+  return new Date(y, mo - 1, d, h || 0, mi || 0, 0).getTime();
+}
+
+/**
+ * Find all tasks that overlap the given time block [startMs, endMs).
+ * Excludes the current entity being edited (by id).
+ *
+ * Returns array of { task, startMs, endMs } for each overlap.
+ */
+async function _findOverlappingTasks(dateStr, timeStr, durationMins, excludeId) {
+  if (!dateStr || !durationMins) return [];
+  const startMs = _toEpochMs(dateStr, timeStr);
+  if (startMs === null) return [];
+  const endMs = startMs + durationMins * 60000;
+
+  let allTasks;
+  try {
+    allTasks = await getEntitiesByType('task');
+  } catch { return []; }
+
+  const overlaps = [];
+  for (const t of allTasks) {
+    if (t.deleted) continue;
+    if (excludeId && t.id === excludeId) continue;
+    if (!t.executionDate) continue;
+
+    const dur = _parseDurationMins(t.plannedDuration);
+    if (!dur) continue; // task has no time block — no overlap possible
+
+    const tStart = _toEpochMs(t.executionDate, t.executionTime);
+    if (tStart === null) continue;
+    const tEnd   = tStart + dur * 60000;
+
+    // Overlap: startMs < tEnd && endMs > tStart
+    if (startMs < tEnd && endMs > tStart) {
+      overlaps.push({ task: t, startMs: tStart, endMs: tEnd });
+    }
+  }
+  return overlaps;
+}
+
+/**
+ * Suggest the next available time slot after all overlapping blocks.
+ */
+function _suggestNextSlot(overlaps, durationMins) {
+  if (!overlaps.length) return null;
+  // Find the latest end time among all overlapping sessions
+  const latestEnd = Math.max(...overlaps.map(o => o.endMs));
+  const d = new Date(latestEnd);
+  const pad = n => String(n).padStart(2, '0');
+  const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return { dateStr, timeStr };
+}
+
+const MAX_PARALLEL = 3;
+
+/**
+ * Show overlap conflict dialog and wait for user choice.
+ * Returns: 'parallel' | 'reschedule' | 'cancel'
+ */
+async function _showOverlapDialog(overlaps, durationMins, suggestedSlot) {
+  return new Promise(resolve => {
+    // Remove any existing overlap dialog
+    document.getElementById('fh-overlap-dialog')?.remove();
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'fh-overlap-dialog';
+    backdrop.style.cssText = [
+      'position:fixed;inset:0;z-index:calc(var(--z-modal)+20);',
+      'background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;',
+      'padding:16px;',
+    ].join('');
+
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'overlap-dialog-title');
+    dialog.style.cssText = [
+      'background:var(--color-bg);border:1px solid var(--color-border);',
+      'border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);',
+      'padding:24px;max-width:440px;width:100%;',
+    ].join('');
+
+    const atParallelLimit = overlaps.length >= MAX_PARALLEL;
+
+    const overlapList = overlaps.slice(0, 3).map(o => {
+      const pad = n => String(n).padStart(2, '0');
+      const ds  = new Date(o.startMs);
+      const de  = new Date(o.endMs);
+      const timeRange = `${pad(ds.getHours())}:${pad(ds.getMinutes())} – ${pad(de.getHours())}:${pad(de.getMinutes())}`;
+      return `<li style="margin-bottom:4px;">📌 <strong>${_esc(o.task.title || 'Untitled')}</strong> <span style="color:var(--color-text-muted);font-size:var(--text-xs);">${timeRange}</span></li>`;
+    }).join('');
+
+    const suggestHtml = suggestedSlot
+      ? `<div style="margin-top:10px;padding:8px 12px;background:var(--color-surface);border-radius:var(--radius-md);font-size:var(--text-xs);color:var(--color-text-muted);">
+           💡 Next available: <strong>${suggestedSlot.dateStr} at ${suggestedSlot.timeStr}</strong>
+         </div>`
+      : '';
+
+    dialog.innerHTML = `
+      <div id="overlap-dialog-title" style="font-weight:var(--weight-bold);font-size:var(--text-base);margin-bottom:8px;">
+        ⚠️ Time Block Conflict
+      </div>
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:12px;">
+        This task's planned time block overlaps with ${overlaps.length} existing task${overlaps.length !== 1 ? 's' : ''}:
+      </div>
+      <ul style="list-style:none;margin:0 0 12px;padding:0;font-size:var(--text-sm);">
+        ${overlapList}
+        ${overlaps.length > 3 ? `<li style="color:var(--color-text-muted);font-size:var(--text-xs);">…and ${overlaps.length - 3} more</li>` : ''}
+      </ul>
+      ${suggestHtml}
+      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+        ${!atParallelLimit ? `<button id="od-parallel" style="
+          padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          font-weight:var(--weight-semibold);cursor:pointer;
+          background:var(--color-accent);color:#fff;border:1px solid var(--color-accent);">
+          Work in parallel (${overlaps.length}/${MAX_PARALLEL})
+        </button>` : `<div style="
+          padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          background:var(--color-danger-bg);color:var(--color-danger);
+          border:1px solid var(--color-danger);font-weight:var(--weight-semibold);">
+          ⛔ Max ${MAX_PARALLEL} parallel tasks reached
+        </div>`}
+        ${suggestedSlot ? `<button id="od-reschedule" style="
+          padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          font-weight:var(--weight-semibold);cursor:pointer;
+          background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);">
+          📅 Use ${suggestedSlot.timeStr}
+        </button>` : ''}
+        <button id="od-cancel" style="
+          padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          cursor:pointer;background:none;color:var(--color-text-muted);border:1px solid var(--color-border);">
+          ✕ Go back
+        </button>
+      </div>
+    `;
+
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    dialog.querySelector('#od-parallel')?.addEventListener('click', () => {
+      backdrop.remove(); resolve('parallel');
+    });
+    dialog.querySelector('#od-reschedule')?.addEventListener('click', () => {
+      backdrop.remove(); resolve('reschedule');
+    });
+    dialog.querySelector('#od-cancel')?.addEventListener('click', () => {
+      backdrop.remove(); resolve('cancel');
+    });
+  });
+}
+
 async function _submitForm() {
   if (!_typeKey) return;
   if (_formIsSaving) return; // prevent double-submit
@@ -4459,6 +4740,35 @@ async function _submitForm() {
   }
 
   if (!valid) { _formIsSaving = false; return; }
+
+  // ── [v6.2.0] Task period overlap check ───────────────────── //
+  if (_typeKey === 'task') {
+    const execDate     = _draft.executionDate;
+    const execTime     = _draft.executionTime || '06:00';
+    const durationMins = _parseDurationMins(_draft.plannedDuration);
+
+    if (execDate && durationMins > 0) {
+      const overlaps = await _findOverlappingTasks(execDate, execTime, durationMins, _editEntity?.id);
+      if (overlaps.length > 0) {
+        const suggested = _suggestNextSlot(overlaps, durationMins);
+        _formIsSaving = false;
+        const choice = await _showOverlapDialog(overlaps, durationMins, suggested);
+
+        if (choice === 'cancel') return;
+
+        if (choice === 'reschedule' && suggested) {
+          _draft.executionDate = suggested.dateStr;
+          _draft.executionTime = suggested.timeStr;
+          const execDateEl = _overlay?.querySelector('#ef-field-executionDate');
+          const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
+          if (execDateEl) execDateEl.value = suggested.dateStr;
+          if (execTimeEl) execTimeEl.value = suggested.timeStr;
+        }
+        // 'parallel' → proceed with overlap acknowledged
+        _formIsSaving = true;
+      }
+    }
+  }
 
   // ── Show saving state ─────────────────────────────────── //
   const saveBtn = _overlay?.querySelector('.ef-save-btn');
@@ -4871,11 +5181,12 @@ function _getDisplayTitle(entity) {
 
 // ── [v6.1.1] Complete Project Flow ─────────────────────────────── //
 
-async function _completeProjectFlow(project) {
+async function _completeProjectFlow(project, onActionBarRefresh) {
+  // onActionBarRefresh: optional callback to re-render the action bar
+  // (passed from the toggleBtn click handler which has _buildTab1ActionBar in closure)
+  // [v6.1.5 B34]: Dialog shown FIRST — entity saved AFTER user confirms (not before)
   if (!project?.id) return;
   const account = getAccount();
-  const completedProj = { ...project, status: 'Completed' };
-  await saveEntity(completedProj, account?.id);
 
   const dialog = document.createElement('div');
   dialog.style.cssText = 'position:fixed;inset:0;z-index:900;background:rgba(15,23,42,0.5);display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -4898,7 +5209,26 @@ async function _completeProjectFlow(project) {
     dialog.querySelector('#cpf-yes').addEventListener('click', () => { dialog.remove(); resolve(true); });
   });
 
-  if (!choice) { toast.success('Project completed ✓'); closeForm(); return; }
+  const completedProj = { ...project, status: 'Completed' };
+  try {
+    await saveEntity(completedProj, account?.id);
+  } catch (err) {
+    console.error('[entity-form] complete save failed:', err);
+    toast.error('Could not complete project');
+    return;
+  }
+
+  if (!choice) {
+    // Just mark complete — keep form open so toggle refreshes to "Set Active"
+    toast.success('Project completed ✓');
+    _editEntity = { ..._editEntity, status: 'Completed' };
+    _draft.status = 'Completed';
+    const statusSelect2 = document.querySelector('#ef-field-status');
+    if (statusSelect2) statusSelect2.value = 'Completed';
+    // Use the callback (passed from the closure that has _buildTab1ActionBar)
+    if (typeof onActionBarRefresh === 'function') onActionBarRefresh();
+    return;
+  }
   await _duplicateProjectCycle(project, account);
 }
 
@@ -4984,4 +5314,256 @@ async function _duplicateProjectCycle(origProj, account) {
 
   toast.success(`✨ Created "${newTitle}" — ${origTasks.length} tasks copied`);
   closeForm();
+}
+
+// ── [v6.1.3] Convert Project → Template ─────────────────────── //
+/**
+ * Converts the current project into a reusable user template.
+ *
+ * Assumptions:
+ *   1. ALL non-deleted tasks (including Done) are included — captures full process.
+ *   2. daysOffset = Math.round((task.dueDate − deadlineAnchor) / 1 day).
+ *      Deadline anchor = project.deadline if set, else latest task dueDate.
+ *      Tasks without dueDate get daysOffset = 0.
+ *   3. Done tasks shown with ✓ indicator in preview to distinguish from open.
+ *   4. Template stored in fh_project_templates_v1 (same as template library).
+ *   5. Uses top-level getEdgesTo (already imported) — no redundant dynamic import.
+ *   6. Duplicate name → overwrite or save-as-copy.
+ *   7. After save → navigates to Projects → Templates tab.
+ */
+async function _convertProjectToTemplate(project) {
+  // ── 1. Load ALL non-deleted tasks for this project ──────────
+  const allTasks = (await getEntitiesByType('task')).filter(t => !t.deleted);
+  const edgesIn  = await getEdgesTo(project.id, 'project').catch(() => []);
+  const edgeIds  = new Set(edgesIn.map(e => e.fromId));
+
+  const projTasks = allTasks.filter(t =>
+    t.project === project.id || edgeIds.has(t.id)
+  ); // ALL tasks — including Done — to capture the full process
+
+  const doneTasks = projTasks.filter(t => _isTplTaskDone(t));
+
+  // ── 2. Compute deadline anchor ───────────────────────────────
+  const today = new Date(); today.setHours(0,0,0,0);
+  let deadlineAnchor;
+  if (project.deadline) {
+    deadlineAnchor = new Date(project.deadline + 'T00:00:00');
+  } else {
+    const dates = projTasks.map(t => t.dueDate).filter(Boolean).sort();
+    deadlineAnchor = dates.length > 0
+      ? new Date(dates[dates.length - 1] + 'T00:00:00')
+      : today;
+  }
+
+  // ── 3. Build template tasks (all tasks, daysOffset relative to deadline) ──
+  const templateTasks = projTasks
+    .slice()
+    .sort((a, b) => {
+      const da = a.dueDate || '9999-12-31';
+      const db = b.dueDate || '9999-12-31';
+      return da.localeCompare(db) || (a.title || '').localeCompare(b.title || '');
+    })
+    .map((t, idx) => {
+      let daysOffset = 0;
+      if (t.dueDate) {
+        const taskDate = new Date(t.dueDate + 'T00:00:00');
+        daysOffset = Math.round((taskDate - deadlineAnchor) / 86400000);
+      }
+      return {
+        title:     t.title || t.name || 'Task',
+        priority:  t.priority || 'Medium',
+        daysOffset,
+        order:     idx,
+        wasDone:   _isTplTaskDone(t), // metadata for preview display only
+      };
+    });
+
+  // ── 4. Load existing user templates ─────────────────────────
+  const TKEY = 'fh_project_templates_v1';
+  let userTemplates = [];
+  try {
+    const raw = await getSetting(TKEY);
+    userTemplates = raw ? JSON.parse(raw) : [];
+  } catch { userTemplates = []; }
+
+  // ── 5. Show preview dialog ───────────────────────────────────
+  const projName      = project.name || project.title || 'Project';
+  const suggestedName = projName;
+
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'position:fixed;inset:0;z-index:950;background:rgba(15,23,42,0.5);display:flex;align-items:center;justify-content:center;padding:20px;';
+
+  const PRIO_C = { Critical:'#dc2626', High:'#f97316', Medium:'#f59e0b', Low:'#6b7280' };
+
+  dialog.innerHTML = `
+    <div style="background:var(--color-bg);border-radius:var(--radius-lg);max-width:540px;width:100%;
+      max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--shadow-2xl);font-family:var(--font-body);overflow:hidden;">
+
+      <!-- Header -->
+      <div style="padding:18px 22px 14px;border-bottom:1px solid var(--color-border);flex-shrink:0;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <span style="font-size:1.4rem;">📋</span>
+          <span style="font-size:var(--text-lg);font-weight:var(--weight-bold);">Save as Template</span>
+        </div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;">
+          Captures the full task structure of <strong>${_escEF(projName)}</strong> —
+          all tasks including completed ones. Due dates become relative offsets from the project deadline.
+        </div>
+      </div>
+
+      <!-- Body -->
+      <div style="flex:1;overflow-y:auto;padding:18px 22px;">
+
+        <!-- Template name -->
+        <div style="margin-bottom:16px;">
+          <label style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;
+            color:var(--color-text-muted);display:block;margin-bottom:6px;">Template Name</label>
+          <input id="tpl-name-inp" type="text" value="${_escEF(suggestedName)}"
+            style="width:100%;padding:8px 12px;border-radius:var(--radius-md);border:1.5px solid var(--color-border);
+              background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);
+              font-family:var(--font-body);box-sizing:border-box;"
+            placeholder="Template name…">
+        </div>
+
+        <!-- Stats row -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+          <div style="padding:10px 12px;background:var(--color-surface);border-radius:var(--radius-md);
+            border:1px solid var(--color-border);text-align:center;">
+            <div style="font-size:1.4rem;font-weight:var(--weight-bold);color:var(--color-accent);">${templateTasks.length}</div>
+            <div style="font-size:10px;color:var(--color-text-muted);">Total Tasks</div>
+          </div>
+          <div style="padding:10px 12px;background:var(--color-surface);border-radius:var(--radius-md);
+            border:1px solid var(--color-border);text-align:center;">
+            <div style="font-size:1.4rem;font-weight:var(--weight-bold);color:var(--color-success-text,#15803d);">${doneTasks.length}</div>
+            <div style="font-size:10px;color:var(--color-text-muted);">Done Tasks</div>
+          </div>
+          <div style="padding:10px 12px;background:var(--color-surface);border-radius:var(--radius-md);
+            border:1px solid var(--color-border);text-align:center;">
+            <div style="font-size:1.2rem;font-weight:var(--weight-bold);color:var(--color-text);">
+              ${project.deadline ? project.deadline.slice(5) : '—'}
+            </div>
+            <div style="font-size:10px;color:var(--color-text-muted);">Deadline anchor</div>
+          </div>
+        </div>
+
+        <!-- Task preview -->
+        <div style="font-size:var(--text-xs);font-weight:700;letter-spacing:0.06em;text-transform:uppercase;
+          color:var(--color-text-muted);margin-bottom:8px;">
+          Task Preview
+          <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--color-text-muted);margin-left:6px;">
+            (✓ = was Done)
+          </span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto;
+          border:1px solid var(--color-border);border-radius:var(--radius-md);padding:8px;">
+          ${templateTasks.length === 0
+            ? '<div style="text-align:center;padding:16px;color:var(--color-text-muted);font-size:var(--text-sm);">No tasks in this project</div>'
+            : templateTasks.map(t => {
+                const offsetLabel = t.daysOffset === 0 ? 'on deadline'
+                  : t.daysOffset < 0 ? `${Math.abs(t.daysOffset)}d before`
+                  : `${t.daysOffset}d after`;
+                const doneBadge = t.wasDone
+                  ? '<span style="font-size:9px;padding:1px 5px;border-radius:9px;background:#dcfce7;color:#15803d;flex-shrink:0;">✓ Done</span>'
+                  : '';
+                return `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;
+                  background:${t.wasDone ? 'var(--color-surface)' : 'var(--color-bg)'};
+                  border-radius:var(--radius-sm);opacity:${t.wasDone ? 0.75 : 1};">
+                  <span style="width:7px;height:7px;border-radius:50%;background:${PRIO_C[t.priority]||'#94a3b8'};flex-shrink:0;"></span>
+                  <span style="flex:1;font-size:var(--text-xs);color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escEF(t.title)}</span>
+                  ${doneBadge}
+                  <span style="font-size:10px;color:var(--color-text-muted);white-space:nowrap;flex-shrink:0;">${offsetLabel}</span>
+                </div>`;
+              }).join('')
+          }
+        </div>
+
+      </div>
+
+      <!-- Footer -->
+      <div style="padding:14px 22px;border-top:1px solid var(--color-border);display:flex;gap:10px;justify-content:flex-end;flex-shrink:0;">
+        <button id="tpl-cancel" style="padding:7px 16px;border-radius:var(--radius-md);border:1px solid var(--color-border);
+          background:var(--color-surface);color:var(--color-text);cursor:pointer;font-size:var(--text-sm);">Cancel</button>
+        <button id="tpl-save" style="padding:7px 18px;border-radius:var(--radius-md);border:none;
+          background:var(--color-accent);color:#fff;cursor:pointer;font-size:var(--text-sm);font-weight:600;">
+          💾 Save Template
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(dialog);
+  const nameInp = dialog.querySelector('#tpl-name-inp');
+  nameInp.focus(); nameInp.select();
+
+  await new Promise(resolve => {
+    dialog.querySelector('#tpl-cancel').addEventListener('click', () => { dialog.remove(); resolve(); });
+    dialog.addEventListener('click', e => { if (e.target === dialog) { dialog.remove(); resolve(); } });
+
+    dialog.querySelector('#tpl-save').addEventListener('click', async () => {
+      const name = nameInp.value.trim();
+      if (!name) { nameInp.style.borderColor = 'var(--color-danger)'; nameInp.focus(); return; }
+
+      // Strip wasDone metadata — not part of template spec
+      const saveTasks = templateTasks.map(({ wasDone: _, ...rest }) => rest);
+
+      const dupIdx = userTemplates.findIndex(t => t.name.trim().toLowerCase() === name.toLowerCase());
+      if (dupIdx >= 0) {
+        const overwrite = confirm(`A template named "${name}" already exists.\n\nOK = overwrite it\nCancel = save as new copy`);
+        if (overwrite) {
+          userTemplates[dupIdx] = {
+            ...userTemplates[dupIdx],
+            name,
+            goal:           project.goal || '',
+            completionMode: project.completionMode || 'Parallel',
+            tasks:          saveTasks,
+          };
+        } else {
+          userTemplates.push({
+            id:             _tplUid(),
+            name:           name + ' (copy)',
+            goal:           project.goal || '',
+            completionMode: project.completionMode || 'Parallel',
+            tasks:          saveTasks,
+          });
+        }
+      } else {
+        userTemplates.push({
+          id:             _tplUid(),
+          name,
+          goal:           project.goal || '',
+          completionMode: project.completionMode || 'Parallel',
+          tasks:          saveTasks,
+        });
+      }
+
+      try {
+        await setSetting(TKEY, JSON.stringify(userTemplates));
+        dialog.remove();
+        toast.success(`📋 Template "${name}" saved! (${saveTasks.length} tasks)`);
+        try {
+          const { navigate } = await import('../core/router.js');
+          await navigate('projects', { _tab: 'templates' });
+        } catch { /* non-fatal */ }
+        resolve();
+      } catch (err) {
+        console.error('[entity-form] save template:', err);
+        toast.error('Could not save template');
+      }
+    });
+  });
+}
+
+/** Check if a task is done (for template preview badge — not for filtering) */
+function _isTplTaskDone(t) {
+  const s = (t?.status || '').toLowerCase();
+  return s === 'done' || s === 'completed' || s === 'complete';
+}
+
+
+function _tplUid() {
+  return 'tpl-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+function _escEF(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }

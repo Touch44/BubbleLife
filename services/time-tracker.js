@@ -168,14 +168,13 @@ async function _tick() {
     if (session.mode === 'block' && session.blockSecs) {
       const remaining = session.blockSecs - elapsed;
       if (remaining <= 0 && !session.alarmed) {
-        // Record the completed block time before marking alarmed
-        // (baseSecs = blockSecs means "block fully elapsed")
+        // [v6.2.0] Do NOT auto-save — let the user decide: end timer or continue.
+        // baseSecs tracks the block duration so the display shows "block fully elapsed".
         session.baseSecs = session.blockSecs;
         session.alarmed  = true;
         session.running  = false;
         dirty = true;
-        // Persist completed block time to entity (async, non-blocking)
-        _saveElapsedToEntity(taskId, session.blockSecs);
+        // DO NOT call _saveElapsedToEntity here — user must explicitly end the timer.
         _fireAlarm(session);
       }
     }
@@ -402,11 +401,10 @@ export async function initTimeTracker() {
     if (session.mode === 'block' && session.running && session.blockSecs) {
       const elapsed = getElapsed(session);
       if (elapsed >= session.blockSecs) {
-        session.baseSecs = session.blockSecs; // record completed block time
+        session.baseSecs = session.blockSecs;
         session.alarmed  = true;
         session.running  = false;
-        // Persist completed block time to entity (same as live alarm handler)
-        _saveElapsedToEntity(taskId, session.blockSecs);
+        // [v6.2.0] Do NOT auto-save — user must manually end via timer panel.
         _fireAlarm(session);
       }
     }

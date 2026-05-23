@@ -12,6 +12,7 @@
 import { on, EVENTS }         from '../core/events.js';
 import { getCurrentView }      from '../core/router.js';
 import { openForm }            from './entity-form.js';
+import { getAccount }         from '../core/auth.js';
 // [v5.0.0] reminder form import — dynamic to avoid circular dependency
 let _openReminderForm = null;
 async function _ensureReminderForm() {
@@ -202,8 +203,13 @@ function _openQuickForm(type, callerPrefill = {}) {
 
   // Context-aware prefill: kanban/daily → task gets status:Inbox (only if not already set)
   if (type === 'task') {
-    if (!prefill.status)   prefill.status   = 'Not Started'; // SYS-13
-    if (!prefill.priority) prefill.priority = 'Medium';
+    if (!prefill.status)     prefill.status     = 'Not Started'; // SYS-13
+    if (!prefill.priority)   prefill.priority   = 'Medium';
+    // [v6.1.6] Default assignedTo = current user's person entity
+    if (!prefill.assignedTo) {
+      const acct = getAccount();
+      if (acct?.memberId) prefill.assignedTo = acct.memberId;
+    }
   }
   // activity-center posts prefill type
   if (type === 'post' && view === 'activity-center') {

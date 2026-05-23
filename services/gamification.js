@@ -205,9 +205,9 @@ async function _handleTaskDone(task) {
   // Check task-count badges
   await _checkTaskBadges(memberId, m.totalTasksDone, m.criticalDone || 0);
 
-  // Update project streak
-  if (task._projectId || task.projectId) {
-    await _updateProjectStreak(task._projectId || task.projectId, memberId);
+  // Update project streak — tasks store their project as task.project (not _projectId/projectId)
+  if (task.project) {
+    await _updateProjectStreak(task.project, memberId);
   }
 }
 
