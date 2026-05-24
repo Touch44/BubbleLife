@@ -204,21 +204,33 @@ function _buildPresenceItem() {
 }
 
 // ── Built-in: TimerItem ───────────────────────────────────── //
+// Uses an SVG stopwatch icon (not emoji) to distinguish from reminder bell 🔔
+
+const _STOPWATCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <circle cx="12" cy="13" r="8"/>
+  <polyline points="12 9 12 13 15 13"/>
+  <line x1="9" y1="2" x2="15" y2="2"/>
+  <line x1="12" y1="2" x2="12" y2="4"/>
+</svg>`;
 
 function _buildTimerItem() {
   const el = document.createElement('div');
   el.className = 'st-item';
   el.setAttribute('role', 'button');
   el.setAttribute('tabindex', '0');
+  el.title = 'Timers (click to open)';
+  el.id = 'st-timer-item'; // allow badge updates from timer-panel
 
-  const icon  = document.createElement('span');
-  icon.className = 'st-icon';
-  icon.textContent = '⏱️';
+  const iconWrap = document.createElement('span');
+  iconWrap.className = 'st-icon';
+  iconWrap.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;';
+  iconWrap.innerHTML = _STOPWATCH_SVG;
 
   const badge = document.createElement('span');
   badge.className = 'st-badge st-badge-info';
+  badge.id = 'st-timer-badge'; // for external updates
 
-  el.append(icon, badge);
+  el.append(iconWrap, badge);
 
   effect(() => {
     const activeCount  = _st_activeTaskIds.value.size;
@@ -231,24 +243,22 @@ function _buildTimerItem() {
     if (alarmedCount > 0) {
       badge.className = 'st-badge st-badge-danger';
       el.classList.add('st-item-alert');
-      el.title = `${alarmedCount} timer alarm${alarmedCount !== 1 ? 's' : ''}`;
-      icon.textContent = '⏰';
+      el.title = `${alarmedCount} block alarm${alarmedCount !== 1 ? 's' : ''} — click to respond`;
+      iconWrap.style.color = 'var(--color-danger)';
     } else if (activeCount > 0) {
       badge.className = 'st-badge st-badge-info';
       el.classList.remove('st-item-alert');
       el.title = `${activeCount} timer${activeCount !== 1 ? 's' : ''} running`;
-      icon.textContent = '⏱️';
+      iconWrap.style.color = 'var(--color-accent)';
     } else {
       el.classList.remove('st-item-alert');
-      el.title = 'No active timers';
-      icon.textContent = '⏱️';
+      el.title = 'Start or view timers';
+      iconWrap.style.color = '';
     }
   });
 
   el.addEventListener('click', () => {
-    import('./timer-panel.js').then(m => m.toggleTimerPanel()).catch(() => {
-      navigate(VIEW_KEYS.KANBAN, { filterTab: 'today' }); // fallback
-    });
+    import('./timer-panel.js').then(m => m.toggleTimerPanel()).catch(() => {});
   });
 
   return el;

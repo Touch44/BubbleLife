@@ -242,6 +242,28 @@ export function getSession(taskId) {
   return _sessions[taskId] || null;
 }
 
+/**
+ * Start a free-run timer for an inbox task created on-the-fly.
+ * The session is marked reassignable so the user can link it to a real task later.
+ */
+export async function startInboxTimer(tempId, title) {
+  _sessions[tempId] = {
+    taskId:    tempId,
+    taskTitle: title || 'Quick Timer',
+    mode:      'freeRun',
+    startedAt: new Date().toISOString(),
+    baseSecs:  0,
+    blockSecs: null,
+    running:   true,
+    alarmed:   false,
+    isInboxTask:      true,
+    taskReassignable: true,
+  };
+  _refreshSignals();
+  _startTick();
+  await _persist();
+}
+
 export async function startFreeRun(taskId, task) {
   const existing = _sessions[taskId];
   // baseSecs = accumulated time before this run:
@@ -325,6 +347,39 @@ export async function stopSession(taskId) {
   } catch (err) {
     console.error('[time-tracker] Failed to save timeTracked:', err);
   }
+}
+
+/**
+ * Reassign a session to a different task entity.
+ * Only works while the session has not been dismissed.
+ * Updates taskId, taskTitle, and persists. The old taskId key is removed.
+ */
+export async function reassignSession(oldTaskId, newTaskId, newTask) {
+  const session = _sessions[oldTaskId];
+  if (!session) return;
+  // [v6.3.1 fix Bug 6] Guard: if target already has an active session, merge elapsed instead of overwriting
+  const existing = _sessions[newTaskId];
+  if (existing) {
+    // Merge: add inbox elapsed onto existing session's base
+    const inboxElapsed = getElapsed(session);
+    existing.baseSecs = (existing.baseSecs || 0) + inboxElapsed;
+    existing.taskReassignable = true;
+    delete _sessions[oldTaskId];
+    _refreshSignals();
+    await _persist();
+    return;
+  }
+  const updated = {
+    ...session,
+    taskId:    newTaskId,
+    taskTitle: newTask?.title || 'Untitled',
+    isInboxTask: false,
+    taskReassignable: true, // stays reassignable until dismissed
+  };
+  delete _sessions[oldTaskId];
+  _sessions[newTaskId] = updated;
+  _refreshSignals();
+  await _persist();
 }
 
 export async function resetSession(taskId) {
