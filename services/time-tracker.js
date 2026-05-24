@@ -283,13 +283,16 @@ export async function startFreeRun(taskId, task) {
   }
   _sessions[taskId] = {
     taskId,
-    taskTitle: task?.title || 'Untitled',
-    mode:      'freeRun',
-    startedAt: new Date().toISOString(),
+    // [v6.3.3] Fall back to existing session title when task entity lookup returns null
+    taskTitle:        task?.title || existing?.taskTitle || 'Untitled',
+    mode:             'freeRun',
+    startedAt:        new Date().toISOString(),
     baseSecs,
-    blockSecs: null,
-    running:   true,
-    alarmed:   false,
+    blockSecs:        null,
+    running:          true,
+    alarmed:          false,
+    isInboxTask:      existing?.isInboxTask      || false,
+    taskReassignable: existing?.taskReassignable || false,
   };
   _refreshSignals();
   _startTick();
@@ -310,13 +313,16 @@ export async function startBlock(taskId, task, blockSecs) {
   // Previously accumulated time is already saved in entity.timeTracked via the stopSession above.
   _sessions[taskId] = {
     taskId,
-    taskTitle: task?.title || 'Untitled',
-    mode:      'block',
-    startedAt: new Date().toISOString(),
-    baseSecs:  0,      // fresh countdown — not carry-over from freeRun
+    // [v6.3.3] Fall back to existing session title when task entity lookup returns null
+    taskTitle:        task?.title || existing?.taskTitle || 'Untitled',
+    mode:             'block',
+    startedAt:        new Date().toISOString(),
+    baseSecs:         0,
     blockSecs,
-    running:   true,
-    alarmed:   false,
+    running:          true,
+    alarmed:          false,
+    isInboxTask:      existing?.isInboxTask      || false,
+    taskReassignable: existing?.taskReassignable || false,
   };
   _refreshSignals();
   _startTick();
@@ -380,6 +386,36 @@ export async function reassignSession(oldTaskId, newTaskId, newTask) {
   _sessions[newTaskId] = updated;
   _refreshSignals();
   await _persist();
+}
+
+/**
+ * Save elapsed time to entity AND remove the session entirely.
+ * Use for "End & save" and "Stop & save" — the session is done.
+ * Use stopSession() only for "Pause" (keeps session in list as paused).
+ */
+export async function endSession(taskId) {
+  const session = _sessions[taskId];
+  if (!session) return;
+
+  const elapsed = getElapsed(session);
+  delete _sessions[taskId];
+  _refreshSignals();
+  _stopTickIfIdle();
+  await _persist();
+
+  // Persist elapsed to entity (skip for inbox tasks — no real entity)
+  if (!session.isInboxTask && !String(taskId).startsWith('inbox-')) {
+    try {
+      const entity = await getEntity(taskId);
+      if (entity) {
+        const updated = { ...entity, timeTracked: elapsed };
+        await saveEntity(updated);
+        emit(TIMER_SAVED, { taskId, elapsed, entity: updated });
+      }
+    } catch (err) {
+      console.error('[time-tracker] endSession: failed to save timeTracked:', err);
+    }
+  }
 }
 
 export async function resetSession(taskId) {

@@ -501,7 +501,7 @@ async function _buildSessionRow(session, tt) {
     });
     const endBtn = _btn('⏹ End & save', false, true);
     endBtn.addEventListener('click', async () => {
-      await tt.stopSession(taskId);
+      await tt.endSession(taskId); // saves + removes session entirely
       _renderSessionList();
     });
     ctrlRow.appendChild(continueBtn);
@@ -509,12 +509,12 @@ async function _buildSessionRow(session, tt) {
   } else if (running) {
     const pauseBtn = _btn('⏸ Pause');
     pauseBtn.addEventListener('click', async () => {
-      await tt.stopSession(taskId);
+      await tt.stopSession(taskId); // pause: keep session in list as paused
       _renderSessionList();
     });
     const stopBtn = _btn('⏹ Stop & save', false, true);
     stopBtn.addEventListener('click', async () => {
-      await tt.stopSession(taskId);
+      await tt.endSession(taskId); // saves + removes session entirely
       _renderSessionList();
     });
     ctrlRow.appendChild(pauseBtn);
@@ -658,8 +658,8 @@ async function _showAlarmOverlay(session) {
     _dismissAlarmOverlay();
     const tt2 = await _ensureTT();
     if (!tt2) return;
-    await tt2.stopSession(taskId);
-    if (_isOpen) _render();
+    await tt2.endSession(taskId); // saves + removes session entirely
+    if (_isOpen) _renderSessionList();
   });
 
   // X button — dismiss = continues counting (session stays alarmed in panel)

@@ -870,7 +870,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '6.3.1'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '6.3.3'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
