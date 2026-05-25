@@ -266,6 +266,17 @@ export async function startInboxTimer(tempId, title) {
 
 export async function startFreeRun(taskId, task) {
   const existing = _sessions[taskId];
+
+  // [v6.4.4 fix] Merge any orphaned inbox sessions whose title matches the task being started.
+  // Prevents duplicate panel rows when a quick-timer label matches the real task title.
+  let inboxBonus = 0;
+  for (const [sid, sess] of Object.entries(_sessions)) {
+    if (sid !== taskId && sess.isInboxTask && sess.taskTitle === (task?.title || '')) {
+      inboxBonus += getElapsed(sess);
+      delete _sessions[sid];
+    }
+  }
+
   // baseSecs = accumulated time before this run:
   // - If existing session: use its elapsed (getElapsed returns baseSecs since running=false after stop)
   // - After block alarm: existing.baseSecs = blockSecs (set by alarm handler). entity.timeTracked
@@ -274,12 +285,9 @@ export async function startFreeRun(taskId, task) {
   if (existing) {
     const sessElapsed  = getElapsed(existing);
     const entitySaved  = task?.timeTracked || 0;
-    // After block alarm, entity.timeTracked = blockSecs (saved by alarm handler).
-    // After pause, entity.timeTracked = full elapsed (saved by stopSession).
-    // Either way, take the maximum to ensure no time is lost.
-    baseSecs = Math.max(sessElapsed, entitySaved);
+    baseSecs = Math.max(sessElapsed, entitySaved) + inboxBonus;
   } else {
-    baseSecs = task?.timeTracked || 0;
+    baseSecs = (task?.timeTracked || 0) + inboxBonus;
   }
   _sessions[taskId] = {
     taskId,
@@ -415,7 +423,7 @@ export async function endSession(taskId) {
       const newTask = {
         type:        'task',
         title:       session.taskTitle || 'Quick Timer',
-        status:      'Not Started',
+        status:      'Inbox',       // [v6.4.4 fix] must be Inbox so it appears in Inbox tab filter
         timeTracked: elapsed,
         createdAt:   now,
         updatedAt:   now,

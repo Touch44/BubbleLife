@@ -683,6 +683,12 @@ async function renderDashboard() {
     <div class="dash-section-label">Your Family</div>
     <div class="dash-grid" id="dash-grid">
 
+      <!-- Widget: Active Timers (top — only shown when timers are running) -->
+      <div class="dash-widget dash-widget-full" id="dash-widget-timers" style="display:none;">
+        <div class="dash-widget-title">⏱️ Active Timers</div>
+        <div id="dash-timers-list"></div>
+      </div>
+
       <!-- Widget: Family Members (full width) -->
       <div class="dash-widget dash-widget-full" id="dash-widget-members">
         <div class="dash-widget-title">👥 Family Members</div>
@@ -724,12 +730,6 @@ async function renderDashboard() {
         <div class="dash-card-sub">Review your day, capture tasks and notes, plan tomorrow.</div>
         <div id="dash-daily-stat" style="font-size:var(--text-sm);color:var(--color-text-muted);"></div>
         <button class="dash-daily-cta" id="dash-daily-btn">Start Daily Review</button>
-      </div>
-
-      <!-- Widget: Active Timers -->
-      <div class="dash-widget dash-widget-full" id="dash-widget-timers" style="display:none;">
-        <div class="dash-widget-title">⏱️ Active Timers</div>
-        <div id="dash-timers-list"></div>
       </div>
 
     </div>

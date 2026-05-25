@@ -850,22 +850,18 @@ function _buildFilterBar(container) {
     _filterProject = projSelect.value || null;
     _applyFilterChange(); // B04 fix: re-render in all view modes
   });
-  // [v6.4.3 fix] On the No Projects tab, selecting a project would always yield zero results
-  // (tab filter already excludes all project-linked tasks). Disable the dropdown with a tooltip.
-  if (_filterTab === 'noprojects') {
-    projSelect.disabled = true;
-    projSelect.title    = 'Not applicable on the No Projects tab — all tasks here have no project';
-    projSelect.style.opacity = '0.45';
-    projSelect.style.cursor  = 'default';
+  // [v6.4.4 fix] On the No Projects tab, hide the project dropdown entirely —
+  // all tasks here have no project by definition, so the filter is meaningless.
+  if (_filterTab !== 'noprojects') {
+    bar.appendChild(projSelect);
   }
-  bar.appendChild(projSelect);
 
-  // [v6.4.3] Hint text shown next to disabled Projects dropdown on No Projects tab
+  // [v6.4.4] Hint text on No Projects tab
   if (_filterTab === 'noprojects') {
     const npHint = document.createElement('div');
     npHint.style.cssText = [
       'font-size:var(--text-xs);color:var(--color-text-muted);',
-      'align-self:center;white-space:nowrap;',
+      'align-self:center;white-space:nowrap;flex-shrink:0;',
     ].join('');
     npHint.textContent = '📌 Showing unlinked tasks';
     bar.appendChild(npHint);
@@ -1134,8 +1130,8 @@ function _buildFilterBar(container) {
     bar.appendChild(tagCombo);
   }
 
-  // Overdue 3-way toggle — hidden on date-bucketed tabs (scheduled/noprojects use time pills instead)
-  if (_filterTab !== 'scheduled' && _filterTab !== 'noprojects') {
+  // Overdue 3-way toggle — hidden on Scheduled tab only (which uses time-bucket pills instead)
+  if (_filterTab !== 'scheduled') { // [v6.4.4 fix] noprojects also gets the overdue 3-way toggle
     const OVERDUE_STATES = [
       { value: null,           label: '⏰ Overdue',     title: 'Click to show overdue tasks only',     cls: '' },
       { value: 'overdue',      label: '⏰ Overdue ✓',   title: 'Showing overdue only — click for non-overdue', cls: ' active' },
@@ -2639,10 +2635,14 @@ async function renderKanban(params = {}) {
         _viewMode      = _defaultViewPerTab[tab.key] || _TAB_CANONICAL_VIEW[tab.key] || 'list';
         _userOverrodeView = false;
         _filterScheduledRange = null; // reset time-context bucket on tab switch
-        // [v6.4.3 fix] When switching TO a tab that hides the overdue toggle (scheduled/noprojects),
-        // clear _filterOverdue so the hidden filter doesn't silently narrow results
+        // [v6.4.4 fix] Clear stale filters when switching tabs
+        // - On scheduled/noprojects: clear overdue toggle (handled by pill row instead)
+        // - On noprojects: clear scheduled range so it doesn't silently narrow results
         if (tab.key === 'scheduled' || tab.key === 'noprojects') {
           _filterOverdue = null;
+        }
+        if (tab.key === 'noprojects') {
+          _filterScheduledRange = null; // range filter is meaningless on No Projects tab
         }
         // When switching AWAY from scheduled/noprojects, clear the range filter too
         if (prevTab !== tab.key && (prevTab === 'scheduled' || prevTab === 'noprojects')) {
@@ -2802,7 +2802,8 @@ function _renderAltView(container, tasks) {
 
   const body = document.createElement('div');
   body.className = 'kanban-alt-body'; // FIX-7: scrollable wrapper for alt views
-  body.style.cssText = 'padding:0 var(--space-5) var(--space-5);';
+  // [v6.4.4 fix] Extra bottom padding so last row isn't hidden under the floating FAB (+) button
+  body.style.cssText = 'padding:0 var(--space-5) var(--space-16,5rem);';
 
   // BUG 13: Show empty state when no tasks
   if (tasks.length === 0) {
