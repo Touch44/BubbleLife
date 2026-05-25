@@ -375,13 +375,13 @@ async function renderSettings() {
       <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-3);">Choose your default view mode for each task category:</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-3);margin-bottom:var(--space-5);">
         ${[
-          { id: 'inbox',     label: '📥 Inbox' },
-          { id: 'today',     label: '☀️ Today' },
-          { id: 'scheduled', label: '📅 Scheduled' },
-          { id: 'context',   label: '🏷️ Context' },
-          { id: 'open',      label: '○ Open' },
-          { id: 'completed', label: '✅ Completed' },
-          { id: 'all',       label: '📚 All' },
+          { id: 'inbox',      label: '📥 Inbox' },
+          { id: 'today',      label: '☀️ Today' },
+          { id: 'scheduled',  label: '📅 Scheduled' },
+          { id: 'noprojects', label: '📌 No Projects' },
+          { id: 'open',       label: '○ Open' },
+          { id: 'completed',  label: '✅ Completed' },
+          { id: 'all',        label: '📚 All' },
         ].map(t => `
           <div>
             <label style="font-size:var(--text-sm);font-weight:600;color:var(--color-text);display:block;margin-bottom:4px;">${t.label}</label>
@@ -586,7 +586,7 @@ async function renderSettings() {
       <div class="srow">
         <div>
           <div class="srow-label">Version</div>
-          <div class="srow-hint">FamilyHub v6.3.3 — Multi-context family management PWA</div>
+          <div class="srow-hint">FamilyHub v6.4.3 — Multi-context family management PWA</div>
         </div>
       </div>
       <div class="srow">

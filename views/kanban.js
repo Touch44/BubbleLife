@@ -130,7 +130,7 @@ let _filterProject        = null;   // project ID or null
 let _filterAssignees      = new Set();
 let _filterTags           = new Set();
 let _filterPriority       = null;   // 'Critical' | 'High' | ... | null
-let _filterOverdue        = false;
+let _filterOverdue        = null;   // null='All' | 'overdue'='Overdue only' | 'non-overdue'='Non-overdue only'
 let _filterScheduledRange = null;   // null=all | 'overdue'|'today'|'tomorrow'|'this-week'|'next-week'|'later'
 
 // ── Capacities-style view modes + filter tabs ─────────────── //
@@ -140,13 +140,13 @@ let _viewMode   = 'list'; // Spec: "default list with the view button on the rig
 // incompatible with kanban status columns force their canonical view.
 // User can always override via the view-mode dropdown.
 const _TAB_CANONICAL_VIEW = {
-  inbox:      'list',    // spec: grouped by creation date
-  today:      'kanban',  // [MAJOR] spec: default to kanban for Today tab
-  scheduled:  'list',    // spec: grouped by execution date
-  context:    'list',    // spec: grouped by context
-  open:       'list',    // spec: ordered by priority and status (single group)
-  completed:  'list',    // spec: ordered by completion date
-  all:        'list',    // spec: all tasks, user filter/sort
+  inbox:       'list',    // spec: grouped by creation date
+  today:       'kanban',  // [MAJOR] spec: default to kanban for Today tab
+  scheduled:   'list',    // spec: grouped by execution date
+  noprojects:  'list',    // [v6.4.2] No Projects tab — grouped by execution date
+  open:        'list',    // spec: ordered by priority and status (single group)
+  completed:   'list',    // spec: ordered by completion date
+  all:         'list',    // spec: all tasks, user filter/sort
 };
 
 // Track whether user has manually overridden the view for the current session
@@ -160,24 +160,24 @@ const _VIEW_MODES = [
 ];
 
 const _FILTER_TABS = [
-  { key: 'inbox',      label: 'Inbox',       icon: '\uD83D\uDCEC' },
+  { key: 'inbox',      label: 'Inbox',        icon: '\uD83D\uDCEC' },
   { key: 'today',      label: 'Today',        icon: '\u2600\uFE0F' },
   { key: 'scheduled',  label: 'Scheduled',    icon: '\uD83D\uDCC5' },
-  { key: 'context',    label: 'Context',      icon: '\uD83C\uDFF7\uFE0F' },
+  { key: 'noprojects', label: 'No Projects',  icon: '\uD83D\uDCCC' },
   { key: 'open',       label: 'Open',         icon: '\u25CB' },
   { key: 'completed',  label: 'Completed',    icon: '\u2705' },
   { key: 'all',        label: 'All',          icon: '\uD83D\uDDC2\uFE0F' },
-]; // [MAJOR] Removed Status tab — Kanban view with status columns makes it redundant
+]; // [v6.4.0] Removed Context tab (redundant with tag filter); added No Projects tab
 
 // User's default view preferences per filter tab (loaded from DB on render)
 let _defaultViewPerTab = {
-  inbox:      'list',
-  today:      'kanban',
-  scheduled:  'list',
-  context:    'list',
-  open:       'list',
-  completed:  'list',
-  all:        'list',
+  inbox:       'list',
+  today:       'kanban',
+  scheduled:   'list',
+  noprojects:  'list',
+  open:        'list',
+  completed:   'list',
+  all:         'list',
 };
 
 // Sort state per column key
@@ -354,12 +354,16 @@ function _applyFilters(tasks) {
       if (!hasMatch) return false;
     }
     if (_filterPriority && t.priority !== _filterPriority) return false;
-    if (_filterOverdue) {
+    if (_filterOverdue === 'overdue') {
       const today = _todayStr();
       // [v6.1.7] Overdue = STRICTLY before today (< today, not <= today).
-      // Using >= today excludes tasks due today so filter is meaningful on all tabs.
-      const overdueDate = _getExecDate(t); // returns executionDate || dueDate
+      const overdueDate = _getExecDate(t);
       if (!overdueDate || overdueDate >= today) return false;
+    } else if (_filterOverdue === 'non-overdue') {
+      // Non-overdue: task has no execution/due date OR its date is today or in the future
+      const today = _todayStr();
+      const overdueDate = _getExecDate(t);
+      if (overdueDate && overdueDate < today) return false;
     }
     // Scheduled tab time-context filter (boundaries cached outside loop by closure)
     if (_filterScheduledRange && _filterTab === 'scheduled') {
@@ -512,7 +516,14 @@ function _applyFilterTab(tasks) {
         .sort((a, b) => (b.completedAt || b.updatedAt || '').localeCompare(a.completedAt || a.updatedAt || ''));
 
     case 'status':
-    case 'context':
+    case 'noprojects':
+      // No Projects tab: tasks that have no project relation (neither on entity nor via edge)
+      return tasks.filter(t => {
+        const proj = t.project || _taskProjectMap.get(t.id)
+          || (t._isInstance ? (t._template?.project || _taskProjectMap.get(t._template?.id)) : null);
+        return !proj;
+      });
+
     case 'all':
     default:
       return tasks;
@@ -757,7 +768,7 @@ function _scheduledPillStyle(isActive, color) {
 
 /** Re-render the scheduled view — triggers full renderKanban for reliable state sync */
 function _reRenderScheduled() {
-  if (_filterTab !== 'scheduled') return;
+  if (_filterTab !== 'scheduled' && _filterTab !== 'noprojects') return;
   renderKanban({ _internal: true });
 }
 
@@ -766,7 +777,7 @@ function _buildFilterBar(container) {
   bar.className = 'kanban-filter-bar';
 
   // ── Scheduled tab: time-context bucket filters ──────────────
-  if (_filterTab === 'scheduled') {
+  if (_filterTab === 'scheduled' || _filterTab === 'noprojects') {
     const timeRow = document.createElement('div');
     timeRow.className = 'kanban-scheduled-time-row';
     timeRow.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);flex-wrap:nowrap;width:100%;padding-bottom:var(--space-2);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-2);overflow-x:auto;scrollbar-width:thin;';
@@ -839,7 +850,26 @@ function _buildFilterBar(container) {
     _filterProject = projSelect.value || null;
     _applyFilterChange(); // B04 fix: re-render in all view modes
   });
+  // [v6.4.3 fix] On the No Projects tab, selecting a project would always yield zero results
+  // (tab filter already excludes all project-linked tasks). Disable the dropdown with a tooltip.
+  if (_filterTab === 'noprojects') {
+    projSelect.disabled = true;
+    projSelect.title    = 'Not applicable on the No Projects tab — all tasks here have no project';
+    projSelect.style.opacity = '0.45';
+    projSelect.style.cursor  = 'default';
+  }
   bar.appendChild(projSelect);
+
+  // [v6.4.3] Hint text shown next to disabled Projects dropdown on No Projects tab
+  if (_filterTab === 'noprojects') {
+    const npHint = document.createElement('div');
+    npHint.style.cssText = [
+      'font-size:var(--text-xs);color:var(--color-text-muted);',
+      'align-self:center;white-space:nowrap;',
+    ].join('');
+    npHint.textContent = '📌 Showing unlinked tasks';
+    bar.appendChild(npHint);
+  }
 
   // Priority dropdown
   const prioSelect = document.createElement('select');
@@ -880,10 +910,11 @@ function _buildFilterBar(container) {
   }
 
   // ── Tag multi-select combobox ──────────────────────────────
+  // Always rendered on all tabs. Shows a disabled state if no tags exist yet.
   // Fills remaining space, search-as-you-type, multi-select checkboxes,
   // selected count badge / pills in trigger, one-click clear.
   const allTags = _collectAllTags();
-  if (allTags.length) {
+  {
     const tagCombo = document.createElement('div');
     tagCombo.className = 'kanban-tag-combo';
     tagCombo.style.cssText = 'position:relative;flex:1;min-width:120px;max-width:420px;';
@@ -892,11 +923,14 @@ function _buildFilterBar(container) {
     const tagTrigger = document.createElement('button');
     tagTrigger.type = 'button';
     tagTrigger.className = 'kanban-tag-trigger';
+    // [v6.4.1] Always visible; greyed out when no tags exist yet
+    const _noTagsYet = allTags.length === 0;
     tagTrigger.style.cssText = [
       'display:flex;align-items:center;gap:var(--space-1);width:100%;',
       'padding:3px 8px;border:1px solid var(--color-border);border-radius:var(--radius-md);',
       'background:var(--color-surface);cursor:pointer;font-size:var(--text-sm);',
       'color:var(--color-text);min-height:30px;flex-wrap:wrap;text-align:left;',
+      _noTagsYet ? 'opacity:0.45;cursor:default;' : '',
     ].join('');
 
     function _renderTagTrigger() {
@@ -996,7 +1030,9 @@ function _buildFilterBar(container) {
       if (visible.length === 0) {
         const none = document.createElement('div');
         none.style.cssText = 'padding:8px 12px;font-size:var(--text-sm);color:var(--color-text-muted);';
-        none.textContent = 'No tags match';
+        none.textContent = allTags.length === 0
+          ? 'No tags yet — add tags to tasks to filter by them'
+          : 'No tags match';
         tagList.appendChild(none);
         return;
       }
@@ -1064,10 +1100,11 @@ function _buildFilterBar(container) {
     // Search live filter
     tagSearch.addEventListener('input', () => _renderTagOptions(tagSearch.value));
 
-    // Toggle open/close
+    // Toggle open/close (noop when no tags)
     let _tagDdOpen = false;
     tagTrigger.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_noTagsYet) return; // no tags to filter — don't open dropdown
       _tagDdOpen = !_tagDdOpen;
       tagDd.style.display = _tagDdOpen ? 'flex' : 'none';
       tagDd.style.flexDirection = 'column';
@@ -1097,16 +1134,39 @@ function _buildFilterBar(container) {
     bar.appendChild(tagCombo);
   }
 
-  // Overdue toggle — hidden on scheduled tab (time-context pills handle this)
-  if (_filterTab !== 'scheduled') { // B34 fix: hide on scheduled tab
+  // Overdue 3-way toggle — hidden on date-bucketed tabs (scheduled/noprojects use time pills instead)
+  if (_filterTab !== 'scheduled' && _filterTab !== 'noprojects') {
+    const OVERDUE_STATES = [
+      { value: null,           label: '⏰ Overdue',     title: 'Click to show overdue tasks only',     cls: '' },
+      { value: 'overdue',      label: '⏰ Overdue ✓',   title: 'Showing overdue only — click for non-overdue', cls: ' active' },
+      { value: 'non-overdue',  label: '✅ On Track',    title: 'Showing non-overdue only — click to clear',    cls: ' active state-success' },
+    ];
+
     const overdueBtn = document.createElement('button');
-    overdueBtn.className = 'btn btn-ghost btn-sm kanban-overdue-btn' + (_filterOverdue ? ' active' : '');
-    overdueBtn.textContent = '⏰ Overdue';
+    overdueBtn.type  = 'button';
+
+    function _updateOverdueBtn() {
+      const state = OVERDUE_STATES.find(s => s.value === _filterOverdue) || OVERDUE_STATES[0];
+      overdueBtn.className = 'btn btn-ghost btn-sm kanban-overdue-btn' + state.cls;
+      overdueBtn.textContent = state.label;
+      overdueBtn.title       = state.title;
+      // Colour the "On Track" state distinctly
+      overdueBtn.style.color = (_filterOverdue === 'non-overdue')
+        ? 'var(--color-success,#22c55e)' : '';
+      overdueBtn.style.borderColor = (_filterOverdue === 'non-overdue')
+        ? 'var(--color-success,#22c55e)' : '';
+    }
+
     overdueBtn.addEventListener('click', () => {
-      _filterOverdue = !_filterOverdue;
-      overdueBtn.classList.toggle('active');
+      // Cycle: null → 'overdue' → 'non-overdue' → null
+      if (_filterOverdue === null)         _filterOverdue = 'overdue';
+      else if (_filterOverdue === 'overdue')  _filterOverdue = 'non-overdue';
+      else                                   _filterOverdue = null;
+      _updateOverdueBtn();
       _applyFilterChange();
     });
+
+    _updateOverdueBtn();
     bar.appendChild(overdueBtn);
   }
 
@@ -1119,7 +1179,7 @@ function _buildFilterBar(container) {
     _filterAssignees.clear();
     _filterTags.clear();
     _filterPriority  = null;
-    _filterOverdue   = false;
+    _filterOverdue   = null;
     _filterScheduledRange = null;
     renderKanban({ _internal: true });
   });
@@ -1203,7 +1263,7 @@ function _rerenderColumns() {
 
   // Show a friendly empty state banner when filters yield no results
   const _focusProjId = (() => { try { return getFocusProjectId(); } catch { return null; } })();
-  const anyFilter = _filterProject || _focusProjId || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue || _filterScheduledRange; // B06 fix [F3] focus
+  const anyFilter = _filterProject || _focusProjId || _filterAssignees.size || _filterTags.size || _filterPriority || _filterOverdue || _filterScheduledRange || (_filterTab === 'noprojects'); // B06 fix [F3] focus
   if (anyFilter && filtered.length === 0) {
     const banner = document.createElement('div');
     banner.style.cssText = [
@@ -2525,7 +2585,7 @@ async function renderKanban(params = {}) {
   // BUG-36 fix: reset all filter state on a fresh (non-internal) render to prevent state leak
   if (!params._internal) {
     _filterProject = null; _filterAssignees.clear(); _filterTags.clear();
-    _filterPriority = null; _filterOverdue = false; _filterScheduledRange = null;
+    _filterPriority = null; _filterOverdue = null; _filterScheduledRange = null;
     if (_viewMode !== (params.viewMode || _viewMode)) _sortBy = {};
     // Spec fix: snap to user's saved view preference for the current tab, fallback to canonical
     if (!params.viewMode) {
@@ -2533,7 +2593,7 @@ async function renderKanban(params = {}) {
       _userOverrodeView = false;
     }
   }
-  if (params.filter === 'overdue') _filterOverdue = true;
+  if (params.filter === 'overdue') _filterOverdue = 'overdue';
   if (params.viewMode) _viewMode = params.viewMode;
   if (params.filterTab) _filterTab = params.filterTab;
 
@@ -2574,11 +2634,20 @@ async function renderKanban(params = {}) {
       btn.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border:none;border-radius:var(--radius-md) var(--radius-md) 0 0;cursor:pointer;font-size:var(--text-sm);font-weight:' + (isActive ? 'var(--weight-bold)' : 'var(--weight-normal)') + ';background:' + (isActive ? 'var(--color-surface)' : 'transparent') + ';color:' + (isActive ? 'var(--color-text)' : 'var(--color-text-muted)') + ';border-bottom:2px solid ' + (isActive ? 'var(--color-accent)' : 'transparent') + ';transition:all 0.15s;';
       btn.textContent = tab.icon + ' ' + tab.label;
       btn.addEventListener('click', () => {
-        _filterTab = tab.key;
-        // Use user's saved preference for this tab, fallback to canonical default
-        _viewMode = _defaultViewPerTab[tab.key] || _TAB_CANONICAL_VIEW[tab.key] || 'list';
+        const prevTab  = _filterTab;
+        _filterTab     = tab.key;
+        _viewMode      = _defaultViewPerTab[tab.key] || _TAB_CANONICAL_VIEW[tab.key] || 'list';
         _userOverrodeView = false;
-        _filterScheduledRange = null; // reset time-context filter on tab switch
+        _filterScheduledRange = null; // reset time-context bucket on tab switch
+        // [v6.4.3 fix] When switching TO a tab that hides the overdue toggle (scheduled/noprojects),
+        // clear _filterOverdue so the hidden filter doesn't silently narrow results
+        if (tab.key === 'scheduled' || tab.key === 'noprojects') {
+          _filterOverdue = null;
+        }
+        // When switching AWAY from scheduled/noprojects, clear the range filter too
+        if (prevTab !== tab.key && (prevTab === 'scheduled' || prevTab === 'noprojects')) {
+          _filterScheduledRange = null;
+        }
         renderKanban({ _internal: true });
       });
       tabBar.appendChild(btn);
@@ -2708,8 +2777,10 @@ function _renderAltView(container, tasks) {
     case 'completed':
       grouped = new Map([['Completed', tasks]]);
       break;
-    case 'context':
-      grouped = _groupByContext(tasks);
+    case 'noprojects':
+      // No Projects: group by execution date bucket (same as Scheduled tab)
+      // [v6.4.2 fix] _groupByExecDate didn't exist — use _groupByScheduledDate
+      grouped = _groupByScheduledDate(tasks);
       break;
     case 'all':
     case 'status':
@@ -2720,13 +2791,13 @@ function _renderAltView(container, tasks) {
 
   // ── Tab hint notes (item 10) ──────────────────────────── //
   const _TAB_HINTS = {
-    inbox:      '📥 Inbox — tasks with no execution/due date. Grouped by creation date.',
-    today:      '☀️ Today — grouped by Execution Date (or Due Date if not set). Shows today + overdue.',
-    scheduled:  '📅 Scheduled — grouped by Execution Date (falls back to Due Date). Use this for planning when tasks will be done.',
-    context:    '🏷️ Context — grouped by context tag. Ordered by execution date (or due date).',
-    open:       '○ Open — all incomplete tasks. Ordered by priority → status → execution date.',
-    completed:  '✅ Completed — recently completed tasks, newest first.',
-    all:        '📚 All — every task across all tabs. Filter and sort as needed.',
+    inbox:       '📥 Inbox — tasks with no execution/due date. Grouped by creation date.',
+    today:       '☀️ Today — grouped by Execution Date (or Due Date if not set). Shows today + overdue.',
+    scheduled:   '📅 Scheduled — grouped by Execution Date (falls back to Due Date). Use this for planning when tasks will be done.',
+    noprojects:  '📌 No Projects — tasks not linked to any project. Great for reviewing loose tasks and assigning them to a project. Use the Projects dropdown above to re-assign.',
+    open:        '○ Open — all incomplete tasks. Ordered by priority → status → execution date.',
+    completed:   '✅ Completed — recently completed tasks, newest first.',
+    all:         '📚 All — every task across all tabs. Filter and sort as needed.',
   };
 
   const body = document.createElement('div');
@@ -2749,13 +2820,15 @@ function _renderAltView(container, tasks) {
       hintBannerEmpty.textContent = hintTextEmpty;
       body.appendChild(hintBannerEmpty);
     }
-    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'open' ? '○' : '🎉';
+    const emptyIcon = _filterTab === 'inbox' ? '📥' : _filterTab === 'completed' ? '✅' : _filterTab === 'today' ? '☀️' : _filterTab === 'scheduled' ? '📅' : _filterTab === 'noprojects' ? '📌' : _filterTab === 'open' ? '○' : '🎉';
     const emptyMsg  = _filterTab === 'inbox'
       ? 'Your inbox is clear! Tasks with no due date appear here, grouped by creation date.'
       : _filterTab === 'today'
       ? 'Nothing scheduled for today.'
       : _filterTab === 'completed'
       ? 'No completed tasks yet.'
+      : _filterTab === 'noprojects'
+      ? 'All tasks are linked to a project — nice work!'
       : 'No tasks here. Switch tabs or clear filters to see tasks.';
     const emptyDiv = document.createElement('div');
     emptyDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-6);gap:var(--space-3);color:var(--color-text-muted);text-align:center;';

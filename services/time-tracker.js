@@ -403,8 +403,34 @@ export async function endSession(taskId) {
   _stopTickIfIdle();
   await _persist();
 
-  // Persist elapsed to entity (skip for inbox tasks — no real entity)
-  if (!session.isInboxTask && !String(taskId).startsWith('inbox-')) {
+  const isInbox = session.isInboxTask || String(taskId).startsWith('inbox-');
+
+  if (isInbox) {
+    // [v6.3.4 fix] Inbox/quick timer ended — create a real Inbox task in IDB
+    // so the tracked time is preserved and the task shows up in the Inbox tab for follow-up
+    try {
+      // getAccount is not imported here — use the env bridge which is set up post-boot
+      const acctId = window._fhEnv?.auth?.getAccount?.()?.id || null;
+      const now    = new Date().toISOString();
+      const newTask = {
+        type:        'task',
+        title:       session.taskTitle || 'Quick Timer',
+        status:      'Not Started',
+        timeTracked: elapsed,
+        createdAt:   now,
+        updatedAt:   now,
+        _timerNote:  `Created from quick timer — ${Math.round(elapsed / 60)}m tracked`,
+      };
+      const saved = await saveEntity(newTask, acctId);
+      if (saved) {
+        emit(TIMER_SAVED, { taskId, elapsed, entity: saved });
+        console.log('[time-tracker] Inbox task created from quick timer:', saved.title, saved.id);
+      }
+    } catch (err) {
+      console.error('[time-tracker] endSession: failed to create inbox task:', err);
+    }
+  } else {
+    // Real task — persist elapsed to existing entity
     try {
       const entity = await getEntity(taskId);
       if (entity) {

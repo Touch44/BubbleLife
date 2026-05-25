@@ -570,3 +570,42 @@ async function _action(act, id) {
 }
 
 registerView('reminders', renderRemindersView);
+
+// ── [v6.4.0] Real-time updates — module-level, registered once ──────────────
+// Reminders previously had no ENTITY_SAVED listener — changes to reminders/reminderLogs
+// from other panels didn't refresh the view.
+let _remindersListenersRegistered = false;
+function _registerRemindersListeners() {
+  if (_remindersListenersRegistered) return;
+  _remindersListenersRegistered = true;
+
+  const REFRESH_TYPES = new Set(['reminder', 'reminderLog', 'task', 'person']);
+
+  on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
+    if (!entity || !REFRESH_TYPES.has(entity.type)) return;
+    const el = document.getElementById('view-reminders');
+    if (!el?.classList.contains('active')) return;
+    // Use _renderGen trick: if a new render was kicked off, stale callbacks self-abort
+    _renderGen++;
+    const gen = _renderGen;
+    _renderList(gen);
+  });
+
+  on(EVENTS.ENTITY_DELETED, ({ entity } = {}) => {
+    if (!entity || !REFRESH_TYPES.has(entity.type)) return;
+    const el = document.getElementById('view-reminders');
+    if (!el?.classList.contains('active')) return;
+    _renderGen++;
+    const gen = _renderGen;
+    _renderList(gen);
+  });
+
+  on('context:changed', () => {
+    const el = document.getElementById('view-reminders');
+    if (!el?.classList.contains('active')) return;
+    _renderGen++;
+    const gen = _renderGen;
+    _renderList(gen);
+  });
+}
+_registerRemindersListeners();

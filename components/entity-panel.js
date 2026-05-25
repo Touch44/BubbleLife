@@ -213,7 +213,9 @@ export function initEntityPanel() {
 
   // Refresh if entity we're showing got saved elsewhere
   on(EVENTS.ENTITY_SAVED, ({ entity } = {}) => {
-    if (entity && _entity && entity.id === _entity.id && !_saving) {
+    if (!entity || !_entity) return;
+
+    if (entity.id === _entity.id && !_saving) {
       _entity = entity;
       // If entity type changed (e.g. after Convert), reload config to match new type
       if (_config && entity.type && entity.type !== _config.key) {
@@ -225,11 +227,26 @@ export function initEntityPanel() {
         }
       }
       _renderActiveTab();
-    } else if (entity && _entity && _entity.type === 'project' && _activeTab === 'tasks'
-               && entity.type === 'task') {
+
+    } else if (_entity.type === 'project' && _activeTab === 'tasks' && entity.type === 'task') {
       // [v5.8.0] A task was saved while showing a project's Tasks tab — refresh the list
       const c = _panelBody?.querySelector('.panel-view-container');
       if (c) _renderProjectTasksTab(c);
+
+    } else if (_activeTab === 'series') {
+      // [v6.3.4] Recurrence summary fix: refresh the series tab when the TEMPLATE is saved
+      // while currently viewing an INSTANCE panel (entity.id != _entity.id, but it's the parent template).
+      // Covers: completeInstance updating occurrenceCount/currentStreak/longestStreak on the template.
+      const isCurrentEntityTemplate =
+        // Viewing an instance: its templateId matches the saved entity
+        (_entity.type === 'taskInstance' && (_entity.templateId === entity.id)) ||
+        // Viewing a template: a child instance was saved (e.g. skip updates the instance)
+        (entity.type === 'taskInstance' && entity.templateId === _entity.id);
+
+      if (isCurrentEntityTemplate) {
+        const c = _panelBody?.querySelector('.panel-view-container');
+        if (c) _renderSeriesTab(c);
+      }
     }
   });
 
