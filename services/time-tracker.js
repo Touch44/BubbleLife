@@ -431,8 +431,26 @@ export async function endSession(taskId) {
       };
       const saved = await saveEntity(newTask, acctId);
       if (saved) {
+        // Explicitly emit ENTITY_SAVED so kanban reloads immediately
+        emit(EVENTS.ENTITY_SAVED, { entity: saved, isNew: true });
         emit(TIMER_SAVED, { taskId, elapsed, entity: saved });
         console.log('[time-tracker] Inbox task created from quick timer:', saved.title, saved.id);
+        // [v6.4.4] Show toast so user knows the task landed in Inbox
+        try {
+          const { showToast } = await import('../core/toast.js');
+          showToast(`"${saved.title}" saved to Inbox`, 'success', {
+            duration: 5000,
+            action: {
+              label: 'View Inbox',
+              onClick: async () => {
+                try {
+                  const { navigate } = await import('../core/router.js');
+                  navigate('kanban', { filterTab: 'inbox' });
+                } catch { /* non-fatal */ }
+              },
+            },
+          });
+        } catch { /* toast is optional */ }
       }
     } catch (err) {
       console.error('[time-tracker] endSession: failed to create inbox task:', err);

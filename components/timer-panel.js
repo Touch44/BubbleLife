@@ -37,6 +37,32 @@ async function _ensureTT() {
   return _tt;
 }
 
+/**
+ * [v6.4.4] Deduplicate sessions array.
+ * If an inbox/freeRun session and a real-task session share the same taskTitle,
+ * keep only the real-task session (non-inbox wins). This prevents a "quick timer"
+ * with a label matching a task name from showing twice alongside the real session.
+ */
+function _dedupeSessions(sessions) {
+  // Build a map of title → best session (real task beats inbox)
+  const byTitle = new Map();
+  for (const s of sessions) {
+    const key = (s.taskTitle || '').trim().toLowerCase();
+    if (!key) continue;
+    const existing = byTitle.get(key);
+    if (!existing) { byTitle.set(key, s); continue; }
+    // Real task (not inbox) wins over inbox session
+    if (existing.isInboxTask && !s.isInboxTask) byTitle.set(key, s);
+  }
+  // Return sessions that are the "winner" for their title, plus any with blank/unique titles
+  const winners = new Set(byTitle.values());
+  return sessions.filter(s => {
+    const key = (s.taskTitle || '').trim().toLowerCase();
+    if (!key) return true; // blank title — always show
+    return winners.has(s);
+  });
+}
+
 // ── Lazy-load tasks for quick-start ───────────────────── //
 async function _loadTaskList() {
   try {
@@ -233,10 +259,10 @@ async function _renderSessionList() {
   const tt = await _ensureTT();
   if (!tt) return;
 
-  const sessions = Object.values(tt.sessionsSignal.value || {});
-  const alarmed  = sessions.filter(s => s.alarmed);
-  const active   = sessions.filter(s => s.running && !s.alarmed);
-  const paused   = sessions.filter(s => !s.running && !s.alarmed);
+  const _rawSessions = _dedupeSessions(Object.values(tt.sessionsSignal.value || {}));
+  const alarmed  = _rawSessions.filter(s => s.alarmed);
+  const active   = _rawSessions.filter(s => s.running && !s.alarmed);
+  const paused   = _rawSessions.filter(s => !s.running && !s.alarmed);
   const allSessions = [...alarmed, ...active, ...paused];
 
   // Update the session count in the header
@@ -277,10 +303,10 @@ async function _render() {
     return;
   }
 
-  const sessions = Object.values(tt.sessionsSignal.value || {});
-  const alarmed  = sessions.filter(s => s.alarmed);
-  const active   = sessions.filter(s => s.running && !s.alarmed);
-  const paused   = sessions.filter(s => !s.running && !s.alarmed);
+  const _rawSessions = _dedupeSessions(Object.values(tt.sessionsSignal.value || {}));
+  const alarmed  = _rawSessions.filter(s => s.alarmed);
+  const active   = _rawSessions.filter(s => s.running && !s.alarmed);
+  const paused   = _rawSessions.filter(s => !s.running && !s.alarmed);
 
   _panel.innerHTML = '';
 

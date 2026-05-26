@@ -327,7 +327,7 @@ async function _buildBlockerMap() {
 
 function _applyFilters(tasks) {
   // Cache scheduled boundaries once for the whole filter pass (avoid repeated new Date() calls)
-  const _scheduledFilterBoundaries = (_filterScheduledRange && _filterTab === 'scheduled')
+  const _scheduledFilterBoundaries = (_filterScheduledRange && (_filterTab === 'scheduled' || _filterTab === 'noprojects'))
     ? _getScheduledBoundaries() : null;
   // [F3] Focus Mode: if a project is focused, use it as an implicit project filter
   const _focusProjectId = (() => { try { return getFocusProjectId(); } catch { return null; } })();
@@ -365,8 +365,8 @@ function _applyFilters(tasks) {
       const overdueDate = _getExecDate(t);
       if (overdueDate && overdueDate < today) return false;
     }
-    // Scheduled tab time-context filter (boundaries cached outside loop by closure)
-    if (_filterScheduledRange && _filterTab === 'scheduled') {
+    // Scheduled/No Projects tab time-context filter (boundaries cached outside loop by closure)
+    if (_filterScheduledRange && (_filterTab === 'scheduled' || _filterTab === 'noprojects')) {
       const dateStr = _getExecDate(t);
       if (!dateStr) return false;
       const bucket = _classifyScheduledDate(dateStr, _scheduledFilterBoundaries);
