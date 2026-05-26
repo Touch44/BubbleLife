@@ -995,14 +995,21 @@ function _buildFilterBar(container) {
     _renderTagTrigger();
 
     // ── Dropdown panel ──
+    // [v6.4.4] position:fixed so it escapes #view-kanban overflow:hidden clipping
     const tagDd = document.createElement('div');
     tagDd.className = 'kanban-tag-dd';
     tagDd.style.cssText = [
-      'display:none;position:absolute;left:0;top:calc(100% + 4px);min-width:220px;width:max-content;max-width:340px;',
+      'display:none;position:fixed;min-width:220px;width:max-content;max-width:340px;',
       'background:var(--color-surface);border:1px solid var(--color-border);',
-      'border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:300;',
+      'border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:9999;',
       'flex-direction:column;overflow:hidden;',
     ].join('');
+    // Position helper — align to trigger's bottom-left in viewport coords
+    const _positionTagDd = () => {
+      const r = tagTrigger.getBoundingClientRect();
+      tagDd.style.left = r.left + 'px';
+      tagDd.style.top  = (r.bottom + 4) + 'px';
+    };
 
     // Search input
     const tagSearch = document.createElement('input');
@@ -1102,18 +1109,21 @@ function _buildFilterBar(container) {
       e.stopPropagation();
       if (_noTagsYet) return; // no tags to filter — don't open dropdown
       _tagDdOpen = !_tagDdOpen;
-      tagDd.style.display = _tagDdOpen ? 'flex' : 'none';
-      tagDd.style.flexDirection = 'column';
       if (_tagDdOpen) {
+        _positionTagDd(); // [v6.4.4] compute fixed coords before showing
+        tagDd.style.display = 'flex';
+        tagDd.style.flexDirection = 'column';
         tagSearch.value = '';
         _renderTagOptions();
         setTimeout(() => tagSearch.focus(), 50);
+      } else {
+        tagDd.style.display = 'none';
       }
     });
 
-    // Close on outside click
+    // Close on outside click — check both trigger and dropdown (now in body)
     document.addEventListener('click', function _closeTagDd(e) {
-      if (!tagCombo.contains(e.target)) {
+      if (!tagCombo.contains(e.target) && !tagDd.contains(e.target)) {
         _tagDdOpen = false;
         tagDd.style.display = 'none';
         document.removeEventListener('click', _closeTagDd);
@@ -1126,7 +1136,12 @@ function _buildFilterBar(container) {
     });
 
     tagCombo.appendChild(tagTrigger);
-    tagCombo.appendChild(tagDd);
+    // [v6.4.4] Append tagDd to body so fixed positioning escapes overflow:hidden ancestors
+    document.body.appendChild(tagDd);
+    const _tagDdObserver = new MutationObserver(() => {
+      if (!document.body.contains(tagCombo)) { tagDd.remove(); _tagDdObserver.disconnect(); }
+    });
+    _tagDdObserver.observe(document.body, { childList: true, subtree: true });
     bar.appendChild(tagCombo);
   }
 
@@ -2601,19 +2616,176 @@ async function renderKanban(params = {}) {
     // \u2500\u2500 Header: icon + title \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:var(--space-4) var(--space-5) 0;';
-    header.innerHTML = '<div style="display:flex;align-items:center;gap:var(--space-3);"><span style="font-size:1.4rem;">\u2611</span><span style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:var(--color-text);">Tasks</span></div><div style="display:flex;align-items:center;gap:var(--space-2);"><span class="kanban-search-toggle" title="Search" style="cursor:pointer;font-size:1.1rem;">\uD83D\uDD0D</span><span class="kanban-collapse-toggle" title="Collapse" style="cursor:pointer;font-size:1.1rem;">\u2303</span></div>';
+    // [v6.4.5] Header: Tasks title | search-button | section-toggle | collapse-toggle
+    header.innerHTML = `
+      <div style="display:flex;align-items:center;gap:var(--space-3);">
+        <span style="font-size:1.4rem;">&#x2611;</span>
+        <span style="font-size:var(--text-2xl);font-weight:var(--weight-bold);color:var(--color-text);">Tasks</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:var(--space-2);position:relative;">
+        <button class="kanban-task-search-btn" title="Search tasks"
+          style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;
+                 border:1px solid var(--color-border);border-radius:var(--radius-md);
+                 background:var(--color-surface);color:var(--color-text);cursor:pointer;
+                 font-size:var(--text-xs);transition:all 0.12s;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>Search</span>
+        </button>
+        <button class="kanban-collapse-toggle" title="Toggle tab bar"
+          style="display:inline-flex;align-items:center;justify-content:center;
+                 width:28px;height:28px;border:1px solid var(--color-border);
+                 border-radius:var(--radius-md);background:var(--color-surface);
+                 color:var(--color-text-muted);cursor:pointer;font-size:0.85rem;transition:all 0.12s;"
+          aria-label="Toggle section">&#x25BE;</button>
+      </div>
+      </div>`;
+
+    // [v6.4.5] Build search dropdown and append to body (position:fixed requires body parent)
+    const _searchDropEl = document.createElement('div');
+    _searchDropEl.id = 'kanban-task-search-drop';
+    _searchDropEl.style.cssText = 'display:none;position:fixed;z-index:9999;min-width:320px;max-width:480px;max-height:400px;overflow-y:auto;background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);font-family:var(--font-body);';
+    _searchDropEl.innerHTML = `
+      <div style="padding:8px;border-bottom:1px solid var(--color-border);position:sticky;top:0;background:var(--color-bg);z-index:1;">
+        <input id="kanban-task-search-input" type="text" placeholder="Filter tasks by title, status, project, tag…"
+          style="width:100%;padding:7px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);outline:none;box-sizing:border-box;" />
+      </div>
+      <div id="kanban-task-search-results" style="padding:4px 0;"></div>
+    `;
+    document.body.appendChild(_searchDropEl);
+    const _searchObs = new MutationObserver(() => {
+      if (!document.body.contains(header)) { _searchDropEl.remove(); _searchObs.disconnect(); }
+    });
+    _searchObs.observe(document.body, { childList: true, subtree: true });
     viewEl.appendChild(header);
 
-    // BUG 21: Wire search toggle — focuses the filter bar project/tag controls
-    header.querySelector('.kanban-search-toggle')?.addEventListener('click', () => {
-      const filterBar = viewEl.querySelector('.kanban-filter-bar');
-      if (filterBar) filterBar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      else {
-        // In alt view, scroll to top
-        viewEl.scrollTo({ top: 0, behavior: 'smooth' });
-      }
-    });
-    // BUG 22: Wire collapse toggle — cycles between compact and normal tab bar
+    // ── Wire search button ──
+    (() => {
+      const searchBtn = header.querySelector('.kanban-task-search-btn');
+      const searchDrop = document.getElementById('kanban-task-search-drop');
+      const searchInput = document.getElementById('kanban-task-search-input');
+      const searchResults = document.getElementById('kanban-task-search-results');
+      if (!searchBtn || !searchDrop || !searchInput || !searchResults) return;
+
+      let _searchDebounce = null;
+      let _searchOpen = false;
+
+      const _positionDrop = () => {
+        const r = searchBtn.getBoundingClientRect();
+        searchDrop.style.left = r.left + 'px';
+        searchDrop.style.top  = (r.bottom + 6) + 'px';
+        searchDrop.style.minWidth = Math.max(320, r.width) + 'px';
+      };
+
+      const _openSearch = () => {
+        _positionDrop();
+        searchDrop.style.display = 'block';
+        _searchOpen = true;
+        requestAnimationFrame(() => searchInput.focus());
+        _runSearch('');
+      };
+
+      const _closeSearch = () => {
+        searchDrop.style.display = 'none';
+        _searchOpen = false;
+      };
+
+      const _renderResults = (tasks, query) => {
+        searchResults.innerHTML = '';
+        if (!tasks.length) {
+          searchResults.innerHTML = `<div style="padding:16px;text-align:center;color:var(--color-text-muted);font-size:var(--text-sm);">No tasks found</div>`;
+          return;
+        }
+        for (const t of tasks.slice(0, 40)) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);transition:background 0.1s;';
+          row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface)');
+          row.addEventListener('mouseleave', () => row.style.background = '');
+
+          const isDone = t.status === 'Completed' || t.status === 'Done';
+          const execDate = t.executionDate ? t.executionDate.slice(5) : (t.dueDate ? t.dueDate.slice(5) : '');
+          const proj = _projectMap?.get(t.project)?.name || '';
+
+          // Highlight matching text
+          const _hl = (str) => {
+            if (!query) return _esc(str);
+            const idx = str.toLowerCase().indexOf(query.toLowerCase());
+            if (idx < 0) return _esc(str);
+            return _esc(str.slice(0, idx)) +
+              `<mark style="background:var(--color-accent);color:#fff;border-radius:2px;padding:0 1px;">${_esc(str.slice(idx, idx + query.length))}</mark>` +
+              _esc(str.slice(idx + query.length));
+          };
+
+          row.innerHTML = `
+            <input type="checkbox" ${isDone ? 'checked' : ''} disabled
+              style="width:13px;height:13px;accent-color:var(--color-accent);flex-shrink:0;"/>
+            <span style="flex:1;font-size:var(--text-sm);${isDone ? 'text-decoration:line-through;color:var(--color-text-muted);' : ''}"
+              >${_hl(t.title || 'Untitled')}</span>
+            ${execDate ? `<span style="font-size:10px;color:var(--color-info,#0ea5e9);white-space:nowrap;">📅 ${execDate}</span>` : ''}
+            ${proj     ? `<span style="font-size:10px;color:var(--color-accent);white-space:nowrap;">📁 ${_esc(proj)}</span>` : ''}
+          `;
+          row.addEventListener('click', () => {
+            _closeSearch();
+            emit(EVENTS.PANEL_OPENED, { entityType: t._isInstance ? 'taskInstance' : 'task', entityId: t.id });
+          });
+          searchResults.appendChild(row);
+        }
+        if (tasks.length > 40) {
+          const more = document.createElement('div');
+          more.style.cssText = 'padding:8px 12px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
+          more.textContent = `${tasks.length - 40} more — refine your search`;
+          searchResults.appendChild(more);
+        }
+      };
+
+      const _runSearch = (query) => {
+        const q = query.trim().toLowerCase();
+        // Search across ALL loaded tasks (not filtered by current tab)
+        const allTasks = [...(_tasks || []), ...(_instances || [])];
+        let results = allTasks.filter(t => !t.deleted);
+        if (q) {
+          results = results.filter(t => {
+            const title   = (t.title || '').toLowerCase();
+            const status  = (t.status || '').toLowerCase();
+            const proj    = (_projectMap?.get(t.project)?.name || '').toLowerCase();
+            const tags    = (t.tags || []).join(' ').toLowerCase();
+            return title.includes(q) || status.includes(q) || proj.includes(q) || tags.includes(q);
+          });
+        }
+        // Sort: incomplete first, then by executionDate
+        results.sort((a, b) => {
+          const aDone = a.status === 'Completed' || a.status === 'Done' ? 1 : 0;
+          const bDone = b.status === 'Completed' || b.status === 'Done' ? 1 : 0;
+          if (aDone !== bDone) return aDone - bDone;
+          return (a.executionDate || a.dueDate || '9999').localeCompare(b.executionDate || b.dueDate || '9999');
+        });
+        _renderResults(results, query);
+      };
+
+      searchInput.addEventListener('input', () => {
+        clearTimeout(_searchDebounce);
+        _searchDebounce = setTimeout(() => _runSearch(searchInput.value), 120);
+      });
+
+      searchBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _searchOpen ? _closeSearch() : _openSearch();
+      });
+
+      // Close on outside click
+      document.addEventListener('click', (e) => {
+        if (_searchOpen && !searchDrop.contains(e.target) && e.target !== searchBtn) _closeSearch();
+      });
+
+      // Close on Escape
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') _closeSearch();
+      });
+    })();
+
+    // Wire collapse toggle
     header.querySelector('.kanban-collapse-toggle')?.addEventListener('click', () => {
       const tabBar = viewEl.querySelector('[data-kanban-tabbar]');
       if (tabBar) tabBar.style.display = tabBar.style.display === 'none' ? '' : 'none';
@@ -2964,6 +3136,38 @@ function _renderAltView(container, tasks) {
           on(TIMER_TICK,  (_d) => { if (_d.taskId === task.id) _refreshListTimer(); }),
           on(TIMER_ALARM, (_d) => { if (_d.taskId === task.id) _refreshListTimer(); })
         );
+
+        // [v6.4.4] Inline Delete button — hover-revealed on each list row
+        if (!task._isInstance) { // instances can't be individually deleted (delete the template)
+          const delBtn = document.createElement('button');
+          delBtn.type  = 'button';
+          delBtn.title = 'Delete task';
+          delBtn.style.cssText = [
+            'display:none;align-items:center;justify-content:center;',
+            'width:22px;height:22px;border-radius:var(--radius-sm);flex-shrink:0;',
+            'background:transparent;border:none;cursor:pointer;',
+            'color:var(--color-danger,#dc2626);font-size:13px;opacity:0.7;',
+            'transition:opacity 0.12s,background 0.12s;',
+          ].join('');
+          delBtn.innerHTML = '🗑';
+          delBtn.addEventListener('mouseenter', () => { delBtn.style.opacity='1'; delBtn.style.background='var(--color-danger-bg,#fee2e2)'; });
+          delBtn.addEventListener('mouseleave', () => { delBtn.style.opacity='0.7'; delBtn.style.background='transparent'; });
+          delBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const title = task.title || 'Task';
+            const snap  = { ...task };
+            if (!window.confirm(`Delete "${title}"? Press Cmd+Z to undo.`)) return;
+            try {
+              const { deleteEntity } = await import('../core/db.js');
+              await deleteEntity(task.id);
+              window.FH?._pushUndoDelete?.({ snapshot: snap, entityLabel: 'Task', entityTitle: title });
+            } catch (err) { console.error('[kanban] list delete failed:', err); }
+          });
+          row.addEventListener('mouseenter', () => { delBtn.style.display = 'flex'; });
+          row.addEventListener('mouseleave', () => { delBtn.style.display = 'none'; });
+          row.appendChild(delBtn);
+        }
+
         body.appendChild(row);
       }
     } else if (_viewMode === 'wall' || _viewMode === 'gallery') {

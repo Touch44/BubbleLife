@@ -57,6 +57,7 @@ let _tab5Body = null;  // Tasks tab (project edit only) [v5.9.4]
 
 /** Cleanup fns for form-lifetime event subscriptions — called in closeForm */
 let _formEventUnsubs = [];
+let _selfDeleting    = false; // [v6.4.4] flag: suppress ENTITY_DELETED toast when form is the deleter
 
 // ── Date helper [v5.3.1] ──────────────────────────────────── //
 /** Return today as YYYY-MM-DD using local time (never toISOString). */
@@ -694,6 +695,48 @@ function _buildAndMount(config) {
         }
       }
 
+      // ── Delete button (tasks only) — [v6.4.4] moved from Connections tab, placed first ──
+      if (_editEntity?.type === 'task' && _editEntity?.id) {
+        const _taskConfig = getEntityTypeConfig('task');
+        const _taskActions = _taskConfig?.actions || [];
+        if (_taskActions.includes('delete')) {
+          const delBtn = document.createElement('button');
+          delBtn.style.cssText = [
+            'display: inline-flex; align-items: center; gap: 6px;',
+            'padding: 5px 11px; border-radius: var(--radius-md); cursor: pointer;',
+            'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
+            'background: var(--color-danger-bg,#fee2e2); color: var(--color-danger,#dc2626);',
+            'border: 1px solid var(--color-danger,#dc2626);',
+          ].join(' ');
+          delBtn.innerHTML = '<span style="font-size:13px">🗑️</span><span>Delete</span>';
+          delBtn.title = 'Delete this task';
+          delBtn.addEventListener('mouseenter', () => delBtn.style.filter = 'brightness(0.92)');
+          delBtn.addEventListener('mouseleave', () => delBtn.style.filter = '');
+          delBtn.addEventListener('click', async () => {
+            const et   = _editEntity?.title || _editEntity?.name || 'Task';
+            const snap = { ..._editEntity };
+            if (_editEntity?.type === 'project') {
+              const { _deleteProjectWithTaskFlow } = await import('./entity-panel.js');
+              await _deleteProjectWithTaskFlow(_editEntity.id, et, snap, 'Project', () => closeForm());
+              return;
+            }
+            if (!window.confirm(`Delete "${et}"? Press Cmd+Z immediately after to undo.`)) return;
+            try {
+              _selfDeleting = true;
+              await deleteEntity(_editEntity.id);
+              _selfDeleting = false;
+              window.FH?._pushUndoDelete?.({ snapshot: snap, entityLabel: 'Task', entityTitle: et });
+              closeForm();
+            } catch (err) {
+              _selfDeleting = false;
+              console.error('[entity-form] Delete failed:', err);
+              toast.error('Delete failed');
+            }
+          });
+          actionBar.appendChild(delBtn);
+        }
+      }
+
       // ── Status toggle: In Progress <> Complete (tasks only) ──
       if (_editEntity?.type === 'task') {
         const isDone = _editEntity.status === 'Completed' || _editEntity.status === 'Done';
@@ -976,9 +1019,10 @@ function _buildAndMount(config) {
     }));
 
     // 2. ENTITY_DELETED — close form if editing entity was deleted
+    // [v6.4.4] _selfDeleting flag suppresses the "form closed" toast when WE initiated the delete
     _formEventUnsubs.push(on(EVENTS.ENTITY_DELETED, ({ id } = {}) => {
       if (id !== entityId) return;
-      toast.success('This entity was deleted — form closed');
+      if (!_selfDeleting) toast.success('This entity was deleted — form closed');
       closeForm();
     }));
 
@@ -3602,38 +3646,6 @@ async function _buildRelationsTab(container) {
       toolbar.appendChild(btn);
     }
 
-    // ── Delete ────────────────────────────────────────────────
-    if (actions.includes('delete')) {
-      const btn = _mkB('🗑️', 'Delete', true);
-      btn.addEventListener('click', () => _guardR(async () => {
-        const et  = _editEntity.title || _editEntity.name || config?.label || 'entity';
-        const snap = { ..._editEntity };
-
-        // [v6.1.8] Projects use the shared task-list flow (dynamic import to avoid circular dep)
-        if (_editEntity.type === 'project') {
-          const { _deleteProjectWithTaskFlow } = await import('./entity-panel.js');
-          await _deleteProjectWithTaskFlow(
-            _editEntity.id, et, snap, config?.label || 'Project',
-            () => closeForm()
-          );
-          return;
-        }
-
-        // Standard delete for all other entity types
-        if (!window.confirm(`Delete "${et}"? Press Cmd+Z immediately after to undo.`)) return;
-        try {
-          await deleteEntity(_editEntity.id);
-          toast.success(`${config?.label || 'Entity'} deleted`);
-          window.FH?._pushUndoDelete?.({ snapshot: snap, entityLabel: config?.label, entityTitle: et });
-          closeForm();
-        } catch (err) {
-          console.error('[entity-form] Delete failed:', err);
-          toast.error('Delete failed');
-        }
-      }));
-      toolbar.appendChild(btn);
-    }
-
     if (toolbar.children.length > 0) container.appendChild(toolbar);
   }
 
@@ -4537,6 +4549,24 @@ function _toEpochMs(dateStr, timeStr) {
   return new Date(y, mo - 1, d, h || 0, mi || 0, 0).getTime();
 }
 
+
+/** Format epoch ms as "h:mm AM/PM" (12-hour, no leading zero on hour) */
+function _fmtAMPM(ms) {
+  const d = new Date(ms);
+  let h = d.getHours(), m = d.getMinutes();
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2,'0')} ${suffix}`;
+}
+/** Format HH:MM string as "h:mm AM/PM" */
+function _timeStrToAMPM(timeStr) {
+  if (!timeStr) return '';
+  const [hh, mm] = timeStr.split(':').map(Number);
+  const suffix = hh >= 12 ? 'PM' : 'AM';
+  const h = hh % 12 || 12;
+  return `${h}:${String(mm).padStart(2,'0')} ${suffix}`;
+}
+
 /**
  * Find all tasks that overlap the given time block [startMs, endMs).
  * Excludes the current entity being edited (by id).
@@ -4592,18 +4622,26 @@ function _suggestNextSlot(overlaps, durationMins) {
 const MAX_PARALLEL = 3;
 
 /**
- * Show overlap conflict dialog and wait for user choice.
- * Returns: 'parallel' | 'reschedule' | 'cancel'
+ * [v6.4.5] Integrated overlap conflict panel.
+ *
+ * Instead of a floating dialog ON TOP of the entity form, we:
+ *   1. Hide the entity form overlay temporarily
+ *   2. Show the conflict UI in the SAME modal position
+ *   3. On user choice, restore the form with updated values
+ *
+ * Returns: { choice: 'parallel'|'reschedule'|'pick'|'cancel', pickedTime?: string, pickedDate?: string }
  */
-async function _showOverlapDialog(overlaps, durationMins, suggestedSlot) {
+async function _showOverlapDialog(overlaps, durationMins, suggestedSlot, currentDateStr) {
   return new Promise(resolve => {
-    // Remove any existing overlap dialog
     document.getElementById('fh-overlap-dialog')?.remove();
+
+    // Hide entity form so the conflict panel takes its place seamlessly
+    if (_overlay) _overlay.style.visibility = 'hidden';
 
     const backdrop = document.createElement('div');
     backdrop.id = 'fh-overlap-dialog';
     backdrop.style.cssText = [
-      'position:fixed;inset:0;z-index:calc(var(--z-modal)+20);',
+      'position:fixed;inset:0;z-index:calc(var(--z-modal) + 50);',
       'background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;',
       'padding:16px;',
     ].join('');
@@ -4615,27 +4653,36 @@ async function _showOverlapDialog(overlaps, durationMins, suggestedSlot) {
     dialog.style.cssText = [
       'background:var(--color-bg);border:1px solid var(--color-border);',
       'border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);',
-      'padding:24px;max-width:440px;width:100%;',
+      'padding:24px;max-width:460px;width:100%;font-family:var(--font-body);',
     ].join('');
 
     const atParallelLimit = overlaps.length >= MAX_PARALLEL;
 
     const overlapList = overlaps.slice(0, 3).map(o => {
-      const pad = n => String(n).padStart(2, '0');
-      const ds  = new Date(o.startMs);
-      const de  = new Date(o.endMs);
-      const timeRange = `${pad(ds.getHours())}:${pad(ds.getMinutes())} – ${pad(de.getHours())}:${pad(de.getMinutes())}`;
-      return `<li style="margin-bottom:4px;">📌 <strong>${_esc(o.task.title || 'Untitled')}</strong> <span style="color:var(--color-text-muted);font-size:var(--text-xs);">${timeRange}</span></li>`;
+      const timeRange = `${_fmtAMPM(o.startMs)} – ${_fmtAMPM(o.endMs)}`;
+      return `<li style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--color-accent);">📌</span>
+        <strong style="flex:1;">${_esc(o.task.title || 'Untitled')}</strong>
+        <span style="color:var(--color-text-muted);font-size:var(--text-xs);white-space:nowrap;">${timeRange}</span>
+      </li>`;
     }).join('');
 
+    const suggestTimeAMPM = suggestedSlot ? _timeStrToAMPM(suggestedSlot.timeStr) : '';
+
     const suggestHtml = suggestedSlot
-      ? `<div style="margin-top:10px;padding:8px 12px;background:var(--color-surface);border-radius:var(--radius-md);font-size:var(--text-xs);color:var(--color-text-muted);">
-           💡 Next available: <strong>${suggestedSlot.dateStr} at ${suggestedSlot.timeStr}</strong>
+      ? `<div style="margin-top:10px;padding:8px 12px;background:var(--color-surface);border-radius:var(--radius-md);
+                    font-size:var(--text-xs);color:var(--color-text-muted);display:flex;align-items:center;gap:6px;">
+           💡 Next available: <strong style="color:var(--color-text);">${suggestedSlot.dateStr} at ${suggestTimeAMPM}</strong>
          </div>`
       : '';
 
+    // Build time picker for custom time selection
+    const nowHH = String(new Date().getHours()).padStart(2,'0');
+    const nowMM = String(new Date().getMinutes()).padStart(2,'0');
+    const defaultPickTime = suggestedSlot?.timeStr || `${nowHH}:${nowMM}`;
+    const defaultPickDate = suggestedSlot?.dateStr || currentDateStr || '';
     dialog.innerHTML = `
-      <div id="overlap-dialog-title" style="font-weight:var(--weight-bold);font-size:var(--text-base);margin-bottom:8px;">
+      <div id="overlap-dialog-title" style="font-weight:var(--weight-bold);font-size:var(--text-base);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
         ⚠️ Time Block Conflict
       </div>
       <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:12px;">
@@ -4643,13 +4690,35 @@ async function _showOverlapDialog(overlaps, durationMins, suggestedSlot) {
       </div>
       <ul style="list-style:none;margin:0 0 12px;padding:0;font-size:var(--text-sm);">
         ${overlapList}
-        ${overlaps.length > 3 ? `<li style="color:var(--color-text-muted);font-size:var(--text-xs);">…and ${overlaps.length - 3} more</li>` : ''}
+        ${overlaps.length > 3 ? `<li style="color:var(--color-text-muted);font-size:var(--text-xs);margin-top:4px;">…and ${overlaps.length - 3} more</li>` : ''}
       </ul>
       ${suggestHtml}
-      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+
+      <div style="margin-top:14px;padding:12px;background:var(--color-surface);border-radius:var(--radius-md);border:1px solid var(--color-border);">
+        <div style="font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--color-text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">
+          Pick a different time
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input id="od-pick-date" type="date" value="${_esc(defaultPickDate)}"
+            style="padding:5px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);
+                   background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);cursor:pointer;" />
+          <input id="od-pick-time" type="time" value="${_esc(defaultPickTime)}"
+            style="padding:5px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);
+                   background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);cursor:pointer;" />
+          <button id="od-pick-apply" style="
+            padding:5px 12px;border-radius:var(--radius-sm);font-size:var(--text-sm);
+            font-weight:var(--weight-semibold);cursor:pointer;
+            background:var(--color-accent);color:#fff;border:1px solid var(--color-accent);">
+            Use this time
+          </button>
+        </div>
+        <div id="od-pick-status" style="font-size:var(--text-xs);margin-top:6px;min-height:16px;"></div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center;">
         ${!atParallelLimit ? `<button id="od-parallel" style="
           padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
-          font-weight:var(--weight-semibold);cursor:pointer;
+          font-weight:var(--weight-semibold);cursor:pointer;flex:1;
           background:var(--color-accent);color:#fff;border:1px solid var(--color-accent);">
           Work in parallel (${overlaps.length}/${MAX_PARALLEL})
         </button>` : `<div style="
@@ -4662,7 +4731,7 @@ async function _showOverlapDialog(overlaps, durationMins, suggestedSlot) {
           padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
           font-weight:var(--weight-semibold);cursor:pointer;
           background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);">
-          📅 Use ${suggestedSlot.timeStr}
+          📅 Use ${suggestTimeAMPM}
         </button>` : ''}
         <button id="od-cancel" style="
           padding:8px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
@@ -4675,14 +4744,60 @@ async function _showOverlapDialog(overlaps, durationMins, suggestedSlot) {
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
 
+    const _dismiss = (result) => {
+      backdrop.remove();
+      if (_overlay) _overlay.style.visibility = ''; // restore entity form
+      resolve(result);
+    };
+
+    // Live conflict check for custom time picker
+    const pickDateEl   = dialog.querySelector('#od-pick-date');
+    const pickTimeEl   = dialog.querySelector('#od-pick-time');
+    const pickStatusEl = dialog.querySelector('#od-pick-status');
+    let _liveCheckTimer = null;
+
+    const _runLiveCheck = async () => {
+      const d = pickDateEl.value;
+      const t = pickTimeEl.value;
+      if (!d || !t) { pickStatusEl.textContent = ''; return; }
+      pickStatusEl.innerHTML = '<span style="color:var(--color-text-muted);">Checking…</span>';
+      const conflicts = await _findOverlappingTasks(d, t, durationMins, _editEntity?.id);
+      if (conflicts.length === 0) {
+        const displayTime = _timeStrToAMPM(t);
+        pickStatusEl.innerHTML = `<span style="color:var(--color-success-text,#15803d);">✓ ${displayTime} is available — click "Use this time" to apply</span>`;
+      } else {
+        const names = conflicts.slice(0,2).map(c => _esc(c.task.title||'Untitled')).join(', ');
+        pickStatusEl.innerHTML = `<span style="color:var(--color-danger);">⚠ Still conflicts with: ${names}${conflicts.length>2?` +${conflicts.length-2} more`:''}</span>`;
+      }
+    };
+
+    const _scheduleLiveCheck = () => {
+      clearTimeout(_liveCheckTimer);
+      _liveCheckTimer = setTimeout(_runLiveCheck, 400);
+    };
+
+    pickDateEl.addEventListener('change', _scheduleLiveCheck);
+    pickTimeEl.addEventListener('change', _scheduleLiveCheck);
+    pickTimeEl.addEventListener('input',  _scheduleLiveCheck);
+
+    // Initial check on the pre-filled suggested time
+    _scheduleLiveCheck();
+
+    dialog.querySelector('#od-pick-apply')?.addEventListener('click', () => {
+      const d = pickDateEl.value;
+      const t = pickTimeEl.value;
+      if (!d || !t) return;
+      _dismiss({ choice: 'pick', pickedDate: d, pickedTime: t });
+    });
+
     dialog.querySelector('#od-parallel')?.addEventListener('click', () => {
-      backdrop.remove(); resolve('parallel');
+      _dismiss({ choice: 'parallel' });
     });
     dialog.querySelector('#od-reschedule')?.addEventListener('click', () => {
-      backdrop.remove(); resolve('reschedule');
+      _dismiss({ choice: 'reschedule' });
     });
     dialog.querySelector('#od-cancel')?.addEventListener('click', () => {
-      backdrop.remove(); resolve('cancel');
+      _dismiss({ choice: 'cancel' });
     });
   });
 }
@@ -4746,17 +4861,27 @@ async function _submitForm() {
       if (overlaps.length > 0) {
         const suggested = _suggestNextSlot(overlaps, durationMins);
         _formIsSaving = false;
-        const choice = await _showOverlapDialog(overlaps, durationMins, suggested);
+        // [v6.4.5] Pass currentDateStr so the pick-time input defaults to the right date
+        const result = await _showOverlapDialog(overlaps, durationMins, suggested, execDate);
 
-        if (choice === 'cancel') return;
+        if (result.choice === 'cancel') return;
 
-        if (choice === 'reschedule' && suggested) {
+        if (result.choice === 'reschedule' && suggested) {
           _draft.executionDate = suggested.dateStr;
           _draft.executionTime = suggested.timeStr;
           const execDateEl = _overlay?.querySelector('#ef-field-executionDate');
           const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
           if (execDateEl) execDateEl.value = suggested.dateStr;
           if (execTimeEl) execTimeEl.value = suggested.timeStr;
+        }
+
+        if (result.choice === 'pick' && result.pickedDate && result.pickedTime) {
+          _draft.executionDate = result.pickedDate;
+          _draft.executionTime = result.pickedTime;
+          const execDateEl = _overlay?.querySelector('#ef-field-executionDate');
+          const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
+          if (execDateEl) execDateEl.value = result.pickedDate;
+          if (execTimeEl) execTimeEl.value = result.pickedTime;
         }
         // 'parallel' → proceed with overlap acknowledged
         _formIsSaving = true;

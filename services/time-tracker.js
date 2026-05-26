@@ -26,6 +26,7 @@
 
 import { signal, computed, effect } from '../core/signals.js';
 import { getEntity, saveEntity, getSetting, setSetting } from '../core/db.js';
+import { getActiveContext } from '../core/context.js';
 import { emit, on, EVENTS } from '../core/events.js';
 
 // ── Public event keys ─────────────────────────────────────── //
@@ -420,10 +421,12 @@ export async function endSession(taskId) {
       // getAccount is not imported here — use the env bridge which is set up post-boot
       const acctId = window._fhEnv?.auth?.getAccount?.()?.id || null;
       const now    = new Date().toISOString();
+      const _ctx = getActiveContext();
       const newTask = {
         type:        'task',
         title:       session.taskTitle || 'Quick Timer',
-        status:      'Inbox',       // [v6.4.4 fix] must be Inbox so it appears in Inbox tab filter
+        status:      'Inbox',
+        context:     (!_ctx || _ctx === 'all') ? 'family' : _ctx, // [v6.4.4] stamp active context, not 'all'
         timeTracked: elapsed,
         createdAt:   now,
         updatedAt:   now,
