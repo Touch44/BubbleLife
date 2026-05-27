@@ -413,6 +413,20 @@ async function renderSettings() {
       </div>
 
       <div style="border-top:1px solid var(--color-border);padding-top:var(--space-4);">
+        <div style="font-size:var(--text-sm);font-weight:700;color:var(--color-text);margin-bottom:var(--space-2);">🔗 Completion Follow-up</div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-3);">
+          When completing a task or event, prompt to create a connected follow-up task or event.
+          Pre-fills project, priority, time block, assignees and tags from the completed item.
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:var(--text-sm);">
+          <input type="checkbox" id="settings-followup-toggle"
+            style="width:16px;height:16px;accent-color:var(--color-accent);" />
+          <span>Ask to create a follow-up after completing a task or event</span>
+        </label>
+        <span id="settings-followup-status" style="font-size:var(--text-xs);display:none;margin-left:24px;"></span>
+      </div>
+
+      <div style="border-top:1px solid var(--color-border);padding-top:var(--space-4);">
         <div style="font-size:var(--text-sm);font-weight:700;color:var(--color-text);margin-bottom:var(--space-1);">🔁 Recurring Tasks</div>
         <div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-bottom:var(--space-3);">
           Controls how the recurring task scheduler pre-generates occurrences and retains history.
@@ -586,7 +600,7 @@ async function renderSettings() {
       <div class="srow">
         <div>
           <div class="srow-label">Version</div>
-          <div class="srow-hint">FamilyHub v6.4.5 — Multi-context family management PWA</div>
+          <div class="srow-hint">FamilyHub v6.5.0 — Multi-context family management PWA</div>
         </div>
       </div>
       <div class="srow">
@@ -793,6 +807,26 @@ async function renderSettings() {
     el.querySelector('#ctx-order-reset')?.addEventListener('click', () => {
       _ctxOrder = [...DEFAULT_CONTEXT_ORDER];
       _renderCtxList();
+    });
+  }
+
+  // ── Tasks: follow-up toggle ─────────────────────────────
+  const followupToggle = el.querySelector('#settings-followup-toggle');
+  const followupStatus = el.querySelector('#settings-followup-status');
+  if (followupToggle) {
+    // Load current setting (default ON)
+    getSetting('fh:followup_on_complete').then(val => {
+      followupToggle.checked = val !== false;
+    }).catch(() => { followupToggle.checked = true; });
+
+    followupToggle.addEventListener('change', async () => {
+      await setSetting('fh:followup_on_complete', followupToggle.checked);
+      if (followupStatus) {
+        followupStatus.textContent = followupToggle.checked ? '✓ Follow-up prompts enabled' : '✓ Follow-up prompts disabled';
+        followupStatus.style.display = 'inline';
+        followupStatus.style.color = 'var(--color-success-text,#15803d)';
+        setTimeout(() => { followupStatus.style.display = 'none'; }, 2000);
+      }
     });
   }
 

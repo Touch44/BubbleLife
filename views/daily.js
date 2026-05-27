@@ -26,6 +26,7 @@ import { registerView, navigate, VIEW_KEYS } from '../core/router.js';
 import { getEntitiesByType, getEntity, getSetting,
          saveEntity, saveEdge, getEdgesFrom }  from '../core/db.js';
 import { emit, on, EVENTS }                    from '../core/events.js';
+import { computeOverlapMap, fmtOverlap }       from '../services/overlap-detector.js';
 import { openForm }                             from '../components/entity-form.js';  // openEditForm removed — form-first v4.0.3+
 import { getAccount }                      from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
@@ -1535,6 +1536,14 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
 
   const account = getAccount();
 
+  // [v6.5.0] Compute overlap map for tasks in this daily view
+  let _dailyOverlapMap = null;
+  try {
+    const { getEntitiesByType } = await import('../core/db.js');
+    const allEvents = await getEntitiesByType('event').catch(() => []);
+    _dailyOverlapMap = computeOverlapMap([...filtered, ...allEvents.filter(e => !e.deleted)]);
+  } catch {}
+
   // Split into overdue vs today — use same date resolution as _filterTasks
   const overdueTasks = filtered.filter(t => (_getTaskExecDate(t) || '') < dateStr);
   const todayTasks   = filtered.filter(t => (_getTaskExecDate(t) || '') === dateStr);
@@ -1617,6 +1626,23 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
       </div>
     `;
 
+    // [v6.5.0] Overlap badge — show parallel conflicts if the task has a time block
+    if (task.id && typeof _dailyOverlapMap !== 'undefined' && _dailyOverlapMap?.has(task.id)) {
+      const conflicts = _dailyOverlapMap.get(task.id);
+      if (conflicts && conflicts.length > 0) {
+        const infoEl = row.querySelector('.daily-task-info');
+        if (infoEl) {
+          const badge = document.createElement('div');
+          badge.style.cssText = 'font-size:0.65rem;color:var(--color-danger,#dc2626);margin-top:2px;';
+          badge.title = 'Time block overlaps with other scheduled items';
+          badge.textContent = conflicts.slice(0, 2).map(cf =>
+            `⚠ ${cf.entity.title || 'Untitled'} (${fmtOverlap(cf.overlapMins)})`
+          ).join('  ') + (conflicts.length > 2 ? ` +${conflicts.length - 2} more` : '');
+          infoEl.appendChild(badge);
+        }
+      }
+    }
+
     // Title click → form-first UX; route through PANEL_OPENED so openPanel fetches fresh entity
     row.querySelector('.daily-task-info-clickable').addEventListener('click', () => {
       // [B16 fix] use real entity type so panel config resolves correctly for instances
@@ -1662,13 +1688,20 @@ async function _renderTasks(container, dateStr, tasks, personMap, projectMap, ta
       if (!checkbox.checked) return;
       try {
         const updated = { ...task, status: 'Completed' }; // NEW-02
-        await saveEntity(updated, account?.id);
+        const saved = await saveEntity(updated, account?.id);
         row.style.opacity = '0.4';
         row.style.transition = 'opacity 0.3s';
         setTimeout(() => {
           row.remove();
           _updateSectionCount(wrapper);
         }, 350);
+        // [v6.5.0] Follow-up prompt
+        if (saved) {
+          try {
+            const { _promptFollowUp } = await import('../components/entity-form.js');
+            await _promptFollowUp(saved);
+          } catch {}
+        }
       } catch (err) {
         console.error('[daily] Failed to complete task:', err);
         checkbox.checked = false;

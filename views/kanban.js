@@ -19,6 +19,7 @@ import { registerView }                         from '../core/router.js';
 import { getEntitiesByType, getEdgesFrom, getEdgesTo,
          getEntity, saveEntity, getSetting, setSetting }                 from '../core/db.js';
 import { emit, on, EVENTS }                      from '../core/events.js';
+import { computeOverlapMap, fmtOverlap }         from '../services/overlap-detector.js';
 // [F3] Focus Mode integration
 import { getFocusProjectId, getSequentialTaskState } from './projects.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
@@ -99,6 +100,7 @@ const SORT_OPTIONS = [
 // ── Module state ──────────────────────────────────────────── //
 
 let _tasks      = [];
+let _overlapMap = new Map(); // [v6.5.0] task/event overlap detection
 let _persons    = [];
 let _projects   = [];
 let _personMap  = new Map();
@@ -225,6 +227,16 @@ async function _loadData() {
   _instances = filterByContext(instances.filter(i => !i.deleted)); // [v5.3.1]
   _persons   = persons;
   _projects  = filterByContext(projects.filter(p => !p.deleted));
+
+  // [v6.5.0] Build overlap map for time-block conflict badges on cards/rows
+  try {
+    const { getEntitiesByType } = await import('../core/db.js');
+    const allEvents = await getEntitiesByType('event').catch(() => []);
+    _overlapMap = computeOverlapMap([
+      ..._tasks, ..._instances,
+      ...allEvents.filter(e => !e.deleted),
+    ]);
+  } catch { _overlapMap = new Map(); }
 
   _personMap  = new Map(persons.map(p  => [p.id, p]));
   _projectMap = new Map(projects.map(pr => [pr.id, pr]));
@@ -1494,6 +1506,27 @@ function _buildCard(task) {
     </div>
   `;
 
+  // ── [v6.5.0] Parallel/overlap badge on card ──────────── //
+  if (task.id && _overlapMap.has(task.id)) {
+    const conflicts = _overlapMap.get(task.id);
+    if (conflicts && conflicts.length > 0) {
+      const overlapBadge = document.createElement('div');
+      overlapBadge.style.cssText = [
+        'margin:2px 8px 4px 8px;padding:2px 6px;',
+        'background:var(--color-danger-bg,#fee2e2);color:var(--color-danger,#dc2626);',
+        'border-radius:var(--radius-sm);font-size:0.65rem;font-weight:600;',
+        'display:flex;align-items:center;gap:3px;flex-wrap:wrap;line-height:1.4;',
+      ].join('');
+      overlapBadge.title = 'Time block overlaps with other tasks/events';
+      const labels = conflicts.slice(0, 2).map(cf =>
+        `⚠ ${cf.entity.title || 'Untitled'} (${fmtOverlap(cf.overlapMins)})`
+      ).join('  ');
+      const more = conflicts.length > 2 ? `  +${conflicts.length - 2} more` : '';
+      overlapBadge.textContent = labels + more;
+      card.appendChild(overlapBadge);
+    }
+  }
+
   // ── State dot: click → popover (P-23) ──────────────────── //
   const stateDotEl = card.querySelector('.kanban-state-dot');
   if (stateDotEl) {
@@ -1620,9 +1653,16 @@ function _buildCard(task) {
         previousStatus: newStatus === 'Completed' ? freshTaskCb.status : freshTaskCb.previousStatus,
         kanban_state: (newStatus === 'Completed' && freshTaskCb.kanban_state === 'blocked') ? 'normal' : freshTaskCb.kanban_state,
       };
-      await saveEntity(entityToSave, account?.id);
+      const savedTask = await saveEntity(entityToSave, account?.id);
       // ENTITY_SAVED listener handles _loadData + _rerenderColumns — no manual call needed
       // (avoids the double-render flash caused by calling it here too)
+      // [v6.5.0] Prompt follow-up on completion
+      if (newStatus === 'Completed' && savedTask) {
+        try {
+          const { _promptFollowUp } = await import('../components/entity-form.js');
+          if (_promptFollowUp) await _promptFollowUp(savedTask);
+        } catch {}
+      }
     } catch (err) {
       console.error('[kanban] Complete failed:', err);
       cb.checked = !cb.checked;
@@ -3168,7 +3208,27 @@ function _renderAltView(container, tasks) {
           row.appendChild(delBtn);
         }
 
+        // [v6.5.0] Overlap indicator row — shown BELOW the task row
+        let _overlapRow = null;
+        if (task.id && _overlapMap.has(task.id)) {
+          const _conflicts = _overlapMap.get(task.id);
+          if (_conflicts && _conflicts.length > 0) {
+            _overlapRow = document.createElement('div');
+            _overlapRow.style.cssText = [
+              'padding:1px 10px 3px 36px;',
+              'font-size:0.68rem;color:var(--color-danger,#dc2626);',
+              'background:var(--color-danger-bg,#fee2e2);',
+              'border-left:3px solid var(--color-danger,#dc2626);',
+            ].join('');
+            _overlapRow.textContent = _conflicts.slice(0, 2).map(cf =>
+              `\u26a0 ${cf.entity.title || 'Untitled'} (${fmtOverlap(cf.overlapMins)})`
+            ).join('  ') + (_conflicts.length > 2 ? ` +${_conflicts.length - 2} more` : '');
+            _overlapRow.title = 'Time block overlaps with other scheduled items';
+          }
+        }
+
         body.appendChild(row);
+        if (_overlapRow) body.appendChild(_overlapRow);
       }
     } else if (_viewMode === 'wall' || _viewMode === 'gallery') {
       const grid = document.createElement('div');

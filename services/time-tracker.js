@@ -419,14 +419,21 @@ export async function endSession(taskId) {
     // so the tracked time is preserved and the task shows up in the Inbox tab for follow-up
     try {
       // getAccount is not imported here — use the env bridge which is set up post-boot
-      const acctId = window._fhEnv?.auth?.getAccount?.()?.id || null;
+      // [v6.5.0] Use getAccount() from auth module for reliable createdBy stamping
+      // window._fhEnv bridge may be null during early boot; try the direct import path too
+      let acctId = window._fhEnv?.auth?.getAccount?.()?.id || null;
+      if (!acctId) {
+        try { const { getAccount } = await import('../core/auth.js'); acctId = getAccount()?.id || null; } catch {}
+      }
       const now    = new Date().toISOString();
       const _ctx = getActiveContext();
+      const _resolvedCtx = (!_ctx || _ctx === 'all') ? 'family' : _ctx;
       const newTask = {
         type:        'task',
         title:       session.taskTitle || 'Quick Timer',
         status:      'Inbox',
-        context:     (!_ctx || _ctx === 'all') ? 'family' : _ctx, // [v6.4.4] stamp active context, not 'all'
+        context:     _resolvedCtx,
+        createdBy:   acctId,   // [v6.5.0] explicit stamp — required for personal context Rule 5
         timeTracked: elapsed,
         createdAt:   now,
         updatedAt:   now,

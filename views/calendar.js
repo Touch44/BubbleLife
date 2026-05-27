@@ -26,6 +26,7 @@
 import { registerView }              from '../core/router.js';
 import { getEntitiesByType, getEntity, saveEntity, getEdgesFrom } from '../core/db.js';
 import { emit, on, EVENTS }         from '../core/events.js';
+import { computeOverlapMap, fmtOverlap } from '../services/overlap-detector.js';
 // openEditForm import removed — all entity clicks route through PANEL_OPENED (form-first v4.0.3+)
 import { getAccount }                from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
@@ -1662,6 +1663,21 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
   const agenda = document.createElement('div');
   agenda.className = 'cal-agenda';
 
+  // [v6.5.0] Pre-compute overlap map for all items in this agenda window
+  let _agendaOverlapMap = null;
+  try {
+    const allItems = [];
+    for (let _di = 0; _di < AGENDA_DAYS; _di++) {
+      const _dd = new Date(_anchorDate);
+      _dd.setDate(_dd.getDate() + _di);
+      const _ds = _toDateStr(_dd);
+      for (const it of (dateMap.get(_ds) || [])) {
+        if (it.entity && !it.entity._virtual) allItems.push(it.entity);
+      }
+    }
+    if (allItems.length) _agendaOverlapMap = computeOverlapMap(allItems);
+  } catch {}
+
   const todayStr = _toDateStr(_todayLocal());
   let hasAnyItems = false;
 
@@ -1790,6 +1806,20 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
           });
         }
       });
+
+      // [v6.5.0] Overlap indicator
+      if (_agendaOverlapMap) {
+        const conflicts = _agendaOverlapMap.get(item.entity.id);
+        if (conflicts && conflicts.length > 0) {
+          const badge = document.createElement('div');
+          badge.style.cssText = 'font-size:10px;color:var(--color-danger,#dc2626);margin-top:1px;';
+          badge.title = 'Time block conflicts with other scheduled items';
+          badge.textContent = conflicts.slice(0, 2).map(cf =>
+            `⚠ ${cf.entity.title || 'Untitled'} (${fmtOverlap(cf.overlapMins)})`
+          ).join('  ') + (conflicts.length > 2 ? `  +${conflicts.length - 2} more` : '');
+          contentCol.appendChild(badge);
+        }
+      }
 
       itemList.appendChild(row);
     }

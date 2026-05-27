@@ -765,6 +765,10 @@ function _buildAndMount(config) {
             // [G02 fix] saveEntity already emits ENTITY_SAVED internally — don't emit again
             toast.success(newStatus === 'Completed' ? 'Marked complete ✓' : 'Marked in progress');
             _buildTab1ActionBar();
+            // [v6.5.0] Prompt follow-up when completing (not when un-completing)
+            if (newStatus === 'Completed') {
+              try { await _promptFollowUp(saved); } catch {}
+            }
           } catch (err) {
             console.error('[entity-form] status toggle failed:', err);
             toast.error('Could not update status');
@@ -1089,6 +1093,45 @@ function _rebuildBodyInto(config, container) {
       lbl.htmlFor = `ef-field-${field.key}`;
       lbl.style.cssText = 'font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--color-text);';
       lbl.textContent = field.label + ' & Time';
+
+      if (field.key === 'dueDate') {
+        // [v6.5.0] Sync button — copies current Planned For → Due Date, shown BEFORE the label
+        const syncBtn = document.createElement('button');
+        syncBtn.type = 'button';
+        syncBtn.title = 'Copy Planned For & Time to Due Date';
+        syncBtn.style.cssText = [
+          'width:22px;height:22px;border-radius:50%;border:1px solid var(--color-border);',
+          'background:var(--color-surface);cursor:pointer;display:flex;align-items:center;',
+          'justify-content:center;font-size:12px;flex-shrink:0;transition:all 0.15s;',
+          'color:var(--color-accent);padding:0;',
+        ].join('');
+        syncBtn.innerHTML = '⇒'; // ⇒ = copy Planned→Due (forward direction)
+        syncBtn.addEventListener('mouseenter', () => { syncBtn.style.background = 'var(--color-accent)'; syncBtn.style.color = '#fff'; });
+        syncBtn.addEventListener('mouseleave', () => { syncBtn.style.background = 'var(--color-surface)'; syncBtn.style.color = 'var(--color-accent)'; });
+        syncBtn.addEventListener('click', () => {
+          const execDateInput = _overlay?.querySelector('#ef-field-executionDate');
+          const execDateVal = execDateInput?.value || _draft.executionDate;
+          if (execDateVal) {
+            const dateStr = String(execDateVal).slice(0, 10);
+            const dueDateInput = _overlay?.querySelector('#ef-field-dueDate');
+            if (dueDateInput) { dueDateInput.value = dateStr; }
+            _draft.dueDate = dateStr;
+            const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
+            const execTimeVal = execTimeEl?.value || _draft.executionTime;
+            const dueTimeEl = _overlay?.querySelector('#ef-field-dueTime');
+            if (dueTimeEl && execTimeVal) {
+              dueTimeEl.value = execTimeVal;
+              _draft.dueTime = execTimeVal;
+            }
+          } else {
+            const orig = syncBtn.innerHTML;
+            syncBtn.textContent = '⚠';
+            syncBtn.title = 'No Planned For date set yet';
+            setTimeout(() => { syncBtn.innerHTML = orig; syncBtn.title = 'Copy Planned For & Time to Due Date'; }, 1200);
+          }
+        });
+        lblRow.appendChild(syncBtn);
+      }
 
       if (field.key === 'executionDate') {
         // Sync button — copies current dueDate → executionDate, shown BEFORE the label
@@ -4579,28 +4622,50 @@ async function _findOverlappingTasks(dateStr, timeStr, durationMins, excludeId) 
   if (startMs === null) return [];
   const endMs = startMs + durationMins * 60000;
 
-  let allTasks;
+  let allTasks, allEvents;
   try {
-    allTasks = await getEntitiesByType('task');
+    [allTasks, allEvents] = await Promise.all([
+      getEntitiesByType('task').catch(() => []),
+      getEntitiesByType('event').catch(() => []),
+    ]);
   } catch { return []; }
+
+  const _checkItem = (item, getDateStr, getTimeStr, getDur) => {
+    if (item.deleted) return null;
+    if (excludeId && item.id === excludeId) return null;
+    const ds  = getDateStr(item);
+    if (!ds) return null;
+    const dur = getDur(item);
+    if (!dur) return null;
+    const ts  = _toEpochMs(ds, getTimeStr(item));
+    if (ts === null) return null;
+    const te  = ts + dur * 60000;
+    if (startMs < te && endMs > ts) return { task: item, startMs: ts, endMs: te };
+    return null;
+  };
 
   const overlaps = [];
   for (const t of allTasks) {
-    if (t.deleted) continue;
-    if (excludeId && t.id === excludeId) continue;
-    if (!t.executionDate) continue;
-
-    const dur = _parseDurationMins(t.plannedDuration);
-    if (!dur) continue; // task has no time block — no overlap possible
-
-    const tStart = _toEpochMs(t.executionDate, t.executionTime);
-    if (tStart === null) continue;
-    const tEnd   = tStart + dur * 60000;
-
-    // Overlap: startMs < tEnd && endMs > tStart
-    if (startMs < tEnd && endMs > tStart) {
-      overlaps.push({ task: t, startMs: tStart, endMs: tEnd });
-    }
+    const hit = _checkItem(t,
+      t => t.executionDate,
+      t => t.executionTime || '06:00',
+      t => _parseDurationMins(t.plannedDuration)
+    );
+    if (hit) overlaps.push(hit);
+  }
+  for (const ev of allEvents) {
+    const hit = _checkItem(ev,
+      e => e.date ? String(e.date).slice(0, 10) : null,
+      e => e.date && e.date.length > 10 ? String(e.date).slice(11, 16) : '00:00',
+      e => {
+        if (e.endDate && e.date) {
+          const diff = Math.round((new Date(e.endDate).getTime() - new Date(e.date).getTime()) / 60000);
+          if (diff > 0) return diff;
+        }
+        return _parseDurationMins(e.plannedDuration);
+      }
+    );
+    if (hit) overlaps.push(hit);
   }
   return overlaps;
 }
@@ -4802,6 +4867,169 @@ async function _showOverlapDialog(overlaps, durationMins, suggestedSlot, current
   });
 }
 
+/**
+ * [v6.5.0] Prompt user to create a follow-up task/event after completion.
+ * Checks the fh:followup_on_complete setting before showing the prompt.
+ * @param {object} completedEntity - the just-completed task or event
+ */
+export async function _promptFollowUp(completedEntity) {
+  if (!completedEntity) return;
+  try {
+    const { getSetting } = await import('../core/db.js');
+    const enabled = await getSetting('fh:followup_on_complete');
+    if (enabled === false) return; // user disabled the feature
+  } catch { /* non-fatal */ }
+
+  const entityLabel = completedEntity.type === 'event' ? 'event' : 'task';
+  const title       = completedEntity.title || completedEntity.name || 'this item';
+
+  // ── Show the follow-up dialog ──
+  return new Promise(resolve => {
+    const existing = document.getElementById('fh-followup-dialog');
+    if (existing) existing.remove();
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'fh-followup-dialog';
+    backdrop.style.cssText = [
+      'position:fixed;inset:0;z-index:calc(var(--z-modal) + 60);',
+      'background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;',
+      'padding:16px;font-family:var(--font-body);',
+    ].join('');
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = [
+      'background:var(--color-bg);border:1px solid var(--color-border);',
+      'border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);',
+      'padding:24px;max-width:400px;width:100%;',
+    ].join('');
+
+    dialog.innerHTML = `
+      <div style="font-weight:var(--weight-bold);font-size:var(--text-base);margin-bottom:8px;">
+        ✅ ${_esc(entityLabel === 'event' ? 'Event' : 'Task')} completed!
+      </div>
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:16px;">
+        Would you like to create a follow-up ${entityLabel === 'event' ? 'task or event' : 'task or event'} connected to
+        <strong>"${_esc(title)}"</strong>?
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="fu-task" style="
+            flex:1;padding:9px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+            font-weight:var(--weight-semibold);cursor:pointer;
+            background:var(--color-accent);color:#fff;border:1px solid var(--color-accent);">
+            ✅ Follow-up Task
+          </button>
+          <button id="fu-event" style="
+            flex:1;padding:9px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+            font-weight:var(--weight-semibold);cursor:pointer;
+            background:#a855f7;color:#fff;border:1px solid #a855f7;">
+            📅 Follow-up Event
+          </button>
+        </div>
+        <button id="fu-skip" style="
+          padding:7px 14px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          cursor:pointer;background:none;color:var(--color-text-muted);border:1px solid var(--color-border);">
+          Not now
+        </button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:12px;font-size:var(--text-xs);color:var(--color-text-muted);cursor:pointer;">
+        <input type="checkbox" id="fu-disable" style="accent-color:var(--color-accent);" />
+        Don't ask again (change in Settings → Tasks)
+      </label>
+    `;
+
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    const _dismiss = async (choice) => {
+      backdrop.remove();
+      // Handle "don't ask again"
+      const disableEl = dialog.querySelector('#fu-disable');
+      if (disableEl?.checked) {
+        try {
+          const { setSetting } = await import('../core/db.js');
+          await setSetting('fh:followup_on_complete', false);
+        } catch {}
+      }
+      resolve(choice);
+    };
+
+    dialog.querySelector('#fu-task').addEventListener('click', () => _dismiss('task'));
+    dialog.querySelector('#fu-event').addEventListener('click', () => _dismiss('event'));
+    dialog.querySelector('#fu-skip').addEventListener('click', () => _dismiss(null));
+  }).then(async (choice) => {
+    if (!choice) return;
+
+    // Build pre-fill data from the completed entity
+    const prefill = {
+      context:  completedEntity.context || 'family',
+    };
+    if (completedEntity.project)         prefill.project         = completedEntity.project;
+    if (completedEntity.priority)        prefill.priority        = completedEntity.priority;
+    if (completedEntity.plannedDuration) prefill.plannedDuration = completedEntity.plannedDuration;
+    if (completedEntity.tags?.length)    prefill.tags            = [...completedEntity.tags];
+
+    // Create the follow-up entity in IDB, then connect it and open the form
+    try {
+      const { saveEntity, saveEdge } = await import('../core/db.js');
+      const { getAccount } = await import('../core/auth.js');
+      const account = getAccount();
+      const now = new Date().toISOString();
+
+      const followUpType = choice; // 'task' or 'event'
+      const newEntity = {
+        type:      followUpType,
+        title:     `Follow-up: ${completedEntity.title || 'Untitled'}`,
+        context:   prefill.context,
+        createdAt: now,
+        updatedAt: now,
+        ...(followUpType === 'task' ? {
+          status:          'Next Up',
+          priority:        prefill.priority || 'Medium',
+          plannedDuration: prefill.plannedDuration || '',
+          project:         prefill.project || null,
+          tags:            prefill.tags || [],
+        } : {
+          // Note: event's 'type' category field intentionally omitted to avoid
+          // overwriting the structural entity.type. User sets it in the edit form.
+          tags:     prefill.tags || [],
+        }),
+      };
+
+      const saved = await saveEntity(newEntity, account?.id);
+      if (!saved) return;
+
+      // Connect: completed → follow-up (relation: "followed by")
+      const _acct = account?.id || null;
+      await saveEdge({
+        fromId:   completedEntity.id,
+        toId:     saved.id,
+        relation: 'followed by',
+        metadata: { createdAt: now },
+      }, _acct).catch(() => {});
+
+      // Also connect: follow-up → completed (relation: "follows")
+      await saveEdge({
+        fromId:   saved.id,
+        toId:     completedEntity.id,
+        relation: 'follows',
+        metadata: { createdAt: now },
+      }, _acct).catch(() => {});
+
+      // Open the form for further editing — pre-fill from the follow-up entity already saved
+      // Use editEntity path so the form shows the full edit UI with connections, reminders, etc.
+      // Small delay to let the completion save settle and IDB emit to propagate
+      setTimeout(async () => {
+        // Open edit form for the just-created follow-up entity so user can refine it
+        await openEditForm(saved);
+      }, 300);
+
+    } catch (err) {
+      console.error('[entity-form] follow-up creation failed:', err);
+    }
+  });
+}
+
 async function _submitForm() {
   if (!_typeKey) return;
   if (_formIsSaving) return; // prevent double-submit
@@ -4850,38 +5078,62 @@ async function _submitForm() {
 
   if (!valid) { _formIsSaving = false; return; }
 
-  // ── [v6.2.0] Task period overlap check ───────────────────── //
-  if (_typeKey === 'task') {
-    const execDate     = _draft.executionDate;
-    const execTime     = _draft.executionTime || '06:00';
-    const durationMins = _parseDurationMins(_draft.plannedDuration);
+  // ── [v6.5.0] Time block overlap check (task + event) ────── //
+  {
+    let _overlapDate = null, _overlapTime = '00:00', _overlapDuration = 0;
+    let _dateFieldKey = 'executionDate', _timeFieldKey = 'executionTime';
 
-    if (execDate && durationMins > 0) {
-      const overlaps = await _findOverlappingTasks(execDate, execTime, durationMins, _editEntity?.id);
+    if (_typeKey === 'task') {
+      _overlapDate     = _draft.executionDate;
+      _overlapTime     = _draft.executionTime || '06:00';
+      _overlapDuration = _parseDurationMins(_draft.plannedDuration);
+    } else if (_typeKey === 'event') {
+      // Events: use 'date' field for start, compute duration from endDate or plannedDuration
+      _overlapDate     = _draft.date ? String(_draft.date).slice(0, 10) : null;
+      _overlapTime     = _draft.date && _draft.date.length > 10
+        ? String(_draft.date).slice(11, 16) : '00:00';
+      _dateFieldKey    = 'date';
+      _timeFieldKey    = 'date';
+      // Prefer computed end-start diff, fall back to plannedDuration field
+      if (_draft.endDate && _draft.date) {
+        const startMs = new Date(_draft.date).getTime();
+        const endMs   = new Date(_draft.endDate).getTime();
+        if (endMs > startMs) _overlapDuration = Math.round((endMs - startMs) / 60000);
+      }
+      if (!_overlapDuration) _overlapDuration = _parseDurationMins(_draft.plannedDuration);
+    }
+
+    if (_overlapDate && _overlapDuration > 0) {
+      const overlaps = await _findOverlappingTasks(_overlapDate, _overlapTime, _overlapDuration, _editEntity?.id);
       if (overlaps.length > 0) {
-        const suggested = _suggestNextSlot(overlaps, durationMins);
+        const suggested = _suggestNextSlot(overlaps, _overlapDuration);
         _formIsSaving = false;
-        // [v6.4.5] Pass currentDateStr so the pick-time input defaults to the right date
-        const result = await _showOverlapDialog(overlaps, durationMins, suggested, execDate);
+        const result = await _showOverlapDialog(overlaps, _overlapDuration, suggested, _overlapDate);
 
         if (result.choice === 'cancel') return;
 
-        if (result.choice === 'reschedule' && suggested) {
-          _draft.executionDate = suggested.dateStr;
-          _draft.executionTime = suggested.timeStr;
-          const execDateEl = _overlay?.querySelector('#ef-field-executionDate');
-          const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
-          if (execDateEl) execDateEl.value = suggested.dateStr;
-          if (execTimeEl) execTimeEl.value = suggested.timeStr;
-        }
+        const _applyDateTimeToForm = (dateStr, timeStr) => {
+          if (_typeKey === 'task') {
+            _draft.executionDate = dateStr;
+            _draft.executionTime = timeStr;
+            const dEl = _overlay?.querySelector('#ef-field-executionDate');
+            const tEl = _overlay?.querySelector('#ef-field-executionTime');
+            if (dEl) dEl.value = dateStr;
+            if (tEl) tEl.value = timeStr;
+          } else if (_typeKey === 'event') {
+            // Rebuild full ISO datetime for event's 'date' field
+            const dateISO = `${dateStr}T${timeStr}:00`;
+            _draft.date = dateISO;
+            const dEl = _overlay?.querySelector('#ef-field-date');
+            if (dEl) dEl.value = dateISO;
+          }
+        };
 
+        if (result.choice === 'reschedule' && suggested) {
+          _applyDateTimeToForm(suggested.dateStr, suggested.timeStr);
+        }
         if (result.choice === 'pick' && result.pickedDate && result.pickedTime) {
-          _draft.executionDate = result.pickedDate;
-          _draft.executionTime = result.pickedTime;
-          const execDateEl = _overlay?.querySelector('#ef-field-executionDate');
-          const execTimeEl = _overlay?.querySelector('#ef-field-executionTime');
-          if (execDateEl) execDateEl.value = result.pickedDate;
-          if (execTimeEl) execTimeEl.value = result.pickedTime;
+          _applyDateTimeToForm(result.pickedDate, result.pickedTime);
         }
         // 'parallel' → proceed with overlap acknowledged
         _formIsSaving = true;
@@ -5183,6 +5435,8 @@ async function _submitForm() {
     }
   } finally {
     _formIsSaving = false;
+    // [v6.5.0] Safety: ensure overlay is visible if overlap dialog was shown but not properly dismissed
+    if (_overlay && _overlay.style.visibility === 'hidden') _overlay.style.visibility = '';
   }
 }
 

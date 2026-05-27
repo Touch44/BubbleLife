@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.4.5'; // [v6.2.1] Bug audit: timer listener leaks x3, badge CSS, panel open UX, entity-panel plannedDuration pre-select, getSession ref // [v6.2.0] Tab pinning (per-account), floating timer panel, task period overlap checking, context banner fix, dashboard timer widget // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
+const APP_VERSION   = '6.5.0'; // [v6.2.1] Bug audit: timer listener leaks x3, badge CSS, panel open UX, entity-panel plannedDuration pre-select, getSession ref // [v6.2.0] Tab pinning (per-account), floating timer panel, task period overlap checking, context banner fix, dashboard timer widget // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -23,6 +23,7 @@ const SHELL_FILES = [
   './services/history.js', './services/command.js', './services/effects.js',
   './services/theme.js', './services/sync.js', './services/activity.js',
   './services/time-tracker.js',
+  './services/overlap-detector.js',
   './services/auto-reminder-rules.js', // [v5.2.7] Phase 3: auto-rules engine
   './views/reminder-analytics.js',     // [v5.2.7] Phase 3: reminder analytics view
   './components/entity-panel.js', './components/entity-form.js', './components/fab.js',

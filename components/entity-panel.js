@@ -3354,11 +3354,19 @@ async function _renderRelationsTab(container) {
     if (_entity.type === 'task') {
       const completeBtn = mkActionBtn(isDone ? 'Mark In Progress' : 'Mark Complete', isDone ? '↩' : '✓', 'color:var(--color-success-text,#15803d);border-color:var(--color-success-text,#15803d);');
       completeBtn.addEventListener('click', async () => {
+        const wasCompleting = !isDone;
         _entity.status = isDone ? 'In Progress' : 'Completed';
         _markDirty();
         await _save();
         _renderHeader();
         _renderActiveTab();
+        // [v6.5.0] Follow-up prompt on completion
+        if (wasCompleting) {
+          try {
+            const { _promptFollowUp } = await import('./entity-form.js');
+            await _promptFollowUp(_entity);
+          } catch {}
+        }
       });
       actRow.appendChild(completeBtn);
     }
