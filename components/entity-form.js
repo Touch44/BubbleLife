@@ -4573,13 +4573,13 @@ function _fieldKeyToRelLabel(key, fieldConfig) {
  * e.g. '30 min' → 30, '1.5 hours' → 90
  */
 function _parseDurationMins(label) {
-  if (!label) return 0;
+  if (!label) return 30; // [v6.5.2] 30 min default when no duration set
   const s = String(label).toLowerCase().trim();
   const minMatch = s.match(/^(\d+)\s*min/);
   if (minMatch) return parseInt(minMatch[1], 10);
   const hrMatch = s.match(/^([\d.]+)\s*hour/);
   if (hrMatch) return Math.round(parseFloat(hrMatch[1]) * 60);
-  return 0;
+  return 30; // [v6.5.2] fallback 30 min for unrecognised strings
 }
 
 /**

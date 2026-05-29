@@ -1712,118 +1712,162 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
  * to open a form for a new Task or Event pre-filled with the free slot's time.
  */
 function _insertFreeTimeGaps(itemList, items, dateStr) {
-  // Collect timed items with resolved startMs/endMs
-  const timed = [];
-  for (const item of items) {
-    let startMs = null, endMs = null;
-    const e = item.entity;
-    if (item.entityType === 'event' || item.entityType === 'appointment') {
-      if (e.date) {
-        startMs = new Date(e.date).getTime();
-        endMs   = e.endDate ? new Date(e.endDate).getTime() : startMs + 60 * 60 * 1000;
+  // ── Shared: resolve startMs + endMs for ANY timed agenda item ─────────────
+  // Default duration: 30 minutes (task or event with no duration set)
+  const DEFAULT_DUR_MS = 30 * 60 * 1000;
+
+  const _parseDurMs = (str) => {
+    if (!str) return DEFAULT_DUR_MS;
+    const m = String(str).match(/(\d+(?:\.\d+)?)\s*(hour|hr|h|min|m)/i);
+    if (!m) return DEFAULT_DUR_MS;
+    const num = parseFloat(m[1]);
+    return (/hour|hr|h/i.test(m[2]) ? Math.round(num * 60) : Math.round(num)) * 60 * 1000;
+  };
+
+  const _resolveBlock = (item) => {
+    const e    = item.entity;
+    const type = item.entityType;
+
+    if (type === 'event' || type === 'appointment') {
+      if (!e.date) return null;
+      const startMs = new Date(e.date).getTime();
+      if (isNaN(startMs)) return null;
+      let endMs;
+      if (e.endDate) {
+        endMs = new Date(e.endDate).getTime();
+        if (isNaN(endMs) || endMs <= startMs) endMs = startMs + DEFAULT_DUR_MS;
+      } else {
+        endMs = startMs + _parseDurMs(e.plannedDuration); // 30m default if no endDate
       }
-    } else if (item.entityType === 'task' || item.entityType === 'taskInstance') {
+      return { startMs, endMs };
+    }
+
+    if (type === 'task' || type === 'taskInstance') {
       const execTime = e.executionTime || e.dueTime || '';
       const execDate = e.executionDate || e.dueDate || '';
-      if (execDate && execTime && execTime !== '06:00') {
-        const [hh, mm] = execTime.split(':').map(Number);
-        const [yr, mo, dd] = execDate.split('-').map(Number);
-        startMs = new Date(yr, mo - 1, dd, hh, mm).getTime();
-        // Duration from plannedDuration field
-        const durStr = e.plannedDuration || '';
-        const durMatch = durStr.match(/(\d+(?:\.\d+)?)\s*(hour|hr|h|min|m)/i);
-        const durMins = durMatch
-          ? (/hour|hr|h/i.test(durMatch[2]) ? Math.round(parseFloat(durMatch[1]) * 60) : parseInt(durMatch[1]))
-          : 60; // default 1 hour
-        endMs = startMs + durMins * 60 * 1000;
-      }
+      if (!execDate || !execTime || execTime === '06:00') return null;
+      const [hh, mm]       = execTime.split(':').map(Number);
+      const [yr, mo, dd]   = execDate.split('-').map(Number);
+      const startMs        = new Date(yr, mo - 1, dd, hh, mm).getTime();
+      if (isNaN(startMs)) return null;
+      const endMs = startMs + _parseDurMs(e.plannedDuration); // 30m default if no duration
+      return { startMs, endMs };
     }
-    if (startMs !== null && endMs !== null) {
-      timed.push({ item, startMs, endMs });
-    }
+
+    return null;
+  };
+
+  // Collect timed items
+  const timed = [];
+  for (const item of items) {
+    const block = _resolveBlock(item);
+    if (block) timed.push({ item, ...block });
   }
-  if (timed.length < 2) return;
+  if (!timed.length) return; // nothing timed on this day
 
   // Sort by start time
   timed.sort((a, b) => a.startMs - b.startMs);
 
-  // Find the DOM rows for each timed item (they've already been appended to itemList)
-  const rows = Array.from(itemList.querySelectorAll('.cal-agenda-item'));
-  const rowMap = new Map(); // entity.id → DOM row
-  for (const row of rows) {
-    // Match by checking row text or data attribute — use index order matching timed array
-  }
+  // ── Day boundary bookends ─────────────────────────────────────────────────
+  // Use the date's midnight as start reference; day ends at midnight+24h
+  const [yr, mo, dd] = dateStr.split('-').map(Number);
+  const dayStartMs   = new Date(yr, mo - 1, dd, 0, 0, 0).getTime();
+  const dayEndMs     = dayStartMs + 24 * 60 * 60 * 1000;
 
-  // Build gaps between consecutive items
-  const gaps = [];
-  for (let i = 0; i < timed.length - 1; i++) {
-    const curr = timed[i];
-    const next = timed[i + 1];
-    const gapStartMs = curr.endMs;
-    const gapEndMs   = next.startMs;
-    const gapMins    = Math.round((gapEndMs - gapStartMs) / 60000);
-    if (gapMins < 5) continue; // skip tiny gaps < 5 minutes
-
-    const startAMPM = _hmToAMPM(`${String(new Date(gapStartMs).getHours()).padStart(2,'0')}:${String(new Date(gapStartMs).getMinutes()).padStart(2,'0')}`);
-    const endAMPM   = _hmToAMPM(`${String(new Date(gapEndMs).getHours()).padStart(2,'0')}:${String(new Date(gapEndMs).getMinutes()).padStart(2,'0')}`);
-    const durLabel  = gapMins >= 60
+  // ── Build full gap list: before first, between consecutive, after last ────
+  const _makeGapEntry = (gapStartMs, gapEndMs, afterIdx) => {
+    const gapMins = Math.round((gapEndMs - gapStartMs) / 60000);
+    if (gapMins < 5) return null;
+    const _ts = (ms) => {
+      const d = new Date(ms);
+      return _hmToAMPM(`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`);
+    };
+    const durLabel = gapMins >= 60
       ? `${Math.floor(gapMins / 60)}h${gapMins % 60 ? ' ' + (gapMins % 60) + 'm' : ''}`
       : `${gapMins}m`;
+    return { afterIdx, gapStartMs, gapEndMs, gapMins,
+             startAMPM: _ts(gapStartMs), endAMPM: _ts(gapEndMs),
+             durLabel, dateStr };
+  };
 
-    gaps.push({ afterIdx: i, gapStartMs, gapEndMs, gapMins, startAMPM, endAMPM, durLabel, dateStr });
+  const gaps = [];
+
+  // Gap BEFORE first item (from day start to first item start)
+  // Only show if the first item doesn't start at midnight
+  const firstStart = timed[0].startMs;
+  if (firstStart > dayStartMs + 5 * 60000) { // ignore if starts within 5m of midnight
+    // Anchor to a reasonable window start (earliest of 7 AM or 1h before first item)
+    const windowStart = Math.max(dayStartMs, Math.min(firstStart - 60 * 60 * 1000,
+                                                      new Date(yr, mo - 1, dd, 7, 0).getTime()));
+    const g = _makeGapEntry(windowStart, firstStart, -1); // afterIdx -1 = before first row
+    if (g) gaps.push(g);
+  }
+
+  // Gaps BETWEEN consecutive items
+  for (let i = 0; i < timed.length - 1; i++) {
+    const g = _makeGapEntry(timed[i].endMs, timed[i + 1].startMs, i);
+    if (g) gaps.push(g);
+  }
+
+  // Gap AFTER last item (from last item end to end of reasonable day window)
+  const lastEnd = timed[timed.length - 1].endMs;
+  // Show until midnight or 11 PM, whichever is earlier
+  const windowEnd = Math.min(dayEndMs, new Date(yr, mo - 1, dd, 23, 0).getTime());
+  if (lastEnd < windowEnd - 5 * 60000) {
+    const g = _makeGapEntry(lastEnd, windowEnd, timed.length - 1); // afterIdx = last item
+    if (g) gaps.push(g);
   }
 
   if (!gaps.length) return;
 
-  // Insert gap rows after the correct existing item rows
-  // Since rows are in order and timed items are sorted, use ordered insertion
-  // We re-query the itemList rows each time since we insert new nodes
-  for (let gi = gaps.length - 1; gi >= 0; gi--) {
-    const gap = gaps[gi];
-    const afterItemEl = itemList.querySelectorAll('.cal-agenda-item')[gap.afterIdx];
-    if (!afterItemEl) continue;
+  // ── Insert gap rows into DOM ───────────────────────────────────────────────
+  // Sort gaps in reverse DOM order so inserting doesn't shift later indices
+  gaps.sort((a, b) => b.afterIdx - a.afterIdx);
 
-    const gapRow = document.createElement('div');
-    gapRow.className = 'cal-free-gap';
-    gapRow.style.cssText = [
+  const _makeGapRow = (gap) => {
+    const row = document.createElement('div');
+    row.className = 'cal-free-gap';
+    row.style.cssText = [
       'display:flex;align-items:center;gap:8px;',
       'padding:3px 10px 3px 14px;',
       'font-size:0.7rem;color:var(--color-text-muted,#94a3b8);',
       'background:repeating-linear-gradient(90deg,transparent,transparent 4px,rgba(148,163,184,0.08) 4px,rgba(148,163,184,0.08) 8px);',
       'border-left:2px dashed var(--color-border,#e2e8f0);',
-      'cursor:pointer;transition:background 0.12s;',
-      'user-select:none;',
+      'cursor:pointer;transition:background 0.12s;user-select:none;',
     ].join('');
-    gapRow.title = `Free slot: ${gap.startAMPM} – ${gap.endAMPM} (${gap.durLabel}). Click to schedule here.`;
-
-    gapRow.innerHTML = `
+    row.title = `Free slot: ${gap.startAMPM} – ${gap.endAMPM} (${gap.durLabel}). Click to schedule here.`;
+    row.innerHTML = `
       <span style="opacity:0.6;">🕐</span>
       <span><strong style="color:var(--color-text,#334155);">${gap.startAMPM} – ${gap.endAMPM}</strong></span>
       <span style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px;padding:1px 6px;">${gap.durLabel} free</span>
       <span style="flex:1;"></span>
       <span style="font-size:0.65rem;opacity:0;transition:opacity 0.12s;" class="cal-gap-hint">+ Add task/event</span>
     `;
-
-    gapRow.addEventListener('mouseenter', () => {
-      gapRow.style.background = 'var(--color-surface)';
-      const hint = gapRow.querySelector('.cal-gap-hint');
-      if (hint) hint.style.opacity = '1';
+    row.addEventListener('mouseenter', () => {
+      row.style.background = 'var(--color-surface)';
+      const h = row.querySelector('.cal-gap-hint'); if (h) h.style.opacity = '1';
     });
-    gapRow.addEventListener('mouseleave', () => {
-      gapRow.style.background = '';
-      const hint = gapRow.querySelector('.cal-gap-hint');
-      if (hint) hint.style.opacity = '0';
+    row.addEventListener('mouseleave', () => {
+      row.style.background = '';
+      const h = row.querySelector('.cal-gap-hint'); if (h) h.style.opacity = '0';
     });
+    row.addEventListener('click', () => _showFreeSlotPopup(gap));
+    return row;
+  };
 
-    gapRow.addEventListener('click', () => _showFreeSlotPopup(gap));
-
-    afterItemEl.insertAdjacentElement('afterend', gapRow);
+  for (const gap of gaps) {
+    const agendaRows = itemList.querySelectorAll('.cal-agenda-item');
+    if (gap.afterIdx === -1) {
+      // Before first item
+      const firstRow = agendaRows[0];
+      if (firstRow) firstRow.insertAdjacentElement('beforebegin', _makeGapRow(gap));
+    } else {
+      const afterRow = agendaRows[gap.afterIdx];
+      if (afterRow) afterRow.insertAdjacentElement('afterend', _makeGapRow(gap));
+    }
   }
 }
 
-/**
- * [v6.5.1] Show a popup to add Task or Event in a free time slot.
- */
 function _showFreeSlotPopup(gap) {
   document.getElementById('fh-free-slot-popup')?.remove();
 

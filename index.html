@@ -870,7 +870,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '6.5.1'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '6.5.3'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
@@ -1212,7 +1212,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=5.9.7', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=6.5.3', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);

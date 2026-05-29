@@ -8,9 +8,9 @@ import { getEntitiesByType } from '../core/db.js';
 
 /** Parse plannedDuration string → minutes */
 export function parseDurationMins(str) {
-  if (!str) return 0;
+  if (!str) return 30; // [v6.5.2] default 30 min when no duration set
   const m = String(str).match(/(\d+(?:\.\d+)?)\s*(hour|hr|min|h|m)/i);
-  if (!m) return 0;
+  if (!m) return 30;
   const num = parseFloat(m[1]);
   return /hour|hr|h/i.test(m[2]) ? Math.round(num * 60) : Math.round(num);
 }

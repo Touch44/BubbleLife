@@ -2297,7 +2297,8 @@ function _renderHeatmap(container, tasks) {
     for (let d=0; d<DAYS; d++) {
       const date = new Date(today);
       date.setDate(date.getDate() - w*7 - (today.getDay()-d+7)%7);
-      const key = date.toISOString().slice(0,10);
+      // [v6.5.3] Use local date string to avoid UTC-shift bug in negative-offset timezones
+      const key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
       week.push({ key, count: countMap[key]||0, future: date > today });
     }
     cells.push(week);
