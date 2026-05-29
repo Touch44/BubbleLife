@@ -680,17 +680,24 @@ async function renderDashboard() {
     </div>
 
     <!-- Glance widgets -->
-    <div class="dash-section-label">Your Family</div>
     <div class="dash-grid" id="dash-grid">
 
       <!-- Widget: Active Timers (top — only shown when timers are running) -->
       <div class="dash-widget dash-widget-full" id="dash-widget-timers" style="display:none;">
-        <div class="dash-widget-title">⏱️ Active Timers</div>
+        <div class="dash-widget-title" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;"
+             id="dash-timers-header">
+          <span>⏱️ Active Timers</span>
+          <span id="dash-timers-count" style="
+            background:var(--color-accent);color:#fff;border-radius:10px;
+            font-size:0.65rem;font-weight:700;padding:1px 6px;line-height:1.4;"></span>
+          <span style="flex:1;"></span>
+          <span id="dash-timers-chevron" style="font-size:0.75rem;color:var(--color-text-muted);transition:transform 0.2s;">▾</span>
+        </div>
         <div id="dash-timers-list"></div>
       </div>
 
-      <!-- Widget: Family Members (full width) -->
-      <div class="dash-widget dash-widget-full" id="dash-widget-members">
+      <!-- Widget: Family Members — only shown in Family/All context -->
+      <div class="dash-widget dash-widget-full" id="dash-widget-members" style="display:none;">
         <div class="dash-widget-title">👥 Family Members</div>
         <div class="dash-avatar-strip" id="dash-avatar-strip">
           <div class="dash-shimmer dash-shimmer-line" style="width:100%;height:40px;border-radius:50px;"></div>
@@ -750,6 +757,8 @@ async function renderDashboard() {
     // TT-13 fix: timer row click also opens the task panel directly
     const _rowRefs = new Map(); // taskId → { badge, icon, subText }
 
+    // Collapsible state for timer widget
+    let _timersCollapsed = false;
     function _buildTimerWidget() {
       if (!timerWidget || !timerList) return;
       const sessions = _tt_sessionsSignal.value;
@@ -758,6 +767,12 @@ async function renderDashboard() {
       const relevant = [...active, ...alarmed];
       if (relevant.length === 0) { timerWidget.style.display = 'none'; _rowRefs.clear(); return; }
       timerWidget.style.display = '';
+      // Update live count badge
+      const countBadge = timerWidget.querySelector('#dash-timers-count');
+      const chevron = timerWidget.querySelector('#dash-timers-chevron');
+      if (countBadge) countBadge.textContent = relevant.length;
+      if (chevron) chevron.style.transform = _timersCollapsed ? 'rotate(-90deg)' : '';
+      timerList.style.display = _timersCollapsed ? 'none' : '';
       const relSet = new Set(relevant);
       for (const [tid] of _rowRefs) {
         if (!relSet.has(tid)) { timerList.querySelector('[data-ttask="' + tid + '"]')?.remove(); _rowRefs.delete(tid); }
@@ -813,6 +828,16 @@ async function renderDashboard() {
     }
 
     _buildTimerWidget();
+
+    // Wire collapse toggle on header click
+    const _timersHeader = timerWidget?.querySelector('#dash-timers-header');
+    if (_timersHeader) {
+      _timersHeader.addEventListener('click', () => {
+        _timersCollapsed = !_timersCollapsed;
+        _buildTimerWidget();
+      });
+    }
+
     // [v6.2.0 fix] Guard against listener accumulation — only register once per session
     if (!renderDashboard._timerListenersRegistered) {
       renderDashboard._timerListenersRegistered = true;
@@ -1192,6 +1217,15 @@ function _populateDocumentsCard(el, documents) {
 function _populateMembersWidget(el, persons) {
   const strip = el.querySelector('#dash-avatar-strip');
   if (!strip) return;
+
+  // [v6.5.1] Only show family members widget in Family or All context
+  const membersWidget = el.querySelector('#dash-widget-members');
+  if (membersWidget) {
+    const ctx = getActiveContext();
+    const show = !ctx || ctx === 'all' || ctx === 'family';
+    membersWidget.style.display = show ? '' : 'none';
+    if (!show) return;
+  }
 
   if (persons.length === 0) {
     strip.innerHTML = `<div class="dash-widget-empty">No family members yet.</div>`;

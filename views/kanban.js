@@ -2692,6 +2692,7 @@ async function renderKanban(params = {}) {
         <input id="kanban-task-search-input" type="text" placeholder="Filter tasks by title, status, project, tag…"
           style="width:100%;padding:7px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);font-size:var(--text-sm);outline:none;box-sizing:border-box;" />
       </div>
+      <div id="kanban-task-search-selected" style="display:none;padding:6px 10px;border-bottom:1px solid var(--color-border);background:var(--color-surface);"></div>
       <div id="kanban-task-search-results" style="padding:4px 0;"></div>
     `;
     document.body.appendChild(_searchDropEl);
@@ -2707,16 +2708,68 @@ async function renderKanban(params = {}) {
       const searchDrop = document.getElementById('kanban-task-search-drop');
       const searchInput = document.getElementById('kanban-task-search-input');
       const searchResults = document.getElementById('kanban-task-search-results');
+      const searchSelected = document.getElementById('kanban-task-search-selected');
       if (!searchBtn || !searchDrop || !searchInput || !searchResults) return;
 
       let _searchDebounce = null;
       let _searchOpen = false;
+      const _selectedTasks = new Map(); // taskId → task entity
+
+      const _renderSelected = () => {
+        if (!searchSelected) return;
+        if (_selectedTasks.size === 0) {
+          searchSelected.style.display = 'none';
+          return;
+        }
+        searchSelected.style.display = '';
+        searchSelected.innerHTML = '';
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;';
+        header.innerHTML = `<span style="font-size:0.7rem;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:0.05em;">${_selectedTasks.size} selected</span>`;
+        const clearAll = document.createElement('button');
+        clearAll.textContent = '✕ Clear all';
+        clearAll.style.cssText = 'font-size:0.7rem;background:none;border:none;cursor:pointer;color:var(--color-danger,#dc2626);padding:0;';
+        clearAll.addEventListener('click', () => {
+          _selectedTasks.clear();
+          _renderSelected();
+          _runSearch(searchInput.value);
+        });
+        header.appendChild(clearAll);
+        searchSelected.appendChild(header);
+        const chips = document.createElement('div');
+        chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
+        for (const [tid, task] of _selectedTasks) {
+          const chip = document.createElement('span');
+          chip.style.cssText = 'display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;background:var(--color-accent);color:#fff;font-size:0.7rem;max-width:180px;';
+          const label = document.createElement('span');
+          label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+          label.textContent = task.title || 'Untitled';
+          const rem = document.createElement('button');
+          rem.textContent = '×';
+          rem.style.cssText = 'background:none;border:none;cursor:pointer;color:#fff;font-size:0.9rem;padding:0;line-height:1;flex-shrink:0;';
+          rem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            _selectedTasks.delete(tid);
+            _renderSelected();
+            _runSearch(searchInput.value);
+          });
+          chip.append(label, rem);
+          chips.appendChild(chip);
+        }
+        searchSelected.appendChild(chips);
+      };
 
       const _positionDrop = () => {
-        const r = searchBtn.getBoundingClientRect();
-        searchDrop.style.left = r.left + 'px';
+        const r    = searchBtn.getBoundingClientRect();
+        const vpW  = window.innerWidth;
+        const dropW = Math.max(360, Math.min(520, vpW - 32)); // clamp to viewport
+        searchDrop.style.width    = dropW + 'px';
+        searchDrop.style.minWidth = '';
+        // Right-align against viewport edge if it would overflow
+        let left = r.right - dropW; // right-align to button right edge
+        if (left < 8) left = 8;     // don't go off left edge
+        searchDrop.style.left = left + 'px';
         searchDrop.style.top  = (r.bottom + 6) + 'px';
-        searchDrop.style.minWidth = Math.max(320, r.width) + 'px';
       };
 
       const _openSearch = () => {
@@ -2735,47 +2788,66 @@ async function renderKanban(params = {}) {
       const _renderResults = (tasks, query) => {
         searchResults.innerHTML = '';
         if (!tasks.length) {
-          searchResults.innerHTML = `<div style="padding:16px;text-align:center;color:var(--color-text-muted);font-size:var(--text-sm);">No tasks found</div>`;
+          searchResults.innerHTML = '<div style="padding:16px;text-align:center;color:var(--color-text-muted);font-size:var(--text-sm);">No tasks found</div>';
           return;
         }
         for (const t of tasks.slice(0, 40)) {
           const row = document.createElement('div');
-          row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);transition:background 0.1s;';
-          row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface)');
-          row.addEventListener('mouseleave', () => row.style.background = '');
+          const isSelected = _selectedTasks.has(t.id);
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);transition:background 0.1s;' + (isSelected ? 'background:var(--color-accent-bg,#eff6ff);' : '');
+          row.addEventListener('mouseenter', () => { if (!_selectedTasks.has(t.id)) row.style.background = 'var(--color-surface)'; });
+          row.addEventListener('mouseleave', () => { row.style.background = _selectedTasks.has(t.id) ? 'var(--color-accent-bg,#eff6ff)' : ''; });
 
           const isDone = t.status === 'Completed' || t.status === 'Done';
           const execDate = t.executionDate ? t.executionDate.slice(5) : (t.dueDate ? t.dueDate.slice(5) : '');
           const proj = _projectMap?.get(t.project)?.name || '';
 
-          // Highlight matching text
           const _hl = (str) => {
             if (!query) return _esc(str);
-            const idx = str.toLowerCase().indexOf(query.toLowerCase());
-            if (idx < 0) return _esc(str);
-            return _esc(str.slice(0, idx)) +
-              `<mark style="background:var(--color-accent);color:#fff;border-radius:2px;padding:0 1px;">${_esc(str.slice(idx, idx + query.length))}</mark>` +
-              _esc(str.slice(idx + query.length));
+            const idx2 = str.toLowerCase().indexOf(query.toLowerCase());
+            if (idx2 < 0) return _esc(str);
+            return _esc(str.slice(0, idx2)) +
+              '<mark style="background:var(--color-accent);color:#fff;border-radius:2px;padding:0 1px;">' +
+              _esc(str.slice(idx2, idx2 + query.length)) + '</mark>' +
+              _esc(str.slice(idx2 + query.length));
           };
 
-          row.innerHTML = `
-            <input type="checkbox" ${isDone ? 'checked' : ''} disabled
-              style="width:13px;height:13px;accent-color:var(--color-accent);flex-shrink:0;"/>
-            <span style="flex:1;font-size:var(--text-sm);${isDone ? 'text-decoration:line-through;color:var(--color-text-muted);' : ''}"
-              >${_hl(t.title || 'Untitled')}</span>
-            ${execDate ? `<span style="font-size:10px;color:var(--color-info,#0ea5e9);white-space:nowrap;">📅 ${execDate}</span>` : ''}
-            ${proj     ? `<span style="font-size:10px;color:var(--color-accent);white-space:nowrap;">📁 ${_esc(proj)}</span>` : ''}
-          `;
-          row.addEventListener('click', () => {
+          const cb = document.createElement('input');
+          cb.type = 'checkbox'; cb.checked = isSelected;
+          cb.style.cssText = 'width:13px;height:13px;accent-color:var(--color-accent);flex-shrink:0;cursor:pointer;';
+
+          const titleSpan = document.createElement('span');
+          titleSpan.style.cssText = 'flex:1;font-size:var(--text-sm);' + (isDone ? 'text-decoration:line-through;color:var(--color-text-muted);' : '');
+          titleSpan.innerHTML = _hl(t.title || 'Untitled');
+
+          const metaSpan = document.createElement('span');
+          metaSpan.style.cssText = 'display:flex;gap:4px;align-items:center;';
+          if (execDate) { const dc = document.createElement('span'); dc.style.cssText='font-size:10px;color:var(--color-info,#0ea5e9);white-space:nowrap;'; dc.textContent='📅 '+execDate; metaSpan.appendChild(dc); }
+          if (proj) { const pc = document.createElement('span'); pc.style.cssText='font-size:10px;color:var(--color-accent);white-space:nowrap;'; pc.textContent='📁 '+proj; metaSpan.appendChild(pc); }
+
+          row.append(cb, titleSpan, metaSpan);
+
+          const _toggle = (e) => {
+            e.stopPropagation();
+            if (_selectedTasks.has(t.id)) _selectedTasks.delete(t.id);
+            else _selectedTasks.set(t.id, t);
+            _renderSelected();
+            _runSearch(searchInput.value);
+            _scheduleKanbanRefresh();
+          };
+          row.addEventListener('click', (e) => {
+            if (e.target === cb) return;
+            if (e.ctrlKey || e.metaKey || e.shiftKey) { _toggle(e); return; }
             _closeSearch();
             emit(EVENTS.PANEL_OPENED, { entityType: t._isInstance ? 'taskInstance' : 'task', entityId: t.id });
           });
+          cb.addEventListener('change', _toggle);
           searchResults.appendChild(row);
         }
         if (tasks.length > 40) {
           const more = document.createElement('div');
           more.style.cssText = 'padding:8px 12px;font-size:var(--text-xs);color:var(--color-text-muted);text-align:center;';
-          more.textContent = `${tasks.length - 40} more — refine your search`;
+          more.textContent = (tasks.length - 40) + ' more — refine your search';
           searchResults.appendChild(more);
         }
       };

@@ -40,6 +40,7 @@ let _calTaskAssigneeEdgeMap = new Map();
 let _calReminderMap = new Map();
 // [v5.1.0] Filter toggle: show only entities with reminders
 let _calFilterReminderOnly = false;
+let _calTypeFilter = 'all'; // 'all' | 'tasks' | 'events'  [v6.5.1]
 
 const DONE_STATUSES = new Set(['done', 'Done', 'Completed', 'Skipped']); // NEW-03 [B48 fix: Skipped not overdue]
 
@@ -225,6 +226,16 @@ function _formatTime(isoStr) {
   const d = new Date(isoStr);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+/** [v6.5.1] Convert "HH:MM" 24h string → "h:MM AM/PM" */
+function _hmToAMPM(hm) {
+  if (!hm) return '';
+  const [hh, mm] = hm.slice(0, 5).split(':').map(Number);
+  if (isNaN(hh) || isNaN(mm)) return hm;
+  const suffix = hh >= 12 ? 'PM' : 'AM';
+  const h12    = hh % 12 || 12;
+  return `${h12}:${String(mm).padStart(2, '0')} ${suffix}`;
 }
 
 /**
@@ -490,6 +501,9 @@ function _buildDateMap(data, rangeStart, rangeEnd) {
       if (reg.filterFn && !reg.filterFn(entity)) continue;
       // [v5.1.0] Reminder-only filter toggle
       if (_calFilterReminderOnly && !_calReminderMap.has(entity.id)) continue;
+      // [v6.5.1] Type filter: tasks only / events only / all
+      if (_calTypeFilter === 'tasks' && typeKey !== 'task' && typeKey !== 'taskInstance') continue;
+      if (_calTypeFilter === 'events' && typeKey !== 'event' && typeKey !== 'appointment') continue;
 
       // For tasks: use executionDate (when the task will be done) as the calendar date,
       // falling back to dueDate. Synthesize a datetime ISO from the resolved date + time.
@@ -576,6 +590,7 @@ function _saveViewState() {
     sessionStorage.setItem(SS_CAL_MODE, _mode);
     sessionStorage.setItem(SS_CAL_ANCHOR, _toDateStr(_anchorDate));
     sessionStorage.setItem(SS_CAL_REM, _calFilterReminderOnly ? '1' : '0');
+    sessionStorage.setItem('fh_cal_type_filter', _calTypeFilter);
   } catch { /* ignore quota errors */ }
 }
 
@@ -593,6 +608,8 @@ function _restoreViewState() {
     // [v5.1.0] Restore reminder filter toggle state
     const savedRem = sessionStorage.getItem(SS_CAL_REM);
     if (savedRem !== null) _calFilterReminderOnly = savedRem === '1';
+    const savedTypeFilter = sessionStorage.getItem('fh_cal_type_filter');
+    if (savedTypeFilter && ['all','tasks','events'].includes(savedTypeFilter)) _calTypeFilter = savedTypeFilter;
   } catch { /* ignore */ }
 }
 
@@ -720,6 +737,36 @@ function _buildHeader(container) {
     renderCalendar({ _internal: true });
   });
   reminderFilterRow.appendChild(reminderFilterBtn);
+
+  // [v6.5.1] Type filter toggle: Tasks Only / Events Only / No Filter
+  const TYPE_STATES = [
+    { key: 'all',    label: '○ No Type Filter' },
+    { key: 'tasks',  label: '✅ Tasks Only' },
+    { key: 'events', label: '📅 Events Only' },
+  ];
+  const typeFilterBtn = document.createElement('button');
+  const _refreshTypeBtn = () => {
+    const state = TYPE_STATES.find(s => s.key === _calTypeFilter) || TYPE_STATES[0];
+    const isActive = _calTypeFilter !== 'all';
+    typeFilterBtn.style.cssText = [
+      'display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:14px;',
+      'font-size:0.75rem;cursor:pointer;transition:all 0.15s;',
+      isActive
+        ? 'background:var(--color-accent,#4f8ef7);color:#fff;border:1px solid var(--color-accent,#4f8ef7);'
+        : 'background:transparent;color:var(--color-text-muted,#94a3b8);border:1px solid var(--color-border,#e2e8f0);',
+    ].join('');
+    typeFilterBtn.textContent = state.label;
+  };
+  _refreshTypeBtn();
+  typeFilterBtn.addEventListener('click', () => {
+    const idx = TYPE_STATES.findIndex(s => s.key === _calTypeFilter);
+    _calTypeFilter = TYPE_STATES[(idx + 1) % TYPE_STATES.length].key;
+    _refreshTypeBtn();
+    _saveViewState();
+    renderCalendar({ _internal: true });
+  });
+  reminderFilterRow.appendChild(typeFilterBtn);
+
   header.appendChild(reminderFilterRow);
 
   container.appendChild(header);
@@ -1659,6 +1706,223 @@ function _placeWeekEvents(bodyEl, weekStart, dateMap, personMap = new Map()) {
 
 // ── DOM builders: Agenda View ─────────────────────────────── //
 
+/**
+ * [v6.5.1] Insert free-time gap rows between consecutive timed agenda items.
+ * Each gap shows: start_free – end_free with duration, and a click handler
+ * to open a form for a new Task or Event pre-filled with the free slot's time.
+ */
+function _insertFreeTimeGaps(itemList, items, dateStr) {
+  // Collect timed items with resolved startMs/endMs
+  const timed = [];
+  for (const item of items) {
+    let startMs = null, endMs = null;
+    const e = item.entity;
+    if (item.entityType === 'event' || item.entityType === 'appointment') {
+      if (e.date) {
+        startMs = new Date(e.date).getTime();
+        endMs   = e.endDate ? new Date(e.endDate).getTime() : startMs + 60 * 60 * 1000;
+      }
+    } else if (item.entityType === 'task' || item.entityType === 'taskInstance') {
+      const execTime = e.executionTime || e.dueTime || '';
+      const execDate = e.executionDate || e.dueDate || '';
+      if (execDate && execTime && execTime !== '06:00') {
+        const [hh, mm] = execTime.split(':').map(Number);
+        const [yr, mo, dd] = execDate.split('-').map(Number);
+        startMs = new Date(yr, mo - 1, dd, hh, mm).getTime();
+        // Duration from plannedDuration field
+        const durStr = e.plannedDuration || '';
+        const durMatch = durStr.match(/(\d+(?:\.\d+)?)\s*(hour|hr|h|min|m)/i);
+        const durMins = durMatch
+          ? (/hour|hr|h/i.test(durMatch[2]) ? Math.round(parseFloat(durMatch[1]) * 60) : parseInt(durMatch[1]))
+          : 60; // default 1 hour
+        endMs = startMs + durMins * 60 * 1000;
+      }
+    }
+    if (startMs !== null && endMs !== null) {
+      timed.push({ item, startMs, endMs });
+    }
+  }
+  if (timed.length < 2) return;
+
+  // Sort by start time
+  timed.sort((a, b) => a.startMs - b.startMs);
+
+  // Find the DOM rows for each timed item (they've already been appended to itemList)
+  const rows = Array.from(itemList.querySelectorAll('.cal-agenda-item'));
+  const rowMap = new Map(); // entity.id → DOM row
+  for (const row of rows) {
+    // Match by checking row text or data attribute — use index order matching timed array
+  }
+
+  // Build gaps between consecutive items
+  const gaps = [];
+  for (let i = 0; i < timed.length - 1; i++) {
+    const curr = timed[i];
+    const next = timed[i + 1];
+    const gapStartMs = curr.endMs;
+    const gapEndMs   = next.startMs;
+    const gapMins    = Math.round((gapEndMs - gapStartMs) / 60000);
+    if (gapMins < 5) continue; // skip tiny gaps < 5 minutes
+
+    const startAMPM = _hmToAMPM(`${String(new Date(gapStartMs).getHours()).padStart(2,'0')}:${String(new Date(gapStartMs).getMinutes()).padStart(2,'0')}`);
+    const endAMPM   = _hmToAMPM(`${String(new Date(gapEndMs).getHours()).padStart(2,'0')}:${String(new Date(gapEndMs).getMinutes()).padStart(2,'0')}`);
+    const durLabel  = gapMins >= 60
+      ? `${Math.floor(gapMins / 60)}h${gapMins % 60 ? ' ' + (gapMins % 60) + 'm' : ''}`
+      : `${gapMins}m`;
+
+    gaps.push({ afterIdx: i, gapStartMs, gapEndMs, gapMins, startAMPM, endAMPM, durLabel, dateStr });
+  }
+
+  if (!gaps.length) return;
+
+  // Insert gap rows after the correct existing item rows
+  // Since rows are in order and timed items are sorted, use ordered insertion
+  // We re-query the itemList rows each time since we insert new nodes
+  for (let gi = gaps.length - 1; gi >= 0; gi--) {
+    const gap = gaps[gi];
+    const afterItemEl = itemList.querySelectorAll('.cal-agenda-item')[gap.afterIdx];
+    if (!afterItemEl) continue;
+
+    const gapRow = document.createElement('div');
+    gapRow.className = 'cal-free-gap';
+    gapRow.style.cssText = [
+      'display:flex;align-items:center;gap:8px;',
+      'padding:3px 10px 3px 14px;',
+      'font-size:0.7rem;color:var(--color-text-muted,#94a3b8);',
+      'background:repeating-linear-gradient(90deg,transparent,transparent 4px,rgba(148,163,184,0.08) 4px,rgba(148,163,184,0.08) 8px);',
+      'border-left:2px dashed var(--color-border,#e2e8f0);',
+      'cursor:pointer;transition:background 0.12s;',
+      'user-select:none;',
+    ].join('');
+    gapRow.title = `Free slot: ${gap.startAMPM} – ${gap.endAMPM} (${gap.durLabel}). Click to schedule here.`;
+
+    gapRow.innerHTML = `
+      <span style="opacity:0.6;">🕐</span>
+      <span><strong style="color:var(--color-text,#334155);">${gap.startAMPM} – ${gap.endAMPM}</strong></span>
+      <span style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px;padding:1px 6px;">${gap.durLabel} free</span>
+      <span style="flex:1;"></span>
+      <span style="font-size:0.65rem;opacity:0;transition:opacity 0.12s;" class="cal-gap-hint">+ Add task/event</span>
+    `;
+
+    gapRow.addEventListener('mouseenter', () => {
+      gapRow.style.background = 'var(--color-surface)';
+      const hint = gapRow.querySelector('.cal-gap-hint');
+      if (hint) hint.style.opacity = '1';
+    });
+    gapRow.addEventListener('mouseleave', () => {
+      gapRow.style.background = '';
+      const hint = gapRow.querySelector('.cal-gap-hint');
+      if (hint) hint.style.opacity = '0';
+    });
+
+    gapRow.addEventListener('click', () => _showFreeSlotPopup(gap));
+
+    afterItemEl.insertAdjacentElement('afterend', gapRow);
+  }
+}
+
+/**
+ * [v6.5.1] Show a popup to add Task or Event in a free time slot.
+ */
+function _showFreeSlotPopup(gap) {
+  document.getElementById('fh-free-slot-popup')?.remove();
+
+  // Format the start time as HH:MM for form fields
+  const startDate = new Date(gap.gapStartMs);
+  const startHH   = String(startDate.getHours()).padStart(2, '0');
+  const startMM   = String(startDate.getMinutes()).padStart(2, '0');
+  const startTime = `${startHH}:${startMM}`;
+
+  // Duration → find closest plannedDuration option
+  const _minsToOption = (mins) => {
+    const opts = [
+      [15,'15 min'],[30,'30 min'],[45,'45 min'],
+      [60,'1 hour'],[90,'1.5 hours'],[120,'2 hours'],
+      [180,'3 hours'],[240,'4 hours'],[360,'6 hours'],[480,'8 hours'],
+    ];
+    let best = opts[opts.length - 1][1];
+    for (const [m, label] of opts) {
+      if (gap.gapMins <= m) { best = label; break; }
+    }
+    return best;
+  };
+  const durOption = _minsToOption(gap.gapMins);
+
+  const popup = document.createElement('div');
+  popup.id = 'fh-free-slot-popup';
+  popup.style.cssText = [
+    'position:fixed;inset:0;z-index:9000;',
+    'display:flex;align-items:center;justify-content:center;',
+    'background:rgba(0,0,0,0.35);padding:16px;',
+  ].join('');
+
+  popup.innerHTML = `
+    <div style="
+      background:var(--color-bg);border:1px solid var(--color-border);
+      border-radius:var(--radius-lg,12px);box-shadow:var(--shadow-xl);
+      padding:20px;max-width:320px;width:100%;font-family:var(--font-body);">
+      <div style="font-weight:700;font-size:var(--text-base);margin-bottom:4px;">📌 Free Slot</div>
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:16px;">
+        ${gap.startAMPM} – ${gap.endAMPM} · ${gap.durLabel} available
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button id="fsp-task" style="
+          flex:1;padding:10px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          font-weight:600;cursor:pointer;
+          background:var(--color-accent);color:#fff;border:1px solid var(--color-accent);">
+          ✅ Add Task
+        </button>
+        <button id="fsp-event" style="
+          flex:1;padding:10px;border-radius:var(--radius-md);font-size:var(--text-sm);
+          font-weight:600;cursor:pointer;
+          background:#a855f7;color:#fff;border:1px solid #a855f7;">
+          📅 Add Event
+        </button>
+      </div>
+      <button id="fsp-cancel" style="
+        display:block;width:100%;margin-top:10px;padding:7px;
+        border-radius:var(--radius-md);font-size:var(--text-sm);
+        cursor:pointer;background:none;color:var(--color-text-muted);border:1px solid var(--color-border);">
+        Cancel
+      </button>
+    </div>
+  `;
+
+  document.body.appendChild(popup);
+
+  const _close = () => popup.remove();
+  popup.addEventListener('click', (e) => { if (e.target === popup) _close(); });
+  popup.querySelector('#fsp-cancel').addEventListener('click', _close);
+
+  popup.querySelector('#fsp-task').addEventListener('click', async () => {
+    _close();
+    try {
+      const { openForm } = await import('../components/entity-form.js');
+      openForm('task', {
+        executionDate:   gap.dateStr,
+        executionTime:   startTime,
+        plannedDuration: durOption,
+      });
+    } catch (err) { console.error('[calendar] free slot task form failed:', err); }
+  });
+
+  popup.querySelector('#fsp-event').addEventListener('click', async () => {
+    _close();
+    try {
+      const { openForm } = await import('../components/entity-form.js');
+      // For events, date field is ISO datetime; endDate = gapEndMs
+      const endDate = new Date(gap.gapEndMs);
+      const endHH   = String(endDate.getHours()).padStart(2, '0');
+      const endMM   = String(endDate.getMinutes()).padStart(2, '0');
+      openForm('event', {
+        date:            `${gap.dateStr}T${startTime}:00`,
+        endDate:         `${gap.dateStr}T${endHH}:${endMM}:00`,
+        plannedDuration: durOption,
+      });
+    } catch (err) { console.error('[calendar] free slot event form failed:', err); }
+  });
+}
+
 function _buildAgendaView(container, dateMap, personMap = new Map()) {
   const agenda = document.createElement('div');
   agenda.className = 'cal-agenda';
@@ -1733,7 +1997,7 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
         const execDate = _isoToLocalDate(item.entity.executionDate) || _isoToLocalDate(item.entity.periodStart);
         const dueDate  = _isoToLocalDate(item.entity.dueDate);
         if (execTime && execTime !== '06:00') {
-          timeCol.textContent = execTime.slice(0, 5);
+          timeCol.textContent = _hmToAMPM(execTime);
         } else if (item._dateTimeISO) {
           const t = _formatTime(item._dateTimeISO);
           timeCol.textContent = t || 'Planned';
@@ -1823,6 +2087,9 @@ function _buildAgendaView(container, dateMap, personMap = new Map()) {
 
       itemList.appendChild(row);
     }
+
+    // [v6.5.1] Insert free-time gap rows between consecutive timed items
+    _insertFreeTimeGaps(itemList, items, ds);
 
     group.appendChild(itemList);
 
