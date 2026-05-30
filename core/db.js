@@ -63,12 +63,20 @@ async function _loadIdb() {
 /** Blueprint §1.1 */
 export const DB_NAME    = 'familyhub_v2';
 /** Blueprint §14.3 — increment ONLY on schema changes */
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORES = Object.freeze({
   ENTITIES: 'entities',
   EDGES:    'edges',
   SETTINGS: 'settings',
+});
+
+
+export const KLRE_STORES = Object.freeze({
+  INDEX:       'klre_index',
+  SUGGESTIONS: 'klre_suggestions',
+  ACCESS_LOG:  'klre_access_log',
+  DISMISSED:   'klre_dismissed',
 });
 
 // ── DB instance ──────────────────────────────────────────── //
@@ -107,6 +115,34 @@ function _upgrade(db, oldVersion, newVersion, transaction) {
   // ── settings ──────────────────────────────────────────────
   if (!db.objectStoreNames.contains(STORES.SETTINGS)) {
     db.createObjectStore(STORES.SETTINGS, { keyPath: 'key' });
+  }
+
+  // ── KLRE stores (v2) ──────────────────────────────────────
+  if (oldVersion < 2) {
+    // klre_index: TF-IDF index entries per entity
+    if (!db.objectStoreNames.contains('klre_index')) {
+      const ki = db.createObjectStore('klre_index', { keyPath: 'entityId' });
+      ki.createIndex('entityType', 'entityType', { unique: false });
+      ki.createIndex('updatedAt',  'updatedAt',  { unique: false });
+    }
+    // klre_suggestions: cached suggestion list per focal entity
+    if (!db.objectStoreNames.contains('klre_suggestions')) {
+      const ks = db.createObjectStore('klre_suggestions', { keyPath: 'entityId' });
+      ks.createIndex('updatedAt', 'updatedAt', { unique: false });
+    }
+    // klre_access_log: co-access tracking
+    if (!db.objectStoreNames.contains('klre_access_log')) {
+      const ka = db.createObjectStore('klre_access_log', { keyPath: 'id', autoIncrement: true });
+      ka.createIndex('entityId',  'entityId',  { unique: false });
+      ka.createIndex('timestamp', 'timestamp', { unique: false });
+      ka.createIndex('sessionId', 'sessionId', { unique: false });
+    }
+    // klre_dismissed: compound key of [fromId, toId]
+    if (!db.objectStoreNames.contains('klre_dismissed')) {
+      const kd = db.createObjectStore('klre_dismissed', { keyPath: ['fromId', 'toId'] });
+      kd.createIndex('fromId', 'fromId', { unique: false });
+      kd.createIndex('toId',   'toId',   { unique: false });
+    }
   }
 }
 
@@ -1054,6 +1090,105 @@ function _idbReq(request) {
     request.onsuccess = () => resolve(request.result);
     request.onerror   = () => reject(request.error);
   });
+}
+
+
+// ── KLRE helpers ──────────────────────────────────────────── //
+// P1-1: 8 helper functions for the KLRE stores
+
+/** Get the KLRE index entry for an entity, or null. */
+export async function getKlreIndex(entityId) {
+  try {
+    const db = await _getDB();
+    return (await db.get('klre_index', entityId)) ?? null;
+  } catch (err) {
+    console.warn('[db] getKlreIndex failed:', err);
+    return null;
+  }
+}
+
+/** Upsert a KLRE index entry. */
+export async function saveKlreIndex(entry) {
+  try {
+    const db = await _getDB();
+    await db.put('klre_index', entry);
+  } catch (err) {
+    console.warn('[db] saveKlreIndex failed:', err);
+  }
+}
+
+/** Get the cached suggestion list for an entity, or null. */
+export async function getKlreSuggestions(entityId) {
+  try {
+    const db = await _getDB();
+    return (await db.get('klre_suggestions', entityId)) ?? null;
+  } catch (err) {
+    console.warn('[db] getKlreSuggestions failed:', err);
+    return null;
+  }
+}
+
+/** Upsert the cached suggestion list for an entity. */
+export async function saveKlreSuggestions(entry) {
+  try {
+    const db = await _getDB();
+    await db.put('klre_suggestions', entry);
+  } catch (err) {
+    console.warn('[db] saveKlreSuggestions failed:', err);
+  }
+}
+
+/**
+ * Log an entity access event for co-access scoring.
+ * Timestamp is auto-stamped — callers do not pass it.
+ */
+export async function logKlreAccess(entityId, sessionId) {
+  try {
+    const db = await _getDB();
+    await db.add('klre_access_log', {
+      entityId,
+      sessionId,
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    console.warn('[db] logKlreAccess failed:', err);
+  }
+}
+
+/** Check whether a (fromId, toId) pair has been dismissed. */
+export async function isDismissed(fromId, toId) {
+  try {
+    const db = await _getDB();
+    const rec = await db.get('klre_dismissed', [fromId, toId]);
+    return rec !== undefined;
+  } catch (err) {
+    console.warn('[db] isDismissed failed:', err);
+    return false;
+  }
+}
+
+/** Mark a (fromId, toId) suggestion pair as dismissed. */
+export async function setDismissed(fromId, toId) {
+  try {
+    const db = await _getDB();
+    await db.put('klre_dismissed', {
+      fromId,
+      toId,
+      dismissedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('[db] setDismissed failed:', err);
+  }
+}
+
+/** Remove a dismissed pair — allows re-showing a previously dismissed suggestion. */
+export async function clearDismissed(fromId, toId) {
+  try {
+    const db = await _getDB();
+    await db.delete('klre_dismissed', [fromId, toId]);
+  } catch (err) {
+    console.warn('[db] clearDismissed failed:', err);
+  }
 }
 
 // ── Service descriptor for serviceRegistry (P-06) ─────────── //

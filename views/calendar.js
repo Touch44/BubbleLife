@@ -667,6 +667,13 @@ function _buildHeader(container) {
     _anchorDate = _todayLocal();
     _saveViewState();
     renderCalendar({ _internal: true });
+    // [v6.5.5] After render, scroll agenda to the today section
+    requestAnimationFrame(() => {
+      const todayHeader = document.querySelector('.cal-agenda-date.today');
+      if (todayHeader) {
+        todayHeader.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   });
 
   titleRow.append(navLeft, title, navRight, todayBtn);
@@ -1831,8 +1838,8 @@ function _insertFreeTimeGaps(itemList, items, dateStr) {
       'display:flex;align-items:center;gap:8px;',
       'padding:3px 10px 3px 14px;',
       'font-size:0.7rem;color:var(--color-text-muted,#94a3b8);',
-      'background:repeating-linear-gradient(90deg,transparent,transparent 4px,rgba(148,163,184,0.08) 4px,rgba(148,163,184,0.08) 8px);',
-      'border-left:2px dashed var(--color-border,#e2e8f0);',
+      'background:rgba(254,249,195,0.55);',   // [v6.5.5] faded light yellow free-time
+      'border-left:2px dashed #e2c94e;',
       'cursor:pointer;transition:background 0.12s;user-select:none;',
     ].join('');
     row.title = `Free slot: ${gap.startAMPM} – ${gap.endAMPM} (${gap.durLabel}). Click to schedule here.`;
@@ -1844,11 +1851,11 @@ function _insertFreeTimeGaps(itemList, items, dateStr) {
       <span style="font-size:0.65rem;opacity:0;transition:opacity 0.12s;" class="cal-gap-hint">+ Add task/event</span>
     `;
     row.addEventListener('mouseenter', () => {
-      row.style.background = 'var(--color-surface)';
+      row.style.background = 'rgba(254,240,138,0.75)'; // deeper yellow on hover
       const h = row.querySelector('.cal-gap-hint'); if (h) h.style.opacity = '1';
     });
     row.addEventListener('mouseleave', () => {
-      row.style.background = '';
+      row.style.background = 'rgba(254,249,195,0.55)'; // back to faded yellow
       const h = row.querySelector('.cal-gap-hint'); if (h) h.style.opacity = '0';
     });
     row.addEventListener('click', () => _showFreeSlotPopup(gap));
@@ -1878,15 +1885,20 @@ function _showFreeSlotPopup(gap) {
   const startTime = `${startHH}:${startMM}`;
 
   // Duration → find closest plannedDuration option
+  // [v6.5.4] Cap default duration at 1 hour when gap is larger than 1 hour.
+  // If gap < 1 hour, use the closest option that fits within the available time.
   const _minsToOption = (mins) => {
     const opts = [
       [15,'15 min'],[30,'30 min'],[45,'45 min'],
       [60,'1 hour'],[90,'1.5 hours'],[120,'2 hours'],
       [180,'3 hours'],[240,'4 hours'],[360,'6 hours'],[480,'8 hours'],
     ];
-    let best = opts[opts.length - 1][1];
+    // If gap > 60 mins, default to exactly 1 hour (not the full gap)
+    if (mins > 60) return '1 hour';
+    // Otherwise pick the closest option that fits within the gap
+    let best = opts[0][1]; // smallest option as fallback
     for (const [m, label] of opts) {
-      if (gap.gapMins <= m) { best = label; break; }
+      if (m <= mins) best = label; // largest option that fits
     }
     return best;
   };

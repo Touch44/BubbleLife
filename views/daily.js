@@ -33,6 +33,8 @@ import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                            from '../core/toast.js';
 // [F3] Focus Mode integration
 import { getFocusProjectId, getSequentialTaskState } from './projects.js'; // [v5.9.5] Sequential mode
+import { getDailyContext }  from '../services/klre-resurfacing.js'; // [KLRE v6.6.0]
+import { openPanel }        from '../components/entity-panel.js';   // [KLRE v6.6.0]
 
 // ── Constants ─────────────────────────────────────────────── //
 
@@ -2706,6 +2708,120 @@ function _injectStyles() {
  * Also called internally when navigating prev/next day or clicking the week strip.
  * @param {object} [params={}]  - router params; pass { date: 'YYYY-MM-DD' } to jump to a date
  */
+// ── KLRE Context Panel ──────────────────────────────────────── //
+
+/**
+ * Inject KLRE context styles once.
+ * @private
+ */
+function _injectKlreContextStyles() {
+  if (document.getElementById('klre-daily-styles')) return;
+  const s = document.createElement('style');
+  s.id = 'klre-daily-styles';
+  s.textContent = `
+    .klre-daily-context{margin-bottom:16px;border:1px solid var(--color-border);
+      border-radius:10px;overflow:hidden}
+    .klre-daily-ctx-header{display:flex;align-items:center;justify-content:space-between;
+      padding:10px 14px;background:var(--color-bg-2);cursor:pointer;user-select:none}
+    .klre-daily-ctx-header.open{border-bottom:1px solid var(--color-border)}
+    .klre-daily-ctx-title{font-size:12px;font-weight:700;text-transform:uppercase;
+      letter-spacing:.07em;color:var(--color-text-muted);display:flex;align-items:center;gap:6px}
+    .klre-daily-ctx-body{display:none}
+    .klre-daily-ctx-body.open{display:block}
+    .klre-daily-ctx-row{display:flex;align-items:center;gap:10px;padding:9px 14px;
+      border-bottom:1px solid var(--color-border);cursor:pointer;transition:background .12s}
+    .klre-daily-ctx-row:last-child{border-bottom:none}
+    .klre-daily-ctx-row:hover{background:var(--color-bg-3)}
+    .klre-daily-ctx-type{font-size:10px;font-weight:700;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--color-text-muted);width:70px;flex-shrink:0}
+    .klre-daily-ctx-title-text{font-size:13px;color:var(--color-text);flex:1;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .klre-daily-ctx-reason{font-size:11px;color:var(--color-text-muted);flex-shrink:0}
+  `;
+  document.head.appendChild(s);
+}
+
+/**
+ * Render the KLRE "Context for today" collapsible panel.
+ * Async — self-renders on completion, callers do not await.
+ * @param {HTMLElement} containerEl
+ * @param {string} dateStr - 'YYYY-MM-DD' in LOCAL time
+ */
+async function _renderKlreContext(containerEl, dateStr) {
+  // Check if daily context panel is enabled (default: true)
+  const enabled = await getSetting('klre_daily_enabled');
+  if (enabled === false) return;
+
+  let items;
+  try {
+    items = await getDailyContext(dateStr);
+  } catch (e) {
+    console.warn('[KLRE] getDailyContext failed:', e);
+    return;
+  }
+
+  if (!items || !items.length) return; // no content — render nothing
+
+  _injectKlreContextStyles();
+
+  const isOpen = localStorage.getItem('klre_daily_ctx_open') === 'true';
+
+  const panel = document.createElement('div');
+  panel.className = 'klre-daily-context';
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'klre-daily-ctx-header' + (isOpen ? ' open' : '');
+  header.innerHTML = `
+    <span class="klre-daily-ctx-title">
+      ✦ Context for today
+      <span style="background:var(--color-bg-3);border:1px solid var(--color-border);
+        border-radius:100px;font-size:10px;padding:1px 6px;">${items.length}</span>
+    </span>
+    <span style="font-size:11px;color:var(--color-text-muted)">${isOpen ? '▾' : '▸'}</span>
+  `;
+
+  // Body
+  const body = document.createElement('div');
+  body.className = 'klre-daily-ctx-body' + (isOpen ? ' open' : '');
+
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'klre-daily-ctx-row';
+
+    const typeEl = document.createElement('div');
+    typeEl.className = 'klre-daily-ctx-type';
+    typeEl.textContent = String(item.entityType || '');
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'klre-daily-ctx-title-text';
+    titleEl.textContent = item.title || '(untitled)';
+
+    const reasonEl = document.createElement('div');
+    reasonEl.className = 'klre-daily-ctx-reason';
+    reasonEl.textContent = item.reason || '';
+
+    row.appendChild(typeEl);
+    row.appendChild(titleEl);
+    row.appendChild(reasonEl);
+    row.addEventListener('click', () => openPanel(item.entityId));
+    body.appendChild(row);
+  }
+
+  // Toggle handler
+  header.addEventListener('click', () => {
+    const nowOpen = body.classList.contains('open');
+    body.classList.toggle('open', !nowOpen);
+    header.classList.toggle('open', !nowOpen);
+    header.querySelector('span:last-child').textContent = nowOpen ? '▸' : '▾';
+    localStorage.setItem('klre_daily_ctx_open', String(!nowOpen));
+  });
+
+  panel.appendChild(header);
+  panel.appendChild(body);
+  containerEl.appendChild(panel);
+}
+
 async function renderDaily(params = {}) {
   // _internal: true  → called by prev/next/strip — keep _currentDate as-is
   // params.date      → deep-link to a specific date
@@ -2777,6 +2893,13 @@ async function renderDaily(params = {}) {
     viewEl.appendChild(sections);
 
     // ── Section 1: Tasks (always first) ────────────────────
+    // [KLRE v6.6.0] Inject context panel above tasks
+    const _klreCtxEl = document.createElement('div');
+    sections.appendChild(_klreCtxEl);
+    // Local date arithmetic — never toISOString()
+    const _klreDateStr = dateStr; // dateStr is already computed as local YYYY-MM-DD
+    _renderKlreContext(_klreCtxEl, _klreDateStr); // async — fire and forget
+
     await _renderTasks(sections, dateStr, tasks, personMap, projectMap, taskProjectEdgeMap, taskAssigneeEdgeMap, sequentialProjectMap);
     sectionRefs.tasksBody = sections.querySelector('#daily-section-body-tasks');
 

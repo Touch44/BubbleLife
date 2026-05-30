@@ -771,6 +771,7 @@
   import { historyServiceDescriptor }     from './services/history.js';      // P-10
   import { commandServiceDescriptor }     from './services/command.js';      // P-11
   import { initActivityService, seedActivityFeed } from './services/activity.js';
+  import { initKLRE }                from './services/klre-engine.js'; // [KLRE v6.6.0]
   import { runWeeklyProjectDigest }               from './views/projects.js'; // [F4] Weekly Project Digest
   import { initTimeTracker }              from './services/time-tracker.js'; // [MAJOR] time tracking
   // [v5.3.1] Reminder system
@@ -870,7 +871,7 @@
       // Initialize window.FH early so entity-panel can call _pushUndoDelete
       // (the full FH object is completed later at boot sequence end)
       window.FH = window.FH || {};
-      window.FH.version = '6.5.3'; // [N51 fix] exposed for debugging and service worker checks
+      window.FH.version = '6.6.2'; // [N51 fix] exposed for debugging and service worker checks
 
       window.FH._pushUndoDelete = ({ snapshot, entityLabel, entityTitle }) => {
         const entry = { snapshot, entityLabel, entityTitle, ts: Date.now() };
@@ -1016,6 +1017,7 @@
       seedActivityFeed();    // [minor] backfill activity cards from existing entities
       initTimeTracker();     // [MAJOR] time tracking service — restores active sessions
       initTimerPanel();      // [v6.2.0] floating timer panel
+      initKLRE().catch(e => console.warn('[boot] KLRE init failed:', e)); // [KLRE v6.6.0] non-blocking
       // Wire topbar timer button
       // Timer panel opened via systray timer item (no separate topbar button — v6.3.0)
       initReminderService(); // [v5.3.1] reminder scheduler + SW sync
@@ -1212,7 +1214,7 @@
         try {
           // updateViaCache:'none' forces browser to always revalidate sw.js,
           // bypassing both browser HTTP cache and GitHub Pages CDN cache.
-          const reg = await navigator.serviceWorker.register('./sw.js?v=6.5.3', {
+          const reg = await navigator.serviceWorker.register('./sw.js?v=6.5.5', {
             updateViaCache: 'none',
           });
           console.log('[FH] Service worker registered:', reg.scope);

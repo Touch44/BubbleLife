@@ -28,6 +28,7 @@
  */
 
 import { registerView, navigate, VIEW_KEYS } from '../core/router.js';
+import { renderKnowledgePulse } from '../components/knowledge-pulse.js'; // [KLRE v6.6.0]
 import { getEntitiesByType, saveEntity,
               getEdgesFrom, getEntity }             from '../core/db.js';
 import { on, emit, EVENTS }                   from '../core/events.js';
@@ -682,6 +683,13 @@ async function renderDashboard() {
     <!-- Glance widgets -->
     <div class="dash-grid" id="dash-grid">
 
+      <!-- Widget: Knowledge Pulse [KLRE v6.6.0] -->
+      <div class="dash-widget dash-widget-full" id="dash-widget-klre-pulse">
+        <div class="dash-widget-title">✦ Knowledge Pulse</div>
+        <div class="dash-card-sub" id="dash-klre-pulse-date" style="margin-bottom:8px;"></div>
+        <div id="dash-klre-pulse-list"></div>
+      </div>
+
       <!-- Widget: Active Timers (top — only shown when timers are running) -->
       <div class="dash-widget dash-widget-full" id="dash-widget-timers" style="display:none;">
         <div class="dash-widget-title" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;"
@@ -947,8 +955,38 @@ async function _loadAndPopulate(el) {
     _populateNotesWidget(el, data.notes);
     _populateTimersWidget(el); // [v6.2.0] active timers widget
 
+    // [KLRE v6.6.0] Knowledge Pulse widget — async, non-blocking
+    _populateKlrePulseWidget(el);
+
   } catch (err) {
     console.error('[dashboard] Data load failed:', err);
+  }
+}
+
+// ── KLRE Pulse populator ─────────────────────────────────────────────────────
+
+async function _populateKlrePulseWidget(el) {
+  const widget = el.querySelector('#dash-widget-klre-pulse');
+  if (!widget) return;
+
+  // Set today's date subtitle using LOCAL arithmetic (never toISOString)
+  const dateEl = el.querySelector('#dash-klre-pulse-date');
+  if (dateEl) {
+    dateEl.textContent = new Date().toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+    });
+  }
+
+  const container = el.querySelector('#dash-klre-pulse-list');
+  if (!container) return;
+
+  // renderKnowledgePulse checks klre_pulse_enabled internally
+  // If disabled, hides the widget container content
+  await renderKnowledgePulse(container);
+
+  // Hide the entire widget if pulse is disabled or empty
+  if (!container.children.length || container.querySelector('.klre-pulse-empty')) {
+    // Keep widget visible but with empty state text from renderKnowledgePulse
   }
 }
 

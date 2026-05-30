@@ -29,6 +29,7 @@ import { initGraph, destroyGraph, setFocusId, refreshGraph, setActiveTypes, getA
 import { navigate, VIEW_KEYS } from '../core/router.js';
 import { mountActivityStream, recordCreated } from './activity-stream.js';
 import { getSequentialTaskState } from '../views/projects.js'; // [v5.9.0] Sequential mode
+import { initRelatedPanel, renderRelatedPanel } from './related-panel.js'; // [KLRE v6.6.0]
 
 // 3P-L-03: module-scope constant for footer type exclusion
 const _NO_REMINDER_TYPES = new Set(['reminder','reminderLog','post','comment','activity','message','conversation','dailyReview','tag']);
@@ -609,6 +610,7 @@ function _getCorrectDatesForEntity(entity) {
       break;
   }
   return dates;
+  initRelatedPanel(); // [KLRE] wire related panel listeners
 }
 
 // ════════════════════════════════════════════════════════════
@@ -721,6 +723,14 @@ export async function openPanel(entityId, entityTypeHint) {
     _renderHeader();
     _renderActiveTab();
     _mountActivityStream();  // P-28: mount activity stream after content
+
+    // [KLRE v6.6.0] Inject related panel — must be after all awaits
+    // myLoadId was captured before any await at the top of this function
+    {
+      const klreEl = document.createElement('div');
+      _panelBody.appendChild(klreEl);
+      renderRelatedPanel(klreEl, myLoadId); // async — self-renders, no await needed
+    }
 
     // ── Modal mode: center panel for content-heavy entity types ──────────
     // Professional UX: side-panel for quick-glance types (tasks, events)

@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.5.3'; // [v6.2.1] Bug audit: timer listener leaks x3, badge CSS, panel open UX, entity-panel plannedDuration pre-select, getSession ref // [v6.2.0] Tab pinning (per-account), floating timer panel, task period overlap checking, context banner fix, dashboard timer widget // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
+const APP_VERSION   = '6.6.2'; // [v6.2.1] Bug audit: timer listener leaks x3, badge CSS, panel open UX, entity-panel plannedDuration pre-select, getSession ref // [v6.2.0] Tab pinning (per-account), floating timer panel, task period overlap checking, context banner fix, dashboard timer widget // [v6.1.1] Text cutoff fixes + auto-deadline + complete project flow + smart duplication (4-tab modal, velocity chart, heatmap, leaderboard, badges)
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -55,6 +55,13 @@ const SHELL_FILES = [
   './assets/fonts/PlusJakartaSans-700.woff2',
   // [v6.0.0] Vendored idb library (no jsdelivr CDN dependency)
   './core/vendor/idb.js',
+  // [KLRE v6.6.0] Knowledge Linking & Retrieval Engine files
+  './services/klre-signals.js',
+  './services/klre-index.js',
+  './services/klre-engine.js',
+  './services/klre-resurfacing.js',   // Phase 2 — added now (SW skips missing via .catch)
+  './components/related-panel.js',
+  './components/knowledge-pulse.js',  // Phase 2 — added now (SW skips missing via .catch)
 ];
 
 const NETWORK_ONLY = [

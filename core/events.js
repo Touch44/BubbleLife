@@ -168,4 +168,11 @@ export const EVENTS = Object.freeze({
   RECURRENCE_INSTANCE_SKIPPED:    'recurrence:instanceSkipped',
   RECURRENCE_SERIES_STOPPED:      'recurrence:seriesStopped',
   RECURRENCE_STREAK_UPDATED:      'recurrence:streakUpdated',
+
+  // ── KLRE (Knowledge Linking & Retrieval Engine) [v6.6.0] ──────────────
+  KLRE_INDEX_READY:            'klre:indexReady',
+  KLRE_SUGGESTION_CONFIRMED:   'klre:suggestionConfirmed',
+  KLRE_SUGGESTION_DISMISSED:   'klre:suggestionDismissed',
+  KLRE_INDEX_UPDATED:          'klre:indexUpdated',
+  KLRE_PULSE_READY:            'klre:pulseReady',
 });

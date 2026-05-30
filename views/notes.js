@@ -15,6 +15,7 @@ import { emit, on, EVENTS } from '../core/events.js';
 import { getAccount } from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { openForm } from '../components/entity-form.js';
+import { renderRelatedPanel } from '../components/related-panel.js'; // [KLRE v6.6.0]
 
 // ── Module state ───────────────────────────────────────────────
 let _notes = [];
@@ -229,6 +230,14 @@ function _renderDetail() {
   detailPanel.appendChild(titleInput);
   detailPanel.appendChild(bodyEditor);
   detailPanel.appendChild(footer);
+
+  // [KLRE v6.6.0] Related items below the note content
+  if (note.id) {
+    const relContainer = document.createElement('div');
+    relContainer.style.cssText = 'margin-top:24px;padding-top:16px;border-top:1px solid var(--color-border);flex-shrink:0;';
+    detailPanel.appendChild(relContainer);
+    renderRelatedPanel(relContainer, note.id); // async — self-renders
+  }
 
   // ── Wire blur-saves ──────────────────────────────────────
   titleInput.addEventListener('focus', () => { titleInput.style.borderBottomColor = 'var(--color-accent)'; });
