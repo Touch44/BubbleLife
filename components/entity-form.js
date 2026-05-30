@@ -1046,6 +1046,13 @@ function _buildAndMount(config) {
       // Merge non-destructively: only update draft fields the user hasn't dirtied
       // (Leave _draft as-is so in-progress typing is never lost)
       _refreshFormTabs(config, false); // false = skip Details tab (preserve typing)
+
+    // [KLRE v6.6.3] When the saved entity is NOT the current entity, other entities
+    // with shared tags may now appear as suggestions. Clear tab6 loaded flag so
+    // the Related tab reloads on next activation.
+    if (_editEntity && entity.id !== _editEntity.id && _tab6Body?.dataset.loaded) {
+      _tab6Body.dataset.loaded = '';
+    }
     }));
 
     // 2. ENTITY_DELETED — close form if editing entity was deleted

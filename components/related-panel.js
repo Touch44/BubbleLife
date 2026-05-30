@@ -102,9 +102,10 @@ export function initRelatedPanel() {
     if (entity && entity.id === _currentEntityId) refresh();
   });
 
-  // Refresh when the KLRE index is updated for the current entity
-  on(EVENTS.KLRE_INDEX_UPDATED, ({ entityId }) => {
-    if (entityId === _currentEntityId) refresh();
+  // Refresh when any entity's index is updated — the new entity could be a suggestion
+  // for whoever is currently displayed. Uses the cache-miss path to stay efficient.
+  on(EVENTS.KLRE_INDEX_UPDATED, () => {
+    if (_container && _currentEntityId) refresh();
   });
 }
 

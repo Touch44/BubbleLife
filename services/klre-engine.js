@@ -67,18 +67,43 @@ export async function initKLRE() {
   if (!_listenersRegistered) {
     _listenersRegistered = true;
 
-    // On entity save: re-index the changed entity, invalidate its suggestion cache
+    // On entity save: re-index the changed entity, invalidate affected caches
     on(EVENTS.ENTITY_SAVED, async (entity) => {
       if (!entity || !entity.id) return;
       try {
         await updateEntityIndex(entity);
         // Invalidate focal entity's cache
         await saveKlreSuggestions({ entityId: entity.id, suggestions: [], updatedAt: null });
+
         // Invalidate direct neighbors' caches (their suggestions may have changed)
         const neighbors = await getNeighbors(entity.id);
         await Promise.all(neighbors.map(n =>
           saveKlreSuggestions({ entityId: n.entityId, suggestions: [], updatedAt: null })
         ));
+
+        // [v6.6.3] Broader invalidation: any entity sharing tags or type with the saved
+        // entity could now have a new suggestion. Invalidate their caches so they recompute
+        // on next Related tab open. Uses in-memory tag comparison — no extra IDB reads.
+        const savedTags = new Set(Array.isArray(entity.tags) ? entity.tags : []);
+        if (savedTags.size > 0 || entity.type) {
+          try {
+            const typeKeys   = getAllEntityTypes().map(t => t.key);
+            const allEnts    = (await Promise.all(typeKeys.map(k => getEntitiesByType(k)))).flat();
+            const toInvalidate = allEnts.filter(e =>
+              e.id !== entity.id &&
+              !e.deleted &&
+              (e.tags || []).some(t => savedTags.has(t))
+            );
+            if (toInvalidate.length) {
+              await Promise.all(toInvalidate.map(e =>
+                saveKlreSuggestions({ entityId: e.id, suggestions: [], updatedAt: null })
+              ));
+            }
+          } catch { /* non-fatal — best effort */ }
+        }
+
+        // Emit event so related panels can detect the invalidation
+        emit(EVENTS.KLRE_INDEX_UPDATED, { entityId: entity.id });
       } catch (e) {
         console.warn('[KLRE] ENTITY_SAVED handler failed:', e);
       }
@@ -151,7 +176,7 @@ export async function getSuggestions(entityId, opts = {}) {
 
   const maxResults      = opts.maxResults     ?? 8;
   const includeConfirmed = opts.includeConfirmed ?? true;
-  const minScore        = opts.minScore       ?? (await getSetting('klre_min_score')) ?? 0.18;
+  const minScore        = opts.minScore       ?? (await getSetting('klre_min_score')) ?? 0.10;
   const typeFilter      = opts.typeFilter     ?? null;
 
   // A) Load focal entity
