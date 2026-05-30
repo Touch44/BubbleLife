@@ -724,13 +724,6 @@ export async function openPanel(entityId, entityTypeHint) {
     _renderActiveTab();
     _mountActivityStream();  // P-28: mount activity stream after content
 
-    // [KLRE v6.6.0] Inject related panel — must be after all awaits
-    // myLoadId was captured before any await at the top of this function
-    {
-      const klreEl = document.createElement('div');
-      _panelBody.appendChild(klreEl);
-      renderRelatedPanel(klreEl, myLoadId); // async — self-renders, no await needed
-    }
 
     // ── Modal mode: center panel for content-heavy entity types ──────────
     // Professional UX: side-panel for quick-glance types (tasks, events)

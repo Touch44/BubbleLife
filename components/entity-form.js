@@ -19,7 +19,8 @@ import { toast }                                               from '../core/toa
 import { getAccount }                                          from '../core/auth.js';
 import { getActiveContext, ALWAYS_SHARED_TYPES }               from '../core/context.js';
 import { presetToRrule, rruleToHuman, nextNDates }
-  from '../services/rrule-lite.js'; // [v5.3.1]
+  from '../services/rrule-lite.js';
+import { renderRelatedPanel } from './related-panel.js'; // [KLRE v6.6.2] // [v5.3.1]
 
 // ── Module-level state ────────────────────────────────────── //
 
@@ -54,6 +55,7 @@ let _tab2Body = null;  // Activity tab
 let _tab3Body = null;  // Connections tab
 let _tab4Body = null;  // Reminders tab
 let _tab5Body = null;  // Tasks tab (project edit only) [v5.9.4]
+let _tab6Body = null;  // Related tab (KLRE) [v6.6.2]
 
 /** Cleanup fns for form-lifetime event subscriptions — called in closeForm */
 let _formEventUnsubs = [];
@@ -302,7 +304,7 @@ export function closeForm() {
     _onSave     = null;
     _relationValues.clear();
     _tagValues.clear();
-    _tab2Body = null; _tab3Body = null; _tab4Body = null; _tab5Body = null; // [fix] clear so _refreshFormTabs is a no-op when no form
+    _tab2Body = null; _tab3Body = null; _tab4Body = null; _tab5Body = null; _tab6Body = null; // [fix] clear so _refreshFormTabs is a no-op when no form
 
     // If a parent form was stacked, restore it
     if (_parentFormStack.length > 0) {
@@ -525,9 +527,12 @@ function _buildAndMount(config) {
   // [v5.9.4] Tasks tab — only in EDIT mode for project type
   const _showTasksTab = !!_editEntity && _typeKey === 'project';
   const tab5Btn = _showTasksTab ? _mkTab('tasks', 'Tasks', '✅') : null;
+  // [KLRE v6.6.2] Related tab — only in EDIT mode (can't suggest for unsaved entity)
+  const _showRelatedTab = !!_editEntity;
+  const tab6Btn = _showRelatedTab ? _mkTab('klre', 'Related', '✦') : null;
 
   const _applyTabStyles = () => {
-    [tab1Btn, tab2Btn, tab3Btn, tab4Btn, tab5Btn].filter(Boolean).forEach(b => {
+    [tab1Btn, tab2Btn, tab3Btn, tab4Btn, tab5Btn, tab6Btn].filter(Boolean).forEach(b => {
       const active = b.dataset.tabKey === _activeFormTab;
       b.style.color = active ? 'var(--color-accent)' : 'var(--color-text-muted)';
       b.style.borderBottomColor = active ? 'var(--color-accent)' : 'transparent';
@@ -545,11 +550,12 @@ function _buildAndMount(config) {
     if (_tab3Body) _tab3Body.style.display = key === 'relations' ? 'flex' : 'none';
     if (_tab4Body) _tab4Body.style.display = key === 'reminders' ? 'flex' : 'none';
     if (_tab5Body) _tab5Body.style.display = key === 'tasks'     ? 'flex' : 'none'; // [v5.9.4]
+    if (_tab6Body) _tab6Body.style.display = key === 'klre'      ? 'flex' : 'none'; // [KLRE v6.6.2]
     // Hide footer (Save button) only in EDIT mode on non-fields tabs.
     // In CREATE mode, always show footer so user can save from any tab.
     const footerEl = modal.querySelector('.modal-footer');
     if (footerEl) {
-      const hideFooter = !!_editEntity && (key === 'details' || key === 'relations' || key === 'reminders' || key === 'tasks');
+      const hideFooter = !!_editEntity && (key === 'details' || key === 'relations' || key === 'reminders' || key === 'tasks' || key === 'klre');
       footerEl.style.display = hideFooter ? 'none' : '';
     }
     // [v5.9.4] Lazy-load Tasks tab on first activate
@@ -562,6 +568,16 @@ function _buildAndMount(config) {
       _tab2Body.dataset.loaded = '1';
       const freshConfig = _editEntity ? getEntityTypeConfig(_editEntity.type) : config;
       _buildDetailsTab(_tab2Body, freshConfig || config).catch(e => console.warn('[entity-form] Activity tab error:', e));
+    }
+    // Lazy-load Related tab (KLRE) on first open
+    if (key === 'klre' && _tab6Body && !_tab6Body.dataset.loaded) {
+      _tab6Body.dataset.loaded = '1';
+      const _relatedEntityId = _editEntity?.id;
+      if (_relatedEntityId) {
+        renderRelatedPanel(_tab6Body, _relatedEntityId).catch(e =>
+          console.warn('[entity-form] Related tab error:', e)
+        );
+      }
     }
     // Lazy-load Tab 3 on first open (or if marked dirty)
     if (key === 'relations' && _tab3Body && (!_tab3Body.dataset.loaded || _tab3Body.dataset.loaded === 'dirty')) {
@@ -579,12 +595,14 @@ function _buildAndMount(config) {
   tab3Btn.addEventListener('click', () => _switchTab('relations'));
   if (tab4Btn) tab4Btn.addEventListener('click', () => _switchTab('reminders'));
   if (tab5Btn) tab5Btn.addEventListener('click', () => _switchTab('tasks')); // [v5.9.4]
+  if (tab6Btn) tab6Btn.addEventListener('click', () => _switchTab('klre')); // [KLRE v6.6.2]
 
   tabStrip.appendChild(tab1Btn);
   tabStrip.appendChild(tab2Btn);
   tabStrip.appendChild(tab3Btn);
   if (tab4Btn) tabStrip.appendChild(tab4Btn);
   if (tab5Btn) tabStrip.appendChild(tab5Btn); // [v5.9.4] Tasks tab
+  if (tab6Btn) tabStrip.appendChild(tab6Btn); // [KLRE v6.6.2] Related tab
   _applyTabStyles();
 
   // ── Body ─────────────────────────────────────────────── //
@@ -941,11 +959,19 @@ function _buildAndMount(config) {
     body.appendChild(_tab5Body);
   }
 
+  // [KLRE v6.6.2] Related tab body — only in edit mode
+  if (_showRelatedTab) {
+    _tab6Body = document.createElement('div');
+    _tab6Body.style.cssText = 'display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-4) var(--space-6);';
+    body.appendChild(_tab6Body);
+  }
+
   // Apply initial tab visibility
   tab1Body.style.display = _activeFormTab === 'fields'    ? 'flex' : 'none';
   _tab2Body.style.display = _activeFormTab === 'details'   ? 'flex' : 'none';
   _tab3Body.style.display = _activeFormTab === 'relations' ? 'flex' : 'none';
   _tab4Body.style.display = _activeFormTab === 'reminders' ? 'flex' : 'none';
+  if (_tab6Body) _tab6Body.style.display = _activeFormTab === 'klre' ? 'flex' : 'none';
 
   // ── Footer ───────────────────────────────────────────── //
   // Single Save button — Cancel is redundant (✕ header, Esc, backdrop click all close).
@@ -5471,6 +5497,15 @@ function _refreshFormTabs(config, includeDetails = false) {
     _tab4Body.dataset.loaded = '';
     if (_activeFormTab === 'reminders') {
       _buildRemindersTab(_tab4Body);
+    }
+  }
+  // Related (KLRE) tab — invalidate so it reloads on next open
+  if (_tab6Body?.dataset.loaded) {
+    _tab6Body.dataset.loaded = '';
+    if (_activeFormTab === 'klre' && _editEntity?.id) {
+      renderRelatedPanel(_tab6Body, _editEntity.id).catch(e =>
+        console.warn('[entity-form] Related tab refresh:', e)
+      );
     }
   }
   // Update modal header title if entity title changed
