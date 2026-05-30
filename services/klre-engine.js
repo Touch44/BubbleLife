@@ -7,13 +7,13 @@
 
 import {
   uid, getSetting, setSetting,
-  getEntity, getEntitiesByType, saveEdge,
+  getEntity, getEntitiesByType, saveEdge, getEdgesFrom,
   getKlreSuggestions, saveKlreSuggestions,
   logKlreAccess, isDismissed, setDismissed,
 } from '../core/db.js';
 
 import {
-  getNeighbors, getBacklinks, getEdgesFrom,
+  getNeighbors, getBacklinks,
   getEntityTypeConfig, getAllEntityTypes,
 } from '../core/graph-engine.js';
 
