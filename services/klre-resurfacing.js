@@ -10,6 +10,10 @@ import { getEntitiesByType, getKlreSuggestions } from '../core/db.js';
 // getSuggestions is only needed for getDailyContext (small N — 3-5 date-matching entities)
 import { getSuggestions } from './klre-engine.js';
 
+// ── In-memory pulse cache (S2: prevents O(N) scan on every dashboard render) ─ //
+let _pulseCache   = null;   // {items: Array, builtAt: number}
+const PULSE_TTL   = 300000; // 5 minutes
+
 // ── Constants ─────────────────────────────────────────────── //
 const RESURFACING_MIN_DAYS = 7;
 const RESURFACING_MAX_DAYS = 30;
@@ -77,6 +81,11 @@ function _entityMatchesDate(entity, dateStr) {
  * @returns {Promise<Array>}
  */
 export async function getPulseItems(maxItems = PULSE_MAX) {
+  // S2: Serve from in-memory cache if fresh (< 5 minutes)
+  if (_pulseCache && (Date.now() - _pulseCache.builtAt) < PULSE_TTL) {
+    return _pulseCache.items.slice(0, maxItems);
+  }
+
   const typeKeys    = getAllEntityTypes().map(t => t.key);
   const allEntities = (
     await Promise.all(typeKeys.map(k => getEntitiesByType(k)))
@@ -96,6 +105,11 @@ export async function getPulseItems(maxItems = PULSE_MAX) {
       .flatMap(e => Array.isArray(e.tags) ? e.tags : [])
   );
 
+  // S1/E5: Pre-load ALL suggestion caches in parallel before the loop.
+  // Eliminates sequential IDB reads — turns O(N) sequential into one batch.
+  const allSuggestionCaches = await Promise.all(allEntities.map(e => getKlreSuggestions(e.id)));
+  const suggestionCacheMap  = new Map(allEntities.map((e, i) => [e.id, allSuggestionCaches[i]]));
+
   const scored = [];
 
   for (const entity of allEntities) {
@@ -103,11 +117,10 @@ export async function getPulseItems(maxItems = PULSE_MAX) {
     let pulseType  = null;
 
     // ── a) FORGOTTEN_RELEVANT ───────────────────────────────
-    // Use updatedAt (not lastAccessedAt — that field doesn't exist on entities)
     const daysSinceUpdate = _daysSince(entity.updatedAt || entity.createdAt);
     if (daysSinceUpdate >= RESURFACING_MIN_DAYS && daysSinceUpdate <= RESURFACING_MAX_DAYS) {
-      // Cache-only read — DO NOT call getSuggestions() (O(N²) risk)
-      const cached = await getKlreSuggestions(entity.id);
+      // Use pre-loaded cache — no IDB read needed here
+      const cached = suggestionCacheMap.get(entity.id);
       const hasRelevantSuggestion = cached?.suggestions?.some(s => s.score >= 0.20);
       if (hasRelevantSuggestion) {
         const score = 0.8 + (daysSinceUpdate - RESURFACING_MIN_DAYS) /
@@ -177,7 +190,17 @@ export async function getPulseItems(maxItems = PULSE_MAX) {
   }
 
   scored.sort((a, b) => b.pulseScore - a.pulseScore);
-  return scored.slice(0, maxItems);
+  const result = scored.slice(0, maxItems);
+
+  // S2: Cache the full sorted list for PULSE_TTL
+  _pulseCache = { items: result, builtAt: Date.now() };
+
+  return result;
+}
+
+/** Invalidate pulse cache — call when entities are saved */
+export function invalidatePulseCache() {
+  _pulseCache = null;
 }
 
 // ── Public: Daily context ─────────────────────────────────── //
@@ -201,42 +224,36 @@ export async function getDailyContext(dateStr) {
   const dateMatchers = allEntities.filter(e => _entityMatchesDate(e, dateStr));
   if (!dateMatchers.length) return [];
 
-  // B) Get KLRE suggestions for each date-matching entity (cache-only for performance)
-  const contextItems = [];
-  const seenIds = new Set();
-
-  for (const trigger of dateMatchers) {
-    // Use cache-only read first; fall back to getSuggestions if no cache
+  // S9: Process all triggers in parallel (small N — typically 1-5 date matchers)
+  const triggerResults = await Promise.all(dateMatchers.map(async (trigger) => {
     let suggestions = null;
     const cached = await getKlreSuggestions(trigger.id);
-
     if (cached?.suggestions?.length > 0) {
       suggestions = cached.suggestions.slice(0, 5);
     } else {
-      // Cache miss — call getSuggestions (acceptable for small N date-matchers)
       try {
         suggestions = await getSuggestions(trigger.id, { maxResults: 5 });
-      } catch (e) {
-        console.warn('[KLRE] getDailyContext getSuggestions failed:', e);
-        continue;
+      } catch {
+        suggestions = [];
       }
     }
+    return { trigger, suggestions: suggestions || [] };
+  }));
 
-    for (const s of (suggestions || [])) {
+  const contextItems = [];
+  const seenIds = new Set();
+
+  for (const { trigger, suggestions } of triggerResults) {
+    for (const s of suggestions) {
       const cid = s.candidateId;
       if (!cid || seenIds.has(cid) || cid === trigger.id) continue;
       seenIds.add(cid);
-
       contextItems.push({
         entityId:      cid,
         entityType:    s.candidateType,
         title:         s.candidateTitle,
         score:         s.score,
-        triggerEntity: {
-          id:    trigger.id,
-          title: trigger.title || trigger.name || '(untitled)',
-          type:  trigger.type,
-        },
+        triggerEntity: { id: trigger.id, title: trigger.title || trigger.name || '(untitled)', type: trigger.type },
         reason: `Related to: ${trigger.title || trigger.name || '(untitled)'}`,
       });
     }

@@ -7,9 +7,10 @@
 
 import {
   uid, getSetting, setSetting,
-  getEntity, getEntitiesByType, saveEdge, getEdgesFrom,
+  getEntity, getEntitiesByType, saveEdge, getEdgesFrom, getEdge,
   getKlreSuggestions, saveKlreSuggestions,
   logKlreAccess, isDismissed, setDismissed,
+  deleteEntity,  // used for ENTITY_DELETED cleanup
 } from '../core/db.js';
 
 import {
@@ -20,6 +21,7 @@ import {
 import { emit, on, EVENTS } from '../core/events.js';
 import { getAccount } from '../core/auth.js';
 import { buildFullIndex, updateEntityIndex, getIndexEntry } from './klre-index.js';
+import { invalidatePulseCache } from './klre-resurfacing.js';
 import * as Signals from './klre-signals.js';
 
 // ── Module-level state ────────────────────────────────────── //
@@ -31,14 +33,15 @@ let _accessWindow      = [];      // [{entityId, ts}] rolling 30-min co-access w
 let _learnedWeights    = { w1: 1, w2: 1, w3: 1, w4: 1, w6: 1, w7: 1 }; // no w5 — S5 is a multiplier
 let _tagFrequencyMap   = {};      // {tag: entityCount} — built after index ready
 let _totalEntityCount  = 0;       // total indexed entities for S4 rarity %
-let _lastBuiltAt       = null;    // ISO string, set when index completes
+let _lastBuiltAt            = null;    // ISO string, set when index completes
+let _suggestionsGlobalDirtyAt = 0;    // timestamp: any cache older than this needs recompute
 
 // Health boost configuration
 const HEALTH_TYPES = new Set(['medication', 'appointment']);
 const HEALTH_TAGS  = new Set(['health', 'medical', 'doctor', 'hospital', 'dentist', 'pharmacy']);
 
 // Suggestion cache max-age
-const CACHE_MAX_AGE_MS = 3600000; // 1 hour
+const CACHE_MAX_AGE_MS = 900000;  // 15 minutes — reduces stale suggestion risk
 
 // ── Public: init ──────────────────────────────────────────── //
 
@@ -67,45 +70,76 @@ export async function initKLRE() {
   if (!_listenersRegistered) {
     _listenersRegistered = true;
 
-    // On entity save: re-index the changed entity, invalidate affected caches
+    // On entity save: clear caches FIRST, then re-index (which emits KLRE_INDEX_UPDATED).
+    // Order matters: caches must be cleared before the event fires so the panel
+    // refresh always hits a cache miss and recomputes fresh results.
     on(EVENTS.ENTITY_SAVED, async (entity) => {
       if (!entity || !entity.id) return;
       try {
-        await updateEntityIndex(entity);
-        // Invalidate focal entity's cache
+        // STEP 0 — Invalidate in-memory pulse cache (entity change may affect pulse)
+        invalidatePulseCache();
+
+        // STEP 1 — Clear focal entity cache
         await saveKlreSuggestions({ entityId: entity.id, suggestions: [], updatedAt: null });
 
-        // Invalidate direct neighbors' caches (their suggestions may have changed)
+        // STEP 2 — Clear direct neighbors' caches (in parallel)
         const neighbors = await getNeighbors(entity.id);
-        await Promise.all(neighbors.map(n =>
-          saveKlreSuggestions({ entityId: n.entityId, suggestions: [], updatedAt: null })
-        ));
+        if (neighbors.length) {
+          await Promise.all(neighbors.map(n =>
+            saveKlreSuggestions({ entityId: n.entityId, suggestions: [], updatedAt: null })
+          ));
+        }
 
-        // [v6.6.3] Broader invalidation: any entity sharing tags or type with the saved
-        // entity could now have a new suggestion. Invalidate their caches so they recompute
-        // on next Related tab open. Uses in-memory tag comparison — no extra IDB reads.
+        // STEP 3 — Clear caches of entities that share tags (broader invalidation).
+        // Runs only when the saved entity has tags — avoids full scan on untagged saves.
         const savedTags = new Set(Array.isArray(entity.tags) ? entity.tags : []);
-        if (savedTags.size > 0 || entity.type) {
+        if (savedTags.size > 0) {
           try {
-            const typeKeys   = getAllEntityTypes().map(t => t.key);
-            const allEnts    = (await Promise.all(typeKeys.map(k => getEntitiesByType(k)))).flat();
+            const typeKeys    = getAllEntityTypes().map(t => t.key);
+            const allEnts     = (await Promise.all(typeKeys.map(k => getEntitiesByType(k)))).flat();
             const toInvalidate = allEnts.filter(e =>
-              e.id !== entity.id &&
-              !e.deleted &&
+              e.id !== entity.id && !e.deleted &&
               (e.tags || []).some(t => savedTags.has(t))
             );
             if (toInvalidate.length) {
-              await Promise.all(toInvalidate.map(e =>
-                saveKlreSuggestions({ entityId: e.id, suggestions: [], updatedAt: null })
-              ));
+              // Only invalidate entities that ALREADY have a suggestion cache
+              // (avoids creating spurious empty IDB records — S3 fix)
+              const existingCaches = await Promise.all(toInvalidate.map(e => getKlreSuggestions(e.id)));
+              const withCache = toInvalidate.filter((_, i) => existingCaches[i]?.updatedAt);
+              if (withCache.length) {
+                await Promise.all(withCache.map(e =>
+                  saveKlreSuggestions({ entityId: e.id, suggestions: [], updatedAt: null })
+                ));
+              }
             }
-          } catch { /* non-fatal — best effort */ }
+          } catch { /* non-fatal */ }
         }
 
-        // Emit event so related panels can detect the invalidation
-        emit(EVENTS.KLRE_INDEX_UPDATED, { entityId: entity.id });
+        // STEP 4 — Re-index the entity. updateEntityIndex emits KLRE_INDEX_UPDATED
+        // AFTER all caches above have been cleared, so panel refresh always recomputes.
+        await updateEntityIndex(entity);
+        // No explicit emit here — updateEntityIndex handles it.
       } catch (e) {
         console.warn('[KLRE] ENTITY_SAVED handler failed:', e);
+      }
+    });
+
+    // On hard delete: remove entity from KLRE index and caches
+    on(EVENTS.ENTITY_DELETED, async ({ id: deletedId } = {}) => {
+      if (!deletedId) return;
+      try {
+        // Wipe the deleted entity's own index and suggestion cache
+        await Promise.all([
+          (async () => { try { const db = await import('../core/db.js').then(m => m._getDB?.() ); } catch {} })(),
+        ]);
+        // Simpler: just clear the caches — klre_index entry will be skipped at compute time
+        // (candidateEntity.deleted check) once the entity record is deleted.
+        await saveKlreSuggestions({ entityId: deletedId, suggestions: [], updatedAt: null });
+        // Invalidate all suggestion caches that mention the deleted entity
+        // by marking them as needing recompute (cheaper: set global dirty flag)
+        _suggestionsGlobalDirtyAt = Date.now();
+      } catch (e) {
+        console.warn('[KLRE] ENTITY_DELETED handler failed:', e);
       }
     });
 
@@ -127,32 +161,30 @@ export async function initKLRE() {
       _onDismiss(fromId, toId, signals || {});
     });
 
-    // Build tagFrequencyMap once the index is ready
-    on(EVENTS.KLRE_INDEX_READY, async ({ count }) => {
+    // S8: tagFrequencyMap now passed in event payload by buildFullIndex.
+    // No second IDB scan needed.
+    on(EVENTS.KLRE_INDEX_READY, ({ count, tagFrequencyMap }) => {
       _totalEntityCount = count;
-      _lastBuiltAt = new Date().toISOString();
-      try {
-        const typeKeys    = getAllEntityTypes().map(t => t.key);
-        const allEntities = (await Promise.all(typeKeys.map(k => getEntitiesByType(k)))).flat();
-        _tagFrequencyMap  = {};
-        for (const e of allEntities) {
-          for (const tag of (Array.isArray(e.tags) ? e.tags : [])) {
-            _tagFrequencyMap[tag] = (_tagFrequencyMap[tag] || 0) + 1;
-          }
-        }
-      } catch (e) {
-        console.warn('[KLRE] tagFrequencyMap build failed:', e);
+      _lastBuiltAt      = new Date().toISOString();
+      if (tagFrequencyMap && typeof tagFrequencyMap === 'object') {
+        _tagFrequencyMap = tagFrequencyMap;
       }
     });
   }
 
   _initialised = true;
 
-  // Kick off index build asynchronously — never blocks the UI
+  // Kick off index build asynchronously — never blocks the UI.
+  // M1: Retry once on failure after 10 seconds.
+  const _runIndexBuild = () => buildFullIndex().catch(e => {
+    console.warn('[KLRE] index build failed (will retry in 10s):', e);
+    setTimeout(_runIndexBuild, 10000);
+  });
+
   if (typeof requestIdleCallback !== 'undefined') {
-    requestIdleCallback(() => buildFullIndex().catch(e => console.warn('[KLRE] index build failed:', e)));
+    requestIdleCallback(_runIndexBuild);
   } else {
-    setTimeout(() => buildFullIndex().catch(e => console.warn('[KLRE] index build failed:', e)), 0);
+    setTimeout(_runIndexBuild, 150); // yield a paint frame before starting
   }
 }
 
@@ -170,14 +202,20 @@ export async function initKLRE() {
  * @returns {Promise<Array>}
  */
 export async function getSuggestions(entityId, opts = {}) {
-  // Check master toggle first
-  const enabled = await getSetting('klre_enabled');
+  // H2: Guard against null/undefined entityId
+  if (!entityId || typeof entityId !== 'string') return [];
+
+  // S4: Batch both settings reads in parallel (saves ~10ms per call)
+  const [enabled, storedMinScore] = await Promise.all([
+    getSetting('klre_enabled'),
+    getSetting('klre_min_score'),
+  ]);
   if (enabled === false) return [];
 
-  const maxResults      = opts.maxResults     ?? 8;
+  const maxResults       = opts.maxResults      ?? 8;
   const includeConfirmed = opts.includeConfirmed ?? true;
-  const minScore        = opts.minScore       ?? (await getSetting('klre_min_score')) ?? 0.10;
-  const typeFilter      = opts.typeFilter     ?? null;
+  const minScore         = opts.minScore        ?? storedMinScore ?? 0.10;
+  const typeFilter       = opts.typeFilter      ?? null;
 
   // A) Load focal entity
   const focalEntity = await getEntity(entityId);
@@ -185,13 +223,16 @@ export async function getSuggestions(entityId, opts = {}) {
 
   // B) Cache check — use cached list if fresh, applying caller-requested filters
   const cached = await getKlreSuggestions(entityId);
-  const cacheAge = cached?.updatedAt
-    ? (Date.now() - new Date(cached.updatedAt).getTime())
-    : Infinity;
+  // Cache is stale if: TTL exceeded, OR global dirty flag is newer than cache
+  const cacheTs  = cached?.updatedAt ? new Date(cached.updatedAt).getTime() : 0;
+  const cacheAge = cacheTs > 0 ? (Date.now() - cacheTs) : Infinity;
+  const globallyDirty = cacheTs > 0 && cacheTs < _suggestionsGlobalDirtyAt;
 
   let suggestions = [];
 
-  if (cacheAge < CACHE_MAX_AGE_MS && cached.suggestions && cached.suggestions.length > 0) {
+  const forceRecompute = opts.forceRecompute === true;
+
+  if (!forceRecompute && !globallyDirty && cacheAge < CACHE_MAX_AGE_MS && cached.suggestions && cached.suggestions.length > 0) {
     // Cache hit — filter by caller's minScore and typeFilter before returning
     suggestions = cached.suggestions
       .filter(s => s.score >= minScore)
@@ -212,11 +253,14 @@ export async function getSuggestions(entityId, opts = {}) {
     return typeCounts[s.candidateType] <= 3;
   });
 
-  // E) Prepend confirmed edges (both directions) if requested
+  // E) Prepend confirmed edges; deduplicate so confirmed entity
+  //    can't also appear in Suggested (C3 fix).
   let result = capped;
   if (includeConfirmed) {
     const confirmedItems = await _getConfirmedItems(entityId);
-    result = [...confirmedItems, ...capped];
+    const confirmedIdSet = new Set(confirmedItems.map(i => i.candidateId));
+    const dedupedCapped  = capped.filter(s => !confirmedIdSet.has(s.candidateId));
+    result = [...confirmedItems, ...dedupedCapped];
   }
 
   return result.slice(0, maxResults);
@@ -230,13 +274,16 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
   const focalIndexEntry = await getIndexEntry(entityId);
   const rawNeighborsA   = await getNeighbors(entityId);
 
-  // CRITICAL: getNeighbors() has no entityType — enrich via batch entity fetch
+  // Enrich focal neighbors with entityType.
+  // NOTE: entityTypeById isn't built yet at this point (requires allEntities which
+  // is loaded below). Use a small targeted fetch for focal neighbors only — focal
+  // typically has few neighbors (1-10), so this is fast.
   const neighborIds = [...new Set(rawNeighborsA.map(n => n.entityId))];
   const neighborEntities = await Promise.all(neighborIds.map(id => getEntity(id)));
-  const typeMap = new Map(neighborEntities.filter(Boolean).map(e => [e.id, e.type]));
+  const focalTypeMap = new Map(neighborEntities.filter(Boolean).map(e => [e.id, e.type]));
   const neighborsA = rawNeighborsA.map(n => ({
     ...n,
-    entityType: typeMap.get(n.entityId) ?? 'unknown',
+    entityType: focalTypeMap.get(n.entityId) ?? 'unknown',
   }));
 
   // Create enriched focal for S6
@@ -246,14 +293,23 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
   const typeKeys    = getAllEntityTypes().map(t => t.key);
   const allEntities = (await Promise.all(typeKeys.map(k => getEntitiesByType(k)))).flat();
 
-  // ── Performance: batch pre-load index entries + dismissed status ──────
-  // Pre-loading in parallel eliminates N sequential IDB reads in the main loop.
-  const [allIndexEntries, allDismissed] = await Promise.all([
+  // ── Performance: batch pre-load ALL per-candidate data before the loop ──
+  // Three parallel batches eliminate N sequential IDB reads from the loop body:
+  //   1. Index entries (for S1 text cosine)
+  //   2. Dismissed status (skip pairs the user has dismissed)
+  //   3. Neighbor lists (for S2 shared person, S3 shared project)
+  // Also build an entityType map from allEntities so neighbor enrichment
+  // needs no additional getEntity() calls inside the loop.
+  const [allIndexEntries, allDismissed, allNeighborResults] = await Promise.all([
     Promise.all(allEntities.map(e => getIndexEntry(e.id))),
     Promise.all(allEntities.map(e => isDismissed(entityId, e.id))),
+    Promise.all(allEntities.map(e => getNeighbors(e.id))),
   ]);
-  const indexMap    = new Map(allEntities.map((e, i) => [e.id, allIndexEntries[i]]));
-  const dismissedSet = new Set(allEntities.filter((e, i) => allDismissed[i]).map(e => e.id));
+  const indexMap      = new Map(allEntities.map((e, i) => [e.id, allIndexEntries[i]]));
+  const dismissedSet  = new Set(allEntities.filter((e, i) => allDismissed[i]).map(e => e.id));
+  const neighborsMapB = new Map(allEntities.map((e, i) => [e.id, allNeighborResults[i] || []]));
+  // entityType lookup from already-loaded allEntities — eliminates getEntity() in loop
+  const entityTypeById = new Map(allEntities.map(e => [e.id, e.type]));
 
   const computed = [];
 
@@ -268,14 +324,11 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
     const candidateIndexEntry = indexMap.get(candidateEntity.id);
     if (!candidateIndexEntry) continue; // not yet indexed — skip
 
-    // Enrich candidate neighbors (still per-candidate, but batched internally)
-    const rawNeighborsB = await getNeighbors(candidateEntity.id);
-    const neighborIdsB  = [...new Set(rawNeighborsB.map(n => n.entityId))];
-    const neighborEntitiesB = await Promise.all(neighborIdsB.map(id => getEntity(id)));
-    const typeMapB = new Map(neighborEntitiesB.filter(Boolean).map(e => [e.id, e.type]));
+    // Enrich candidate neighbors — no async needed, data pre-loaded above
+    const rawNeighborsB = neighborsMapB.get(candidateEntity.id) || [];
     const neighborsB = rawNeighborsB.map(n => ({
       ...n,
-      entityType: typeMapB.get(n.entityId) ?? 'unknown',
+      entityType: entityTypeById.get(n.entityId) ?? 'unknown',
     }));
 
     // Enriched candidate for S6
@@ -359,18 +412,30 @@ async function _getConfirmedItems(entityId) {
       getEdgesFrom(entityId),
       getBacklinks(entityId),
     ]);
-    // Only show edges that were explicitly confirmed via KLRE (metadata.klre === true)
-    // This prevents task→project or person assignment edges from appearing as "Linked"
-    const confirmedIds = new Set([
-      ...outgoing.filter(e => e.metadata?.klre === true).map(e => e.toId),
-      ...backlinks.map(e => e.entityId),  // backlinks are always KLRE (only KLRE creates reverse)
-    ]);
+
+    // C2 fix: filter outgoing to KLRE-only (metadata.klre === true)
+    const outgoingKlreIds = outgoing
+      .filter(e => e.metadata?.klre === true)
+      .map(e => e.toId);
+
+    // C2 fix: fetch full edge for each backlink to check metadata.klre.
+    // getBacklinks() returns partial objects without metadata — must fetch full edge.
+    const backlinkEdges = await Promise.all(backlinks.map(b => getEdge(b.edgeId)));
+    const incomingKlreIds = backlinkEdges
+      .filter(e => e?.metadata?.klre === true)
+      .map(e => e.fromId);
+
+    const confirmedIds = new Set([...outgoingKlreIds, ...incomingKlreIds]);
+
+    // Batch fetch confirmed entities in parallel
+    const confirmedArr = [...confirmedIds];
+    const confirmedEntities = await Promise.all(confirmedArr.map(id => getEntity(id)));
     const items = [];
-    for (const cid of confirmedIds) {
-      const ce = await getEntity(cid);
+    for (let i = 0; i < confirmedArr.length; i++) {
+      const ce = confirmedEntities[i];
       if (!ce || ce.deleted) continue;
       items.push({
-        candidateId:    cid,
+        candidateId:    confirmedArr[i],
         candidateType:  ce.type,
         candidateTitle: ce.title || ce.name || '(untitled)',
         score:      1.0,

@@ -62,10 +62,17 @@ function _buildEntityText(entity) {
   const parts = [];
   for (const [key, val] of Object.entries(entity)) {
     if (SKIP.has(key) || val == null) continue;
+    // Skip booleans — "true"/"false" are high-frequency noise with no semantic value
+    if (typeof val === 'boolean') continue;
+    // Skip empty arrays and objects
+    if (Array.isArray(val) && val.length === 0) continue;
 
     const fieldCfg = fieldMap.get(key);
     // Skip relation fields — they store UUIDs, not readable text
     if (fieldCfg && fieldCfg.type === 'relation') continue;
+    // C6: Skip UUID-format strings — they tokenise to meaningless substrings
+    if (typeof val === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) continue;
 
     let text;
     if (Array.isArray(val)) {
@@ -186,10 +193,24 @@ export async function buildFullIndex() {
       .filter(Boolean)
   );
 
-  // Index each entity
-  await Promise.all(allEntities.map(e => _buildEntityIndex(e, _corpusStats, titleSet)));
+  // S6: Index entities in chunks of 50 (prevents IDB transaction saturation).
+  // Sequential chunks avoid overwhelming the IDB write queue for large datasets.
+  const CHUNK_SIZE = 50;
+  for (let i = 0; i < allEntities.length; i += CHUNK_SIZE) {
+    const chunk = allEntities.slice(i, i + CHUNK_SIZE);
+    await Promise.all(chunk.map(e => _buildEntityIndex(e, _corpusStats, titleSet)));
+  }
 
-  emit(EVENTS.KLRE_INDEX_READY, { count: allEntities.length });
+  // S8: Build tagFrequencyMap here and include in event payload
+  // so the engine listener avoids a second full entity load.
+  const tagFrequencyMap = {};
+  for (const e of allEntities) {
+    for (const tag of (Array.isArray(e.tags) ? e.tags : [])) {
+      tagFrequencyMap[tag] = (tagFrequencyMap[tag] || 0) + 1;
+    }
+  }
+
+  emit(EVENTS.KLRE_INDEX_READY, { count: allEntities.length, tagFrequencyMap });
   return allEntities.length;
 }
 

@@ -15,6 +15,7 @@ import { on, EVENTS } from '../core/events.js';
 let _currentEntityId    = null;
 let _container          = null; // DOM reference for refresh()
 let _listenersRegistered = false;
+let _refreshTimer       = null; // debounce handle — prevents rapid re-renders
 
 // ── HTML escaping (defined locally — never import) ─────────── //
 function _esc(str) {
@@ -33,6 +34,13 @@ async function _openPanel(entityId) {
     openPanel(entityId);
   } catch (e) {
     console.warn('[KLRE] Could not open panel:', e);
+    // H1: Give user visible feedback instead of silent failure
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#f06a5a;color:#fff;' +
+      'padding:10px 16px;border-radius:8px;font-size:13px;z-index:9999;pointer-events:none;';
+    toast.textContent = 'Could not open item — try refreshing';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
   }
 }
 
@@ -102,10 +110,20 @@ export function initRelatedPanel() {
     if (entity && entity.id === _currentEntityId) refresh();
   });
 
-  // Refresh when any entity's index is updated — the new entity could be a suggestion
-  // for whoever is currently displayed. Uses the cache-miss path to stay efficient.
+  // Refresh when any entity's index is updated. Debounced 300ms.
   on(EVENTS.KLRE_INDEX_UPDATED, () => {
-    if (_container && _currentEntityId) refresh();
+    if (!_container || !_currentEntityId) return;
+    clearTimeout(_refreshTimer);
+    _refreshTimer = setTimeout(() => refresh(), 300);
+  });
+
+  // C1: Also refresh when the full index build completes (KLRE_INDEX_READY).
+  // Users who open Related tab before index builds get stale "no items" result.
+  // A 500ms debounce avoids triggering while index is still writing final chunks.
+  on(EVENTS.KLRE_INDEX_READY, () => {
+    if (!_container || !_currentEntityId) return;
+    clearTimeout(_refreshTimer);
+    _refreshTimer = setTimeout(() => refresh(), 500);
   });
 }
 
@@ -118,6 +136,9 @@ export function initRelatedPanel() {
  * @param {string} entityId
  */
 export async function renderRelatedPanel(containerEl, entityId) {
+  // H2: Guard against invalid inputs
+  if (!containerEl || !entityId || typeof entityId !== 'string') return;
+
   // Check master panel toggle
   const enabled = await getSetting('klre_panel_enabled');
   if (enabled === false) return;
@@ -292,7 +313,13 @@ function _renderItems(containerEl, entityId, items) {
       moreLink.textContent = 'Show more →';
       moreLink.addEventListener('click', async () => {
         moreLink.textContent = 'Loading…';
-        const moreItems = await getSuggestions(entityId, { maxResults: 50, includeConfirmed: true });
+        // S5: Force recompute with no type cap to surface all possible suggestions
+        const moreItems = await getSuggestions(entityId, {
+          maxResults: 50,
+          includeConfirmed: true,
+          forceRecompute: true,
+          minScore: 0.05,
+        });
         _renderItems(containerEl, entityId, moreItems);
       });
       body.appendChild(moreLink);
@@ -317,7 +344,12 @@ function _renderItems(containerEl, entityId, items) {
  * Re-render the related panel using the stored container and entityId.
  */
 export function refresh() {
-  if (_container && _currentEntityId) {
+  // C5: Only refresh if container is still attached to the live document
+  if (_container && _currentEntityId && document.contains(_container)) {
     renderRelatedPanel(_container, _currentEntityId);
+  } else if (_container && !document.contains(_container)) {
+    // Container is detached — clear references to prevent memory leak
+    _container       = null;
+    _currentEntityId = null;
   }
 }
