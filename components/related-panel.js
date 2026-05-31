@@ -208,7 +208,16 @@ function _renderItems(containerEl, entityId, items) {
   header.addEventListener('click', () => {
     const collapsed = localStorage.getItem('klre_collapsed') === 'true';
     localStorage.setItem('klre_collapsed', String(!collapsed));
-    _renderItems(containerEl, entityId, items); // re-render with new state
+    // B16: Use refresh() instead of _renderItems(items) to get fresh suggestions
+    // when expanding. The closure `items` could be stale if entities were saved
+    // while the panel was collapsed.
+    if (!collapsed) {
+      // Was expanded, now collapsing — re-render collapsed state locally (fast)
+      _renderItems(containerEl, entityId, items);
+    } else {
+      // Was collapsed, now expanding — fetch fresh suggestions
+      renderRelatedPanel(containerEl, entityId);
+    }
   });
   section.appendChild(header);
 
@@ -291,10 +300,13 @@ function _renderItems(containerEl, entityId, items) {
         ev.stopPropagation();
         dismissBtn.disabled = true;
         await dismissSuggestion(entityId, item.candidateId);
-        // Fade out and remove
+        // B15: Safe fade-out — check row is still in DOM before removing
         row.style.transition = 'opacity 0.2s';
         row.style.opacity = '0';
-        setTimeout(() => row.remove(), 220);
+        setTimeout(() => {
+          // row.isConnected is true only when attached to the live DOM
+          if (row.isConnected) row.remove();
+        }, 220);
       });
 
       actionsDiv.appendChild(linkBtn);

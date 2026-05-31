@@ -28,6 +28,7 @@ import { queryEntities, getSetting, setSetting }  from '../core/db.js';
 import { navigate, VIEW_KEYS }                    from '../core/router.js';
 import { emit, on, EVENTS }                       from '../core/events.js';
 import { openForm }                               from './entity-form.js';
+import { getSuggestions }                        from '../services/klre-engine.js'; // [KLRE v6.7.0]
 
 // ── DOM refs ────────────────────────────────────────────────── //
 let _overlay, _input, _results;
@@ -313,6 +314,110 @@ async function _render() {
 // ENTITY SEARCH
 // ════════════════════════════════════════════════════════════════
 
+// ── KLRE Search Clustering [v6.7.0] ──────────────────────────────
+/**
+ * Cluster search results by KLRE topic relationships.
+ * Returns {clusters:[{label,items}], ungrouped:[items]}
+ * Times out after 400ms — falls back to ungrouped.
+ * @param {Array} results - ranked result objects {entity,cfg,score,title,snippet}
+ */
+async function _clusterResults(results) {
+  const empty = { clusters: [], ungrouped: results };
+  if (results.length < 2) return empty;
+
+  // Only cluster the top 5 — beyond that KLRE suggestions are less reliable
+  const top5 = results.slice(0, 5);
+
+  const TIMEOUT = new Promise(resolve => setTimeout(() => resolve(null), 400));
+
+  let suggestionData;
+  try {
+    suggestionData = await Promise.race([
+      Promise.all(top5.map(r => getSuggestions(r.entity.id, { maxResults: 6, includeConfirmed: true })
+        .catch(() => [])
+      )),
+      TIMEOUT,
+    ]);
+  } catch {
+    return empty;
+  }
+
+  // Timeout fired — render flat
+  if (suggestionData === null) return empty;
+
+  // Build adjacency: result A → result B if B is in A's KLRE suggestions
+  const resultIds = new Set(results.map(r => r.entity.id));
+  const adjacency = new Map(); // entityId → Set of connected entityIds
+  for (let i = 0; i < top5.length; i++) {
+    const focal = top5[i];
+    const suggestions = suggestionData[i] || [];
+    for (const s of suggestions) {
+      if (resultIds.has(s.candidateId) && s.candidateId !== focal.entity.id) {
+        if (!adjacency.has(focal.entity.id)) adjacency.set(focal.entity.id, new Set());
+        if (!adjacency.has(s.candidateId))   adjacency.set(s.candidateId, new Set());
+        adjacency.get(focal.entity.id).add(s.candidateId);
+        adjacency.get(s.candidateId).add(focal.entity.id);
+      }
+    }
+  }
+
+  // BFS: find connected components
+  const visited    = new Set();
+  // B19: Build a resultMap for O(1) lookups inside BFS (was O(N) results.find())
+  const resultMap  = new Map(results.map(r => [r.entity.id, r]));
+  const components = [];
+
+  for (const result of results) {
+    const id = result.entity.id;
+    if (visited.has(id) || !adjacency.has(id)) continue;
+
+    const component = [];
+    const queue     = [id];
+    visited.add(id);
+
+    while (queue.length) {
+      const cur   = queue.shift();
+      const match = resultMap.get(cur); // O(1) vs O(N) results.find()
+      if (match) component.push(match);
+      for (const neighbor of (adjacency.get(cur) || [])) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    if (component.length >= 2) components.push(component);
+  }
+
+  if (components.length === 0) return empty;
+
+  // Derive cluster label: find shortest shared tag across component members
+  const clusters = components.map(items => {
+    const tagSets = items.map(r => new Set(Array.isArray(r.entity.tags) ? r.entity.tags : []));
+    let sharedTags = tagSets.length ? [...tagSets[0]] : [];
+    for (const ts of tagSets.slice(1)) {
+      sharedTags = sharedTags.filter(t => ts.has(t));
+    }
+    let label;
+    if (sharedTags.length) {
+      label = sharedTags.sort((a, b) => a.length - b.length)[0];
+    } else {
+      // Fall back to majority entity type
+      const typeCounts = {};
+      for (const r of items) typeCounts[r.entity.type] = (typeCounts[r.entity.type] || 0) + 1;
+      label = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Related';
+    }
+    return { label, items };
+  });
+
+  // Collect ungrouped results
+  const clusteredIds = new Set(clusters.flatMap(cl => cl.items.map(r => r.entity.id)));
+  const ungrouped    = results.filter(r => !clusteredIds.has(r.entity.id));
+
+  return { clusters, ungrouped };
+}
+
 async function _renderSearchResults(query, seq) {
   _results.innerHTML = `<div style="padding:var(--space-3) var(--space-5);color:var(--color-text-muted);font-size:var(--text-xs);">Searching…</div>`;
   _currentItems  = [];
@@ -356,10 +461,13 @@ async function _renderSearchResults(query, seq) {
     return;
   }
 
-  const section = _makeSection(`${ranked.length} result${ranked.length === 1 ? '' : 's'}`);
-  _results.appendChild(section.header);
+  // [KLRE v6.7.0] Attempt topic clustering — falls back to flat if timeout/no clusters
+  const { clusters, ungrouped } = await _clusterResults(ranked);
 
-  for (const { entity, cfg, title, snippet } of ranked) {
+  // If seq changed during clustering, abort
+  if (seq !== _renderSeq) return;
+
+  const renderItem = ({ entity, cfg, title, snippet }) => {
     const item = _makeResultItem({
       icon:       cfg?.icon || '📎',
       title,
@@ -372,6 +480,36 @@ async function _renderSearchResults(query, seq) {
     });
     _results.appendChild(item.el);
     _currentItems.push(item);
+  };
+
+  const onlyOneClusterNoUngrouped =
+    clusters.length === 1 && ungrouped.length === 0;
+
+  if (clusters.length === 0 || onlyOneClusterNoUngrouped) {
+    // Flat — no clustering headers
+    const section = _makeSection(`${ranked.length} result${ranked.length === 1 ? '' : 's'}`);
+    _results.appendChild(section.header);
+    for (const r of ranked) renderItem(r);
+    return;
+  }
+
+  // Grouped — render clusters with topic headers
+  for (const { label, items } of clusters) {
+    const hdr = document.createElement('div');
+    hdr.className = 'search-cluster-header';
+    hdr.textContent = label;
+    hdr.style.cssText = 'font-size:10px;font-weight:700;text-transform:uppercase;' +
+      'letter-spacing:.08em;color:var(--color-text-muted);padding:10px 16px 4px;' +
+      'border-top:1px solid var(--color-border);';
+    _results.appendChild(hdr);
+    for (const r of items) renderItem(r);
+  }
+
+  // Ungrouped results flat below clusters
+  if (ungrouped.length) {
+    const section = _makeSection(`${ungrouped.length} other`);
+    _results.appendChild(section.header);
+    for (const r of ungrouped) renderItem(r);
   }
 }
 

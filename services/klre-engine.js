@@ -10,7 +10,6 @@ import {
   getEntity, getEntitiesByType, saveEdge, getEdgesFrom, getEdge,
   getKlreSuggestions, saveKlreSuggestions,
   logKlreAccess, isDismissed, setDismissed,
-  deleteEntity,  // used for ENTITY_DELETED cleanup
 } from '../core/db.js';
 
 import {
@@ -42,6 +41,18 @@ const HEALTH_TAGS  = new Set(['health', 'medical', 'doctor', 'hospital', 'dentis
 
 // Suggestion cache max-age
 const CACHE_MAX_AGE_MS = 900000;  // 15 minutes — reduces stale suggestion risk
+
+// ── In-memory settings cache (B12/B13) ───────────────────────── //
+// klre_enabled and klre_min_score only change on user action in Settings.
+// Caching avoids 2 IDB reads on every getSuggestions call.
+let _cachedEnabled  = null;   // null = not loaded yet; false/true = loaded
+let _cachedMinScore = null;   // null = use default 0.10
+
+/** Invalidate the settings cache (call when user changes KLRE settings) */
+export function invalidateSettingsCache() {
+  _cachedEnabled  = null;
+  _cachedMinScore = null;
+}
 
 // ── Public: init ──────────────────────────────────────────── //
 
@@ -76,8 +87,17 @@ export async function initKLRE() {
     on(EVENTS.ENTITY_SAVED, async (entity) => {
       if (!entity || !entity.id) return;
       try {
-        // STEP 0 — Invalidate in-memory pulse cache (entity change may affect pulse)
-        invalidatePulseCache();
+        // STEP 0 — Invalidate pulse cache only for entities that could affect pulse items.
+        // B11 fix: Don't blanket-invalidate on every save — only when entity is
+        // recent (could become a date-adjacent or tag-activated item), has tags,
+        // or is a task. This prevents constant cache destruction during batch saves.
+        const _shouldInvalidatePulse =
+          entity.type === 'task' ||
+          entity.type === 'event' ||
+          entity.type === 'appointment' ||
+          (Array.isArray(entity.tags) && entity.tags.length > 0) ||
+          (entity.date || entity.dueDate || entity.executionDate);
+        if (_shouldInvalidatePulse) invalidatePulseCache();
 
         // STEP 1 — Clear focal entity cache
         await saveKlreSuggestions({ entityId: entity.id, suggestions: [], updatedAt: null });
@@ -124,20 +144,14 @@ export async function initKLRE() {
       }
     });
 
-    // On hard delete: remove entity from KLRE index and caches
+    // On hard delete: clear deleted entity's cache; set global dirty flag so all
+    // other entity caches that might have mentioned this entity recompute fresh.
     on(EVENTS.ENTITY_DELETED, async ({ id: deletedId } = {}) => {
       if (!deletedId) return;
       try {
-        // Wipe the deleted entity's own index and suggestion cache
-        await Promise.all([
-          (async () => { try { const db = await import('../core/db.js').then(m => m._getDB?.() ); } catch {} })(),
-        ]);
-        // Simpler: just clear the caches — klre_index entry will be skipped at compute time
-        // (candidateEntity.deleted check) once the entity record is deleted.
         await saveKlreSuggestions({ entityId: deletedId, suggestions: [], updatedAt: null });
-        // Invalidate all suggestion caches that mention the deleted entity
-        // by marking them as needing recompute (cheaper: set global dirty flag)
         _suggestionsGlobalDirtyAt = Date.now();
+        invalidatePulseCache();
       } catch (e) {
         console.warn('[KLRE] ENTITY_DELETED handler failed:', e);
       }
@@ -205,16 +219,21 @@ export async function getSuggestions(entityId, opts = {}) {
   // H2: Guard against null/undefined entityId
   if (!entityId || typeof entityId !== 'string') return [];
 
-  // S4: Batch both settings reads in parallel (saves ~10ms per call)
-  const [enabled, storedMinScore] = await Promise.all([
-    getSetting('klre_enabled'),
-    getSetting('klre_min_score'),
-  ]);
-  if (enabled === false) return [];
+  // B12: Use in-memory cached settings — fall back to IDB only on cache miss.
+  // Cache is invalidated when user changes settings (invalidateSettingsCache()).
+  if (_cachedEnabled === null || _cachedMinScore === null) {
+    const [en, ms] = await Promise.all([
+      getSetting('klre_enabled'),
+      getSetting('klre_min_score'),
+    ]);
+    _cachedEnabled  = en !== false; // treat null as enabled (default true)
+    _cachedMinScore = typeof ms === 'number' ? ms : 0.10;
+  }
+  if (!_cachedEnabled) return [];
 
   const maxResults       = opts.maxResults      ?? 8;
   const includeConfirmed = opts.includeConfirmed ?? true;
-  const minScore         = opts.minScore        ?? storedMinScore ?? 0.10;
+  const minScore         = opts.minScore        ?? _cachedMinScore;
   const typeFilter       = opts.typeFilter      ?? null;
 
   // A) Load focal entity
@@ -238,9 +257,13 @@ export async function getSuggestions(entityId, opts = {}) {
       .filter(s => s.score >= minScore)
       .filter(s => !typeFilter || typeFilter.includes(s.candidateType));
   } else {
-    // C) Compute suggestions
-    suggestions = await _computeSuggestions(entityId, focalEntity, minScore);
-    // Apply typeFilter to saved list too (but save the full list to cache)
+    // C) Compute suggestions.
+    // B03: Only write to cache when using standard minScore (not show-more's 0.05).
+    // Low-minScore results would pollute the cache with noisy suggestions.
+    const standardMinScore = _cachedMinScore; // the user's configured threshold
+    const shouldCache = !forceRecompute || (minScore >= standardMinScore);
+    suggestions = await _computeSuggestions(entityId, focalEntity, minScore, shouldCache);
+    // Apply typeFilter after compute (saved list is unfiltered)
     if (typeFilter) {
       suggestions = suggestions.filter(s => typeFilter.includes(s.candidateType));
     }
@@ -270,7 +293,7 @@ export async function getSuggestions(entityId, opts = {}) {
  * Compute suggestion scores for all candidate entities.
  * @private
  */
-async function _computeSuggestions(entityId, focalEntity, minScore) {
+async function _computeSuggestions(entityId, focalEntity, minScore, writeCache = true) {
   const focalIndexEntry = await getIndexEntry(entityId);
   const rawNeighborsA   = await getNeighbors(entityId);
 
@@ -286,12 +309,16 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
     entityType: focalTypeMap.get(n.entityId) ?? 'unknown',
   }));
 
-  // Create enriched focal for S6
-  const enrichedFocal = { ...focalEntity, searchBlob: focalIndexEntry?.searchBlob ?? '' };
+  // B26: Pass searchBlob directly rather than spreading the entire entity object.
+  const focalSearchBlob = focalIndexEntry?.searchBlob ?? '';
 
-  // Load all candidate entities across all types
+  // Load all candidate entities across all types — filter deleted upfront (B17).
+  // This avoids calling getIndexEntry, isDismissed, getNeighbors for deleted entities
+  // which are skipped in the loop anyway. Saves significant IDB reads for large archives.
   const typeKeys    = getAllEntityTypes().map(t => t.key);
-  const allEntities = (await Promise.all(typeKeys.map(k => getEntitiesByType(k)))).flat();
+  const allEntities = (await Promise.all(typeKeys.map(k => getEntitiesByType(k))))
+    .flat()
+    .filter(e => !e.deleted && e.type !== 'taskInstance');
 
   // ── Performance: batch pre-load ALL per-candidate data before the loop ──
   // Three parallel batches eliminate N sequential IDB reads from the loop body:
@@ -300,24 +327,39 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
   //   3. Neighbor lists (for S2 shared person, S3 shared project)
   // Also build an entityType map from allEntities so neighbor enrichment
   // needs no additional getEntity() calls inside the loop.
-  const [allIndexEntries, allDismissed, allNeighborResults] = await Promise.all([
-    Promise.all(allEntities.map(e => getIndexEntry(e.id))),
-    Promise.all(allEntities.map(e => isDismissed(entityId, e.id))),
-    Promise.all(allEntities.map(e => getNeighbors(e.id))),
+  // B22: Exclude focal entity from pre-loads (it's always skipped in the loop).
+  // This eliminates 3 wasted IDB reads per getSuggestions call.
+  const candidateEntities = allEntities.filter(e => e.id !== entityId);
+
+  // B12: Chunk getNeighbors into batches of 100 to prevent IDB saturation.
+  // getIndexEntry and isDismissed are lighter (index lookup), so those stay parallel.
+  const neighborChunkSize = 100;
+  const allNeighborResultsFlat = [];
+  for (let i = 0; i < candidateEntities.length; i += neighborChunkSize) {
+    const chunk = candidateEntities.slice(i, i + neighborChunkSize);
+    const chunkResults = await Promise.all(chunk.map(e => getNeighbors(e.id)));
+    allNeighborResultsFlat.push(...chunkResults);
+  }
+
+  const [allIndexEntries, allDismissed] = await Promise.all([
+    Promise.all(candidateEntities.map(e => getIndexEntry(e.id))),
+    Promise.all(candidateEntities.map(e => isDismissed(entityId, e.id))),
   ]);
-  const indexMap      = new Map(allEntities.map((e, i) => [e.id, allIndexEntries[i]]));
-  const dismissedSet  = new Set(allEntities.filter((e, i) => allDismissed[i]).map(e => e.id));
-  const neighborsMapB = new Map(allEntities.map((e, i) => [e.id, allNeighborResults[i] || []]));
-  // entityType lookup from already-loaded allEntities — eliminates getEntity() in loop
-  const entityTypeById = new Map(allEntities.map(e => [e.id, e.type]));
+  const allNeighborResults = allNeighborResultsFlat;
+  const indexMap      = new Map(candidateEntities.map((e, i) => [e.id, allIndexEntries[i]]));
+  const dismissedSet  = new Set(candidateEntities.filter((e, i) => allDismissed[i]).map(e => e.id));
+  const neighborsMapB = new Map(candidateEntities.map((e, i) => [e.id, allNeighborResults[i] || []]));
+  // entityType lookup — includes both candidates and focal entity's neighbors
+  const entityTypeById = new Map(candidateEntities.map(e => [e.id, e.type]));
+
+  // B09: Pre-compute focal entity's access window entries once before the candidate loop.
+  // Without this, _accessWindow.filter runs O(N) for EVERY candidate — wasteful.
+  const _accessesA_precomputed = _accessWindow.filter(a => a.entityId === entityId);
 
   const computed = [];
 
-  for (const candidateEntity of allEntities) {
-    // Skip self, deleted, taskInstance type
-    if (candidateEntity.id === entityId) continue;
-    if (candidateEntity.deleted) continue;
-    if (candidateEntity.type === 'taskInstance') continue;
+  for (const candidateEntity of candidateEntities) {
+    // candidateEntities is already filtered: no self, no deleted, no taskInstance
     // Skip dismissed pairs (pre-loaded above — no per-candidate await)
     if (dismissedSet.has(candidateEntity.id)) continue;
 
@@ -331,14 +373,14 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
       entityType: entityTypeById.get(n.entityId) ?? 'unknown',
     }));
 
-    // Enriched candidate for S6
-    const enrichedCandidate = { ...candidateEntity, searchBlob: candidateIndexEntry.searchBlob ?? '' };
+    // B26: Use searchBlob directly — avoids copying entire entity object for S6.
+    const candidateSearchBlob = candidateIndexEntry.searchBlob ?? '';
 
-    // Co-access: count sessions where both entities were opened within 30 min of each other
+    // Co-access: count sessions where both entities were opened within 30 min.
+    // accessesA is pre-computed BEFORE this loop (see below) — O(1) lookup here.
     let coCount = 0;
-    const accessesA = _accessWindow.filter(a => a.entityId === entityId);
     const accessesB = _accessWindow.filter(a => a.entityId === candidateEntity.id);
-    for (const a of accessesA) {
+    for (const a of _accessesA_precomputed) {
       for (const b of accessesB) {
         if (Math.abs(a.ts - b.ts) < 1800000) { coCount++; break; }
       }
@@ -361,7 +403,10 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
         _totalEntityCount || 1
       ),
       s5: Signals.computeS5_temporalDecay(focalEntity.createdAt, candidateEntity.createdAt),
-      s6: Signals.computeS6_urlDomain(enrichedFocal, enrichedCandidate),
+      s6: Signals.computeS6_urlDomain(
+        { ...focalEntity, searchBlob: focalSearchBlob },
+        { ...candidateEntity, searchBlob: candidateSearchBlob }
+      ),
       s7: Signals.computeS7_coAccess(coCount),
     };
 
@@ -393,11 +438,14 @@ async function _computeSuggestions(entityId, focalEntity, minScore) {
   computed.sort((a, b) => b.score - a.score);
   const top20 = computed.slice(0, 20);
 
-  await saveKlreSuggestions({
-    entityId,
-    suggestions: top20,
-    updatedAt:   new Date().toISOString(),
-  });
+  // Only write to cache when appropriate (B03: skip for show-more low-threshold calls)
+  if (writeCache) {
+    await saveKlreSuggestions({
+      entityId,
+      suggestions: top20,
+      updatedAt:   new Date().toISOString(),
+    });
+  }
 
   return top20;
 }
@@ -497,8 +545,13 @@ export async function confirmSuggestion(fromId, toId) {
     metadata: { klre: true, confirmedAt: new Date().toISOString() },
   }, _account?.id);
 
-  // Invalidate cache so the confirmed item moves to the Linked section on next load
-  await saveKlreSuggestions({ entityId: fromId, suggestions: [], updatedAt: null });
+  // Invalidate BOTH entities' caches (B07 fix):
+  // fromId: confirmed item moves to Linked on next load
+  // toId:   may still show fromId in Suggested until recomputed
+  await Promise.all([
+    saveKlreSuggestions({ entityId: fromId, suggestions: [], updatedAt: null }),
+    saveKlreSuggestions({ entityId: toId,   suggestions: [], updatedAt: null }),
+  ]);
 
   // Emit with signals payload so _onConfirm can update weights
   emit(EVENTS.KLRE_SUGGESTION_CONFIRMED, { fromId, toId, signals });
@@ -541,7 +594,8 @@ function _onConfirm(fromId, toId, signals) {
       _learnedWeights[wKey] = Math.min(1.4, (_learnedWeights[wKey] || 1) + 0.05);
     }
   }
-  setSetting('klre_weights', _learnedWeights); // fire and forget
+  setSetting('klre_weights', _learnedWeights);
+  _writeWeeklySnapshot(); // P4-2: write snapshot if first save this week
 }
 
 /**
@@ -557,6 +611,23 @@ function _onDismiss(fromId, toId, signals) {
     }
   }
   setSetting('klre_weights', _learnedWeights);
+  _writeWeeklySnapshot(); // P4-2: write snapshot if first save this week
+}
+
+/** Write weekly weight snapshot (once per week, used for drift calculation) */
+function _writeWeeklySnapshot() {
+  try {
+    const d          = new Date();
+    const startOfYear = new Date(d.getFullYear(), 0, 1);
+    const weekNum    = Math.ceil(((d - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+    const weekKey    = `klre_weights_snapshot_${d.getFullYear()}-W${String(weekNum).padStart(2,'0')}`;
+    // Only write if no snapshot exists for this week yet
+    getSetting(weekKey).then(existing => {
+      if (existing == null) {
+        setSetting(weekKey, JSON.stringify(_learnedWeights));
+      }
+    }).catch(() => {});
+  } catch { /* non-fatal */ }
 }
 
 // ── Public: status / weights ──────────────────────────────── //
@@ -566,12 +637,44 @@ function _onDismiss(fromId, toId, signals) {
  * @returns {Object}
  */
 export function getIndexStatus() {
+  // P4-2: Compute weight drift against this week's snapshot (synchronous snapshot from cache)
+  const weightDrift = null; // Populated async — callers use getIndexStatusAsync for full data
+
   return {
     built:         _totalEntityCount > 0,
     entityCount:   _totalEntityCount,
     lastBuilt:     _lastBuiltAt,
     weightProfile: { ..._learnedWeights },
+    weightDrift,   // null on sync call; use getIndexStatusAsync() for drift
   };
+}
+
+/**
+ * Async version of getIndexStatus that includes totalConfirmed, totalDismissed, weightDrift.
+ * Use this in the settings panel for full metrics.
+ */
+export async function getIndexStatusAsync() {
+  // Basic sync stats
+  const base = getIndexStatus();
+
+  // Weight drift against this week's snapshot
+  let weightDrift = null;
+  try {
+    const d          = new Date();
+    const startOfYear = new Date(d.getFullYear(), 0, 1);
+    const weekNum    = Math.ceil(((d - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+    const weekKey    = `klre_weights_snapshot_${d.getFullYear()}-W${String(weekNum).padStart(2,'0')}`;
+    const snapshot   = await getSetting(weekKey);
+    if (snapshot) {
+      const snap = typeof snapshot === 'string' ? JSON.parse(snapshot) : snapshot;
+      weightDrift = {};
+      for (const k of Object.keys(_learnedWeights)) {
+        weightDrift[k] = parseFloat((_learnedWeights[k] - (snap[k] || 1)).toFixed(3));
+      }
+    }
+  } catch { weightDrift = null; }
+
+  return { ...base, weightDrift };
 }
 
 /**

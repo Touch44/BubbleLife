@@ -9,6 +9,9 @@ import { exportAll, importAll, getStorageUsage, getSetting, setSetting } from '.
 import { getAccount, getAllAccounts, generateInvite } from '../core/auth.js';
 import { startTour } from '../core/tour.js';
 import { FONT_OPTIONS } from '../services/theme.js';
+import { getIndexStatus, resetLearnedWeights, invalidateSettingsCache } from '../services/klre-engine.js'; // [KLRE v6.7.0]
+import { buildFullIndex }                      from '../services/klre-index.js';   // [KLRE v6.7.0]
+import { on, off, EVENTS }                     from '../core/events.js';            // [KLRE v6.7.0]
 
 // ── Inject CSS once ────────────────────────────────────────────
 (function _injectStyles() {
@@ -595,12 +598,96 @@ async function renderSettings() {
       <div id="settings-data-status" style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-2);display:none;"></div>
     </div>
 
+    <!-- ─────────── KNOWLEDGE ENGINE (KLRE) ──────────────── -->
+    <div class="stab-panel${savedTab === 'klre' ? ' active' : ''}" id="stab-klre">
+      <div class="srow">
+        <div>
+          <div class="srow-label">Index Status</div>
+          <div class="srow-hint" id="klre-index-status">Loading…</div>
+        </div>
+        <div class="srow-ctrl">
+          <button id="klre-rebuild-btn" class="btn btn-sm">🔄 Rebuild index</button>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Enable knowledge suggestions</div>
+          <div class="srow-hint">Surfaces related items across tasks, notes, events and more</div>
+        </div>
+        <div class="srow-ctrl">
+          <label class="toggle"><input type="checkbox" id="klre-toggle-enabled"><span class="toggle-track"></span></label>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Show related items in entity panel</div>
+          <div class="srow-hint">Displays the Related ✦ tab when editing any entity</div>
+        </div>
+        <div class="srow-ctrl">
+          <label class="toggle"><input type="checkbox" id="klre-toggle-panel"><span class="toggle-track"></span></label>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Knowledge Pulse dashboard widget</div>
+          <div class="srow-hint">Shows proactively resurfaced content on the Dashboard</div>
+        </div>
+        <div class="srow-ctrl">
+          <label class="toggle"><input type="checkbox" id="klre-toggle-pulse"><span class="toggle-track"></span></label>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Context panel in Daily Review</div>
+          <div class="srow-hint">Shows items related to today's events above the task list</div>
+        </div>
+        <div class="srow-ctrl">
+          <label class="toggle"><input type="checkbox" id="klre-toggle-daily"><span class="toggle-track"></span></label>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Suggestion sensitivity</div>
+          <div class="srow-hint">Lower = more suggestions, possibly noisier · Higher = fewer, more confident</div>
+        </div>
+        <div class="srow-ctrl" style="flex-direction:column;align-items:flex-end;gap:2px;">
+          <input type="range" id="klre-sensitivity" min="0.10" max="0.50" step="0.01" style="width:120px;">
+          <span id="klre-sensitivity-val" style="font-size:var(--text-xs);color:var(--color-text-muted);">18%</span>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Track access patterns to improve suggestions</div>
+          <div class="srow-hint">Data stays on this device only, never synced</div>
+        </div>
+        <div class="srow-ctrl">
+          <label class="toggle"><input type="checkbox" id="klre-toggle-tracking"><span class="toggle-track"></span></label>
+        </div>
+      </div>
+
+      <div class="srow">
+        <div>
+          <div class="srow-label">Learned preferences</div>
+          <div class="srow-hint" id="klre-weights-status">Weight profile loads on tab open</div>
+        </div>
+        <div class="srow-ctrl">
+          <button id="klre-reset-weights-btn" class="btn btn-sm btn-danger-ghost">Reset weights</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ─────────── ABOUT ──────────────────────────────────── -->
     <div class="stab-panel${savedTab === 'about' ? ' active' : ''}" id="stab-about">
       <div class="srow">
         <div>
           <div class="srow-label">Version</div>
-          <div class="srow-hint">FamilyHub v6.6.6 — Multi-context family management PWA</div>
+          <div class="srow-hint">FamilyHub v6.9.0 — Multi-context family management PWA</div>
         </div>
       </div>
       <div class="srow">
@@ -1011,6 +1098,133 @@ async function renderSettings() {
   el.querySelector('#settings-tour-btn')?.addEventListener('click', () => {
     startTour('onboarding', window._fhEnv, true);
   });
+
+  // ── KLRE Settings Wiring [v6.7.0] ──────────────────────────
+  // B10: Pre-set toggles to defaults immediately (all true) before async IDB reads.
+  // This prevents the visual flicker of unchecked → checked.
+  ['klre-toggle-enabled','klre-toggle-panel','klre-toggle-pulse',
+   'klre-toggle-daily','klre-toggle-tracking'].forEach(id => {
+    const el2 = el.querySelector('#' + id);
+    if (el2) el2.checked = true; // all defaults are true — IDB read may update
+  });
+  _wireKlreSettings(el); // async — updates from IDB if stored values differ
+}
+
+/** Wire all KLRE settings controls asynchronously */
+async function _wireKlreSettings(el) {
+  // Helper: get element safely
+  const $  = id => el.querySelector('#' + id);
+
+  // ── Index status ───────────────────────────────────────────
+  // B21: Call getIndexStatus once and share the result
+  const status = getIndexStatus();
+
+  const statusEl = $('klre-index-status');
+  if (statusEl) {
+    if (status.built) {
+      const relTime = status.lastBuilt
+        ? _klreRelativeTime(new Date(status.lastBuilt))
+        : 'unknown';
+      statusEl.textContent = `${status.entityCount} entities indexed · Last built: ${relTime}`;
+    } else {
+      statusEl.textContent = 'Not yet built — open any entity's Related tab to trigger';
+    }
+  }
+
+  // ── Weight profile ─────────────────────────────────────────
+  const weightsEl = $('klre-weights-status');
+  if (weightsEl) {
+    // status already loaded above
+    if (status.weightProfile) {
+      const avg = Object.values(status.weightProfile).reduce((a,b) => a+b, 0) /
+        Object.values(status.weightProfile).length;
+      weightsEl.textContent =
+        `Avg weight: ${avg.toFixed(2)} · Adapts as you confirm/dismiss suggestions`;
+    }
+  }
+
+  // ── Toggles ─────────────────────────────────────────────────
+  const toggles = [
+    ['klre-toggle-enabled',  'klre_enabled',          true],
+    ['klre-toggle-panel',    'klre_panel_enabled',    true],
+    ['klre-toggle-pulse',    'klre_pulse_enabled',    true],
+    ['klre-toggle-daily',    'klre_daily_enabled',    true],
+    ['klre-toggle-tracking', 'klre_tracking_enabled', true],
+  ];
+  for (const [elId, key, defaultVal] of toggles) {
+    const toggle = $(elId);
+    if (!toggle) continue;
+    const val = await getSetting(key);
+    toggle.checked = val !== false;  // default true
+    toggle.addEventListener('change', () => { setSetting(key, toggle.checked); invalidateSettingsCache(); });
+  }
+
+  // ── Sensitivity slider ─────────────────────────────────────
+  const slider   = $('klre-sensitivity');
+  const sliderLbl = $('klre-sensitivity-val');
+  if (slider && sliderLbl) {
+    const stored = await getSetting('klre_min_score');
+    const current = typeof stored === 'number' ? stored : 0.10;
+    slider.value = current;
+    sliderLbl.textContent = Math.round(current * 100) + '%';
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      sliderLbl.textContent = Math.round(v * 100) + '%';
+      setSetting('klre_min_score', v); invalidateSettingsCache();
+    });
+  }
+
+  // ── Reset weights button ───────────────────────────────────
+  const resetBtn = $('klre-reset-weights-btn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      if (!confirm('Reset all learned weight preferences to defaults? This cannot be undone.')) return;
+      resetLearnedWeights();
+      if (weightsEl) weightsEl.textContent = 'Weights reset to defaults (all 1.0)';
+    });
+  }
+
+  // ── B24: Auto-update index status when index completes (handles navigate-then-build) ──
+  const _onIndexReady = ({ count }) => {
+    if (statusEl) statusEl.textContent = `${count} entities indexed · Just built`;
+  };
+  on(EVENTS.KLRE_INDEX_READY, _onIndexReady);
+  // Unregister when settings is navigated away from
+  on(EVENTS.VIEW_CHANGED, () => { off(EVENTS.KLRE_INDEX_READY, _onIndexReady); }, { once: true });
+
+  // ── Rebuild index button ────────────────────────────────────
+  const rebuildBtn = $('klre-rebuild-btn');
+  if (rebuildBtn) {
+    rebuildBtn.addEventListener('click', () => {
+      rebuildBtn.textContent = 'Rebuilding…';
+      rebuildBtn.disabled = true;
+      // Non-blocking — buildFullIndex runs in background / worker
+      buildFullIndex().catch(e => {
+        console.warn('[settings] rebuild failed:', e);
+        rebuildBtn.textContent = 'Rebuild failed — try again';
+        rebuildBtn.disabled = false;
+      });
+      // One-time listener: use on()+off() since on() has no return value
+      const handler = ({ count }) => {
+        off(EVENTS.KLRE_INDEX_READY, handler); // unsubscribe immediately
+        rebuildBtn.textContent = `Done — ${count} entities indexed`;
+        rebuildBtn.disabled = false;
+        if (statusEl) statusEl.textContent =
+          `${count} entities indexed · Just rebuilt`;
+      };
+      on(EVENTS.KLRE_INDEX_READY, handler);
+    });
+  }
+}
+
+/** Format a date as relative time for KLRE settings status display */
+function _klreRelativeTime(date) {
+  const mins = Math.round((Date.now() - date.getTime()) / 60000);
+  if (mins < 1)   return 'just now';
+  if (mins < 60)  return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
 // ── Registration ───────────────────────────────────────────────

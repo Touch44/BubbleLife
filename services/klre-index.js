@@ -11,6 +11,10 @@ import { emit, EVENTS } from '../core/events.js';
 import { STOP_WORDS } from './klre-signals.js';
 
 // ── Constants ─────────────────────────────────────────────── //
+// ── Worker support (P4-3) ─────────────────────────────────── //
+const _workerSupported = typeof Worker !== 'undefined';
+let _worker = null;
+
 const NAMED_ENTITY_BOOST = 3.0;
 const MIN_TERM_LENGTH    = 3;
 const CORPUS_CACHE_TTL   = 3600000; // 1 hour in ms
@@ -49,8 +53,17 @@ function _tokenise(text) {
  * @param {Object} entity
  * @returns {string}
  */
+// B27: Cache entity type configs per type — avoids repeated lookups during corpus build
+const _typeConfigCache = new Map();
+function _getTypeConfig(type) {
+  if (!_typeConfigCache.has(type)) {
+    _typeConfigCache.set(type, getEntityTypeConfig(type));
+  }
+  return _typeConfigCache.get(type);
+}
+
 function _buildEntityText(entity) {
-  const cfg    = getEntityTypeConfig(entity.type);
+  const cfg    = _getTypeConfig(entity.type);
   const fields = cfg?.fields ?? [];
   const fieldMap = new Map(fields.map(f => [f.key, f]));
 
@@ -174,24 +187,24 @@ async function _buildEntityIndex(entity, corpusStats, titleSet) {
  * Emits EVENTS.KLRE_INDEX_READY when done.
  * @returns {Promise<number>} count of indexed entities
  */
-export async function buildFullIndex() {
+async function _buildFullIndexMainThread() {
   // Load all entity types using getAllEntityTypes()
   const typeKeys    = getAllEntityTypes().map(t => t.key);
   const allEntities = (
     await Promise.all(typeKeys.map(k => getEntitiesByType(k)))
   ).flat().filter(e => !e.deleted);
 
-  // Build and cache corpus stats
+  // Build and cache corpus stats + titleSet for incremental updates (B23)
   _corpusStats     = buildCorpusStats(allEntities);
   _corpusCacheTime = Date.now();
 
-  // Build title set for named entity boost
-  // Each entity type may use different title fields
   const titleSet = new Set(
     allEntities
       .map(e => (e.name || e.title || e.text || e.subject || '').toLowerCase())
       .filter(Boolean)
   );
+  // Attach titleSet to corpus cache for use by incremental updateEntityIndex calls
+  _corpusStats._titleSet = titleSet;
 
   // S6: Index entities in chunks of 50 (prevents IDB transaction saturation).
   // Sequential chunks avoid overwhelming the IDB write queue for large datasets.
@@ -214,6 +227,53 @@ export async function buildFullIndex() {
   return allEntities.length;
 }
 
+// ── Public: full index build (Worker wrapper) [P4-3] ─────────── //
+
+/**
+ * Build the complete KLRE index.
+ * Uses a Web Worker when available to avoid blocking the main thread.
+ * Falls back to _buildFullIndexMainThread() on Worker failure.
+ */
+export async function buildFullIndex() {
+  // Terminate any existing worker (handles re-build from settings panel)
+  if (_worker) { _worker.terminate(); _worker = null; }
+
+  if (_workerSupported) {
+    try {
+      _worker = new Worker('./services/klre-worker.js');
+      return new Promise((resolve) => {
+        _worker.onmessage = (e) => {
+          const data = e.data;
+          if (data.type === 'INDEX_COMPLETE') {
+            emit(EVENTS.KLRE_INDEX_READY, {
+              count: data.count,
+              tagFrequencyMap: data.tagFrequencyMap || {},
+            });
+            _worker = null;
+            resolve(data.count);
+          } else if (data.type === 'INDEX_ERROR') {
+            console.warn('[KLRE worker] error, falling back:', data.error);
+            _worker = null;
+            _buildFullIndexMainThread().then(resolve).catch(() => resolve(0));
+          }
+        };
+        _worker.onerror = (err) => {
+          console.warn('[KLRE worker] crashed, falling back:', err);
+          _worker = null;
+          _buildFullIndexMainThread().then(resolve).catch(() => resolve(0));
+        };
+        _worker.postMessage({ type: 'BUILD_INDEX' });
+      });
+    } catch (err) {
+      console.warn('[KLRE worker] could not create worker, falling back:', err);
+      _worker = null;
+    }
+  }
+
+  // Main-thread fallback
+  return _buildFullIndexMainThread();
+}
+
 // ── Public: single entity update ─────────────────────────── //
 
 /**
@@ -224,7 +284,14 @@ export async function buildFullIndex() {
 export async function updateEntityIndex(entity) {
   if (!entity || !entity.id) return;
 
-  // Use cached corpus or rebuild if stale
+  // B05: Only emit KLRE_INDEX_UPDATED AFTER the worker finishes writing to IDB.
+  // Emitting before the worker completes causes panel refresh to read the old index entry.
+  // Solution: route single-entity updates through main thread when worker is busy.
+  // The worker is used for FULL index builds (which are infrequent).
+  // For incremental per-entity updates, always use the main thread corpus cache path.
+  // This avoids the timing race while still keeping full builds off-main-thread.
+
+  // Main-thread fallback: use cached corpus
   if (!_corpusStats || (Date.now() - _corpusCacheTime) > CORPUS_CACHE_TTL) {
     const typeKeys    = getAllEntityTypes().map(t => t.key);
     const allEntities = (
@@ -234,8 +301,8 @@ export async function updateEntityIndex(entity) {
     _corpusCacheTime = Date.now();
   }
 
-  // Title set is minimal for single-entity update (no full entity list available cheaply)
-  const titleSet = new Set();
+  // B23: Use titleSet cached in corpus stats — names of all known entities
+  const titleSet = _corpusStats?._titleSet ?? new Set();
   await _buildEntityIndex(entity, _corpusStats, titleSet);
   emit(EVENTS.KLRE_INDEX_UPDATED, { entityId: entity.id });
 }

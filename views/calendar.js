@@ -32,6 +32,7 @@ import { getAccount }                from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                     from '../core/toast.js';
 import { nextDate }                  from '../services/rrule-lite.js'; // [v5.5.0] virtual occurrence synthesis
+import { renderRelatedPanel }       from '../components/related-panel.js'; // [KLRE v6.7.0]
 
 // ── Constants ─────────────────────────────────────────────── //
 // Module-level edge map for task assignee resolution (set during render from _loadData)
@@ -1178,6 +1179,27 @@ function _showDayPopover(anchorEl, dateObj, dateStr, items, personMap = new Map(
     }
   }
   popover.appendChild(list);
+
+  // [KLRE v6.7.0] Show related items for the first event/appointment in the day popover
+  // This is the "event detail" context — links from the event to related content
+  const eventItems = items.filter(i =>
+    (i.entityType === 'event' || i.entityType === 'appointment') && !i.entity._virtual && i.entity.id
+  );
+  if (eventItems.length === 1) {
+    // B18: Check if popover is still in DOM before rendering into it.
+    // _closePopover() removes the popover; if it fires before getEntity resolves,
+    // relEl is a detached node and renderRelatedPanel wastes a full computation.
+    const relEl = document.createElement('div');
+    relEl.style.cssText = 'padding:0 12px 8px;';
+    popover.appendChild(relEl);
+    const eventId = eventItems[0].entity.id;
+    getEntity(eventId).then(evt => {
+      // Guard: verify popover and relEl are still attached to the live document
+      if (evt && !evt.deleted && relEl.isConnected) {
+        renderRelatedPanel(relEl, evt.id);
+      }
+    }).catch(() => {});
+  }
 
   // ── Quick-create input (P-09: click-to-create) ─────────── //
   const quickCreate = document.createElement('div');

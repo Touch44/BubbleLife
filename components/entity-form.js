@@ -20,7 +20,8 @@ import { getAccount }                                          from '../core/aut
 import { getActiveContext, ALWAYS_SHARED_TYPES }               from '../core/context.js';
 import { presetToRrule, rruleToHuman, nextNDates }
   from '../services/rrule-lite.js';
-import { renderRelatedPanel } from './related-panel.js'; // [KLRE v6.6.2] // [v5.3.1]
+import { renderRelatedPanel } from './related-panel.js'; // [KLRE v6.6.2]
+import { getSuggestions }   from '../services/klre-engine.js'; // [KLRE P4-1: relation pre-rank] // [v5.3.1]
 
 // ── Module-level state ────────────────────────────────────── //
 
@@ -2553,33 +2554,77 @@ function _buildRelationControl(field, config) {
     }
     createBtn.style.display = 'none';
 
-    results.style.display = 'block';
-    for (const candidate of filtered) {
-      const cfg    = getEntityTypeConfig(candidate.type);
-      const title  = _getDisplayTitle(candidate);
+    // [P4-1] Render candidates immediately (don't block on KLRE)
+    const _renderCandidates = (sortedCandidates, klreIds) => {
+      results.innerHTML = '';
+      results.style.display = 'block';
+      for (const candidate of sortedCandidates) {
+        const cfg    = getEntityTypeConfig(candidate.type);
+        const title  = _getDisplayTitle(candidate);
+        const isKlre = klreIds && klreIds.has(candidate.id);
 
-      const item = document.createElement('div');
-      item.style.cssText = `
-        display: flex; align-items: center; gap: var(--space-2);
-        padding: var(--space-2) var(--space-3); cursor: pointer;
-        font-size: var(--text-sm); transition: background var(--transition-fast);
-      `;
-      item.innerHTML = `<span>${cfg?.icon || '📎'}</span><span>${title}</span>`;
-      item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
-      item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
-      item.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        const arr = _relationValues.get(field.key) || [];
-        if (!arr.find(r => r.id === candidate.id)) {
-          arr.push({ id: candidate.id, label: title, type: candidate.type });
-          _relationValues.set(field.key, arr);
-        }
-        _renderChips();
-        searchInput.value = '';
-        results.style.display = 'none';
+        const item = document.createElement('div');
+        item.dataset.id = candidate.id; // P4-1: store id in data attribute
+        item.style.cssText = `
+          display: flex; align-items: center; gap: var(--space-2);
+          padding: var(--space-2) var(--space-3); cursor: pointer;
+          font-size: var(--text-sm); transition: background var(--transition-fast);
+        `;
+        const hint = isKlre
+          ? '<span style="color:var(--color-accent);font-size:11px;margin-right:4px;" title="Suggested by KLRE">✦</span>'
+          : '';
+        item.innerHTML = `<span>${cfg?.icon || '📎'}</span>${hint}<span>${_esc(title)}</span>`;
+        item.addEventListener('mouseenter', () => { item.style.background = 'var(--color-surface-2)'; });
+        item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          // P4-1: read from data-id not textContent (which may include ✦ prefix)
+          const candidateId = item.dataset.id || candidate.id;
+          const arr = _relationValues.get(field.key) || [];
+          if (!arr.find(r => r.id === candidateId)) {
+            arr.push({ id: candidateId, label: title, type: candidate.type });
+            _relationValues.set(field.key, arr);
+          }
+          _renderChips();
+          searchInput.value = '';
+          results.style.display = 'none';
+        });
+        results.appendChild(item);
+      }
+    };
+
+    // Render flat immediately (no KLRE delay)
+    _renderCandidates(filtered, null);
+
+    // P4-1: Only pre-rank when editing an existing entity (not new unsaved entity)
+    if (!_editEntity?.id) return;
+
+    // Race KLRE against 400ms timeout — re-sort if KLRE wins
+    const KLRE_TIMEOUT = new Promise(resolve => setTimeout(() => resolve(null), 400));
+    Promise.race([
+      getSuggestions(_editEntity.id, {
+        maxResults: 20,
+        includeConfirmed: false,
+        typeFilter: typeToSearch ? [typeToSearch] : null,
+      }).catch(() => null),
+      KLRE_TIMEOUT,
+    ]).then(klreSuggestions => {
+      if (!klreSuggestions || !klreSuggestions.length) return;
+      if (results.style.display === 'none') return; // dropdown closed
+
+      const klreSet   = new Set(klreSuggestions.map(s => s.candidateId));
+      const scoreMap  = new Map(klreSuggestions.map(s => [s.candidateId, s.score]));
+
+      // Re-sort: KLRE-suggested first (by score), rest alphabetically
+      const sorted = [...filtered].sort((a, b) => {
+        const aKlre = scoreMap.get(a.id) || 0;
+        const bKlre = scoreMap.get(b.id) || 0;
+        if (aKlre !== bKlre) return bKlre - aKlre;
+        return _getDisplayTitle(a).localeCompare(_getDisplayTitle(b));
       });
-      results.appendChild(item);
-    }
+
+      _renderCandidates(sorted, klreSet);
+    });
   };
 
   searchInput.addEventListener('input', () => _search(searchInput.value));

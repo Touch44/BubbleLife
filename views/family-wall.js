@@ -26,6 +26,7 @@ import { getAccount }                 from '../core/auth.js';
 import { filterByContext, getActiveContext } from '../core/context.js';
 import { toast }                      from '../core/toast.js';
 import { MILESTONE_TYPES as _ACTIVITY_MILESTONE_TYPES } from '../services/activity.js';
+import { renderRelatedPanel } from '../components/related-panel.js'; // [KLRE v6.7.0]
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -1110,6 +1111,40 @@ async function _buildCard(post, pm, apm) {
   });
   cf.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();cr.click();} });
   ci.append(cf,cr); thread.appendChild(ci); card.appendChild(thread);
+
+  // [KLRE v6.7.0] Related items on expanded posts — LAZY LOADED (B04/B25 fix)
+  // Without lazy loading, all 20+ posts on the wall fire getSuggestions simultaneously.
+  // Now we use IntersectionObserver to load only when the post scrolls into view.
+  if (post.type !== 'comment') {
+    const relContainer = document.createElement('div');
+    relContainer.style.cssText = 'margin-top:16px;padding-top:14px;border-top:1px solid var(--color-border);';
+    relContainer.dataset.postId = post.id; // mark for lazy loader
+    relContainer.dataset.klreLazy = '1';
+    card.appendChild(relContainer);
+
+    // Use IntersectionObserver for lazy loading; fall back to immediate load
+    if (typeof IntersectionObserver !== 'undefined') {
+      const observer = new IntersectionObserver((entries, obs) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.target.dataset.klreLazy === '1') {
+            entry.target.dataset.klreLazy = '0'; // mark as loading
+            obs.unobserve(entry.target);
+            // B25: renderRelatedPanel is async — errors caught internally
+            renderRelatedPanel(entry.target, post.id).catch(e =>
+              console.warn('[FW] related panel failed:', e)
+            );
+          }
+        }
+      }, { rootMargin: '200px 0px' }); // start loading 200px before visible
+      observer.observe(relContainer);
+    } else {
+      // Fallback: immediate load (no IntersectionObserver support)
+      renderRelatedPanel(relContainer, post.id).catch(e =>
+        console.warn('[FW] related panel failed:', e)
+      );
+    }
+  }
+
   return card;
 }
 

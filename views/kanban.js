@@ -24,6 +24,8 @@ import { computeOverlapMap, fmtOverlap }         from '../services/overlap-detec
 import { getFocusProjectId, getSequentialTaskState } from './projects.js';
 // openEditForm no longer called directly — all clicks route through PANEL_OPENED (form-first)
 import { getAccount }                            from '../core/auth.js';
+import { getSuggestions }                        from '../services/klre-engine.js'; // [KLRE v6.7.0]
+import { openPanel }                             from '../components/entity-panel.js'; // [KLRE v6.7.0]
 import { filterByContext, getActiveContext }      from '../core/context.js';
 // [fix] time-tracker loaded dynamically — kanban works even before file is deployed
 let getSession    = () => null;
@@ -1737,6 +1739,9 @@ function _buildCard(task) {
     on(TIMER_TICK,  (d) => { if (d.taskId === task.id) _refreshCardTimer(); }),
     on(TIMER_ALARM, (d) => { if (d.taskId === task.id) _refreshCardTimer(); })
   );
+
+  // [KLRE v6.7.0] Wire hover tooltip
+  _wireKlreTooltip(card, task.id);
 
   return card;
 }
@@ -3563,6 +3568,122 @@ window.addEventListener('fh:taskViewPrefChanged', (e) => {
   const { tabKey, viewMode } = e.detail || {};
   if (tabKey && viewMode) _defaultViewPerTab[tabKey] = viewMode;
 });
+
+// ── KLRE Kanban Tooltip [v6.7.0] ─────────────────────────────────
+// Module-level vars — never declared inside render loop
+let _klreTip = null;
+let _klreHoverTimer = null;
+
+/** Create or return the singleton KLRE tooltip element */
+function _initKlreTooltip() {
+  if (_klreTip) return _klreTip;
+
+  // Inject styles once
+  if (!document.getElementById('klre-kanban-tip-styles')) {
+    const st = document.createElement('style');
+    st.id = 'klre-kanban-tip-styles';
+    st.textContent = `
+      #klre-kanban-tooltip{position:fixed;z-index:9000;width:260px;
+        background:var(--color-bg-2);border:1px solid var(--color-border);
+        border-radius:10px;padding:10px 12px;pointer-events:none;opacity:0;
+        transition:opacity .15s;font-size:12px;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+      #klre-kanban-tooltip.visible{pointer-events:auto;opacity:1}
+      .klre-tooltip-title{font-size:11px;font-weight:700;text-transform:uppercase;
+        letter-spacing:.07em;color:var(--color-text-muted);margin-bottom:8px}
+      .klre-tooltip-item{display:flex;align-items:center;gap:8px;padding:5px 0;
+        border-bottom:1px solid var(--color-border);cursor:pointer}
+      .klre-tooltip-item:last-child{border-bottom:none}
+      .klre-tooltip-item:hover .klre-tip-title{color:var(--color-accent)}
+      .klre-tip-icon{font-size:14px;flex-shrink:0}
+      .klre-tip-title{font-size:12px;color:var(--color-text);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+    `;
+    document.head.appendChild(st);
+  }
+
+  _klreTip = document.createElement('div');
+  _klreTip.id = 'klre-kanban-tooltip';
+  document.body.appendChild(_klreTip);
+
+  // Close on outside click
+  document.addEventListener('click', e => {
+    if (_klreTip && !_klreTip.contains(e.target)) {
+      _klreTip.classList.remove('visible');
+    }
+  });
+
+  return _klreTip;
+}
+
+/**
+ * Wire KLRE hover tooltip onto a kanban task card.
+ * Called once per card during _buildCard.
+ * @param {HTMLElement} card
+ * @param {string} taskId
+ */
+function _wireKlreTooltip(card, taskId) {
+  if (!taskId) return;
+  const tip = _initKlreTooltip();
+
+  card.addEventListener('mouseenter', () => {
+    // Skip on mobile
+    if (window.innerWidth < 640) return;
+    clearTimeout(_klreHoverTimer);
+    _klreHoverTimer = setTimeout(async () => {
+      let suggestions;
+      try {
+        suggestions = await getSuggestions(taskId, { maxResults: 3, includeConfirmed: false });
+      } catch { return; }
+      if (!suggestions || suggestions.length === 0) return;
+
+      tip.innerHTML = '';
+      const title = document.createElement('div');
+      title.className = 'klre-tooltip-title';
+      title.textContent = '✦ Related';
+      tip.appendChild(title);
+
+      for (const s of suggestions) {
+        const row = document.createElement('div');
+        row.className = 'klre-tooltip-item';
+
+        const icon = document.createElement('span');
+        icon.className = 'klre-tip-icon';
+        icon.textContent = '📄';
+
+        const lbl = document.createElement('span');
+        lbl.className = 'klre-tip-title';
+        lbl.textContent = s.candidateTitle || '(untitled)';
+
+        row.appendChild(icon);
+        row.appendChild(lbl);
+        row.addEventListener('click', () => {
+          tip.classList.remove('visible');
+          openPanel(s.candidateId);
+        });
+        tip.appendChild(row);
+      }
+
+      // Position: prefer right of card, fall back to left
+      const r = card.getBoundingClientRect();
+      const left = (r.right + 270 < window.innerWidth) ? r.right + 8 : r.left - 270;
+      tip.style.left = Math.max(4, left) + 'px';
+      tip.style.top  = Math.max(4, r.top) + 'px';
+      tip.classList.add('visible');
+    }, 600);
+  });
+
+  card.addEventListener('mouseleave', () => {
+    clearTimeout(_klreHoverTimer);
+    setTimeout(() => {
+      if (tip && !tip.matches(':hover')) tip.classList.remove('visible');
+    }, 200);
+  });
+
+  card.addEventListener('dragstart', () => {
+    clearTimeout(_klreHoverTimer);
+    if (tip) tip.classList.remove('visible');
+  });
+}
 
 registerView('kanban', renderKanban);
 

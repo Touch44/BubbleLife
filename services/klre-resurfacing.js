@@ -155,11 +155,13 @@ export async function getPulseItems(maxItems = PULSE_MAX) {
     }
 
     // ── d) STALE_TASK ───────────────────────────────────────
+    // B02: Check both 'Completed' and 'Done' statuses (FamilyHub uses both)
+    // B14: Use updatedAt for staleness check — an entity updated recently isn't stale
     if (
       entity.type === 'task' &&
       entity.status !== 'Completed' &&
-      _daysSince(entity.createdAt) > 60 &&
-      _daysSince(entity.updatedAt) > 60
+      entity.status !== 'Done' &&
+      _daysSince(entity.updatedAt || entity.createdAt) > 60
     ) {
       if (0.5 > pulseScore) {
         pulseScore = 0.5;

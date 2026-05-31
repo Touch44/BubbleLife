@@ -98,9 +98,14 @@ export async function renderKnowledgePulse(containerEl) {
     items = await getPulseItems();
   } catch (e) {
     console.warn('[KLRE] Knowledge Pulse failed:', e);
-    containerEl.innerHTML = '<div class="klre-pulse-empty">Could not load pulse items.</div>';
+    if (containerEl.isConnected) {
+      containerEl.innerHTML = '<div class="klre-pulse-empty">Could not load pulse items.</div>';
+    }
     return;
   }
+
+  // B30: User may have navigated away while getPulseItems was computing
+  if (!containerEl.isConnected) return;
 
   containerEl.innerHTML = '';
 
@@ -138,7 +143,7 @@ export async function renderKnowledgePulse(containerEl) {
     reasonEl.textContent = item.reason || '';
 
     const badgeEl = document.createElement('span');
-    badgeEl.className = `klre-pulse-badge ${BADGE_CLASS[item.pulseType] || ''}`;
+    badgeEl.className = ('klre-pulse-badge ' + (BADGE_CLASS[item.pulseType] || '')).trim();
     badgeEl.textContent = BADGE_LABEL[item.pulseType] || '';
 
     bodyEl.appendChild(titleEl);
