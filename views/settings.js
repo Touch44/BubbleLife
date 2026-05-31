@@ -1127,7 +1127,7 @@ async function _wireKlreSettings(el) {
         : 'unknown';
       statusEl.textContent = `${status.entityCount} entities indexed · Last built: ${relTime}`;
     } else {
-      statusEl.textContent = 'Not yet built — open any entity's Related tab to trigger';
+      statusEl.textContent = "Not yet built — open any entity's Related tab to trigger";
     }
   }
 
