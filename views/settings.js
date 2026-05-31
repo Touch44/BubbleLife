@@ -126,6 +126,7 @@ async function renderSettings() {
     { key: 'notifications',  icon: '🔔', label: 'Notifications' },
     { key: 'family',         icon: '👨‍👩‍👧‍👦', label: 'Family', adminOnly: true },
     { key: 'data',           icon: '💾', label: 'Data' },
+    { key: 'klre',           icon: '✦', label: 'Knowledge' },
     { key: 'about',          icon: 'ℹ️', label: 'About' },
   ];
 
@@ -687,7 +688,7 @@ async function renderSettings() {
       <div class="srow">
         <div>
           <div class="srow-label">Version</div>
-          <div class="srow-hint">FamilyHub v6.9.0 — Multi-context family management PWA</div>
+          <div class="srow-hint">FamilyHub v6.9.2 — Multi-context family management PWA</div>
         </div>
       </div>
       <div class="srow">

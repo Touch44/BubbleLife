@@ -856,6 +856,42 @@ function _buildAndMount(config) {
         actionBar.appendChild(toggleBtn);
       }
 
+      // ── Delete Project button (projects only) ─────────────────
+      if (_editEntity?.type === 'project') {
+        const delProjBtn = document.createElement('button');
+        delProjBtn.style.cssText = [
+          'display: inline-flex; align-items: center; gap: 6px;',
+          'padding: 5px 12px; border-radius: var(--radius-md); cursor: pointer;',
+          'font-size: var(--text-sm); font-family: var(--font-body); transition: all 0.15s;',
+          'background: none; color: var(--color-danger, #dc2626);',
+          'border: 1px solid var(--color-danger, #dc2626);',
+        ].join(' ');
+        delProjBtn.innerHTML = '<span>🗑</span><span>Delete</span>';
+        delProjBtn.title = 'Delete this project and all its tasks';
+        delProjBtn.addEventListener('mouseenter', () => {
+          delProjBtn.style.background = 'var(--color-danger, #dc2626)';
+          delProjBtn.style.color = '#fff';
+        });
+        delProjBtn.addEventListener('mouseleave', () => {
+          delProjBtn.style.background = 'none';
+          delProjBtn.style.color = 'var(--color-danger, #dc2626)';
+        });
+        delProjBtn.addEventListener('click', async () => {
+          const et   = _editEntity?.title || _editEntity?.name || 'Project';
+          const snap = { ..._editEntity };
+          delProjBtn.disabled = true;
+          try {
+            const { _deleteProjectWithTaskFlow } = await import('./entity-panel.js');
+            await _deleteProjectWithTaskFlow(_editEntity.id, et, snap, 'Project', () => closeForm());
+          } catch (err) {
+            console.error('[entity-form] Delete project failed:', err);
+            toast.error('Could not delete project');
+            delProjBtn.disabled = false;
+          }
+        });
+        actionBar.appendChild(delProjBtn);
+      }
+
       // ── Convert to Template button (projects only) ────────────
       if (_editEntity?.type === 'project') {
         const tplBtn = document.createElement('button');

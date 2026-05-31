@@ -996,6 +996,191 @@ export async function runWeeklyProjectDigest(force = false) {
 }
 
 // ── [F5] Timeline View ─────────────────────────────────────────
+// ── [List View] ─────────────────────────────────────────────────────────────
+/**
+ * Render projects as a sortable list with key info per row.
+ * Columns: Name | Status | Progress | Deadline | Tags | Actions
+ */
+function _renderListView(el, projects) {
+  const STATUS_COLORS = {
+    Active:   { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' },
+    'On Hold':{ bg: '#fefce8', text: '#92400e', border: '#fde68a' },
+    Complete: { bg: '#f0fdf4', text: '#15803d', border: '#bbf7d0' },
+    Archived: { bg: '#f9fafb', text: '#6b7280', border: '#e5e7eb' },
+  };
+
+  const table = document.createElement('div');
+  table.style.cssText = 'padding:var(--space-3) var(--space-5);';
+
+  // ── Column header row ────────────────────────────────────────
+  const headerRow = document.createElement('div');
+  headerRow.style.cssText = [
+    'display:grid;grid-template-columns:1fr 90px 130px 110px 1fr 160px;',
+    'gap:var(--space-3);padding:6px var(--space-3);',
+    'font-size:var(--text-xs);font-weight:var(--weight-semibold);',
+    'color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.05em;',
+    'border-bottom:2px solid var(--color-border);margin-bottom:4px;',
+  ].join('');
+  headerRow.innerHTML = `
+    <span>Project</span>
+    <span>Status</span>
+    <span>Progress</span>
+    <span>Deadline</span>
+    <span>Tags</span>
+    <span></span>
+  `;
+  table.appendChild(headerRow);
+
+  // ── Project rows ─────────────────────────────────────────────
+  for (const project of projects) {
+    const projTasks = _getProjectTasks(project.id);
+    const total     = projTasks.length;
+    const done      = projTasks.filter(t => t.status === 'Completed' || t.status === 'Done').length;
+    const pct       = total > 0 ? Math.round((done / total) * 100) : 0;
+    const sc        = STATUS_COLORS[project.status] || STATUS_COLORS['Active'];
+    const tags      = Array.isArray(project.tags) ? project.tags : [];
+    const deadline  = project.deadline || project.dueDate || project.executionDate || '';
+    const isOverdue = deadline && new Date(deadline + 'T23:59:59') < new Date();
+
+    const row = document.createElement('div');
+    row.style.cssText = [
+      'display:grid;grid-template-columns:1fr 90px 130px 110px 1fr 160px;',
+      'gap:var(--space-3);align-items:center;padding:10px var(--space-3);',
+      'border-bottom:1px solid var(--color-border);cursor:pointer;transition:background .12s;',
+      'border-radius:var(--radius-md);',
+    ].join('');
+    row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface)');
+    row.addEventListener('mouseleave', () => row.style.background = '');
+
+    // Col 1: Name + goal
+    const nameCol = document.createElement('div');
+    nameCol.innerHTML = `
+      <div style="font-weight:var(--weight-semibold);font-size:var(--text-sm);color:var(--color-text);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;">
+        ${_esc(project.name || project.title || '(Untitled)')}
+      </div>
+      ${project.goal ? `<div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;">
+        ${_esc(project.goal.substring(0, 80))}${project.goal.length > 80 ? '…' : ''}
+      </div>` : ''}
+    `;
+
+    // Col 2: Status badge
+    const statusCol = document.createElement('div');
+    statusCol.innerHTML = `
+      <span style="display:inline-block;padding:2px 8px;border-radius:var(--radius-full);font-size:var(--text-xs);
+        font-weight:var(--weight-semibold);background:${sc.bg};color:${sc.text};border:1px solid ${sc.border};">
+        ${_esc(project.status || 'Active')}
+      </span>
+    `;
+
+    // Col 3: Progress bar + count
+    const progressCol = document.createElement('div');
+    progressCol.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    progressCol.innerHTML = `
+      <div style="flex:1;height:6px;background:var(--color-border);border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${pct === 100 ? '#16a34a' : 'var(--color-accent)'};border-radius:3px;transition:width .3s;"></div>
+      </div>
+      <span style="font-size:var(--text-xs);color:var(--color-text-muted);white-space:nowrap;">
+        ${done}/${total}
+      </span>
+    `;
+
+    // Col 4: Deadline
+    const deadlineCol = document.createElement('div');
+    const fmtDate = deadline
+      ? new Date(deadline + 'T12:00:00').toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })
+      : '—';
+    deadlineCol.innerHTML = `
+      <span style="font-size:var(--text-xs);color:${isOverdue ? '#dc2626' : 'var(--color-text-muted)'};
+        font-weight:${isOverdue ? 'var(--weight-semibold)' : 'normal'};">
+        ${isOverdue ? '⚠ ' : ''}${fmtDate}
+      </span>
+    `;
+
+    // Col 5: Tags
+    const tagsCol = document.createElement('div');
+    tagsCol.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;';
+    tags.slice(0, 3).forEach(tag => {
+      const chip = document.createElement('span');
+      chip.style.cssText = [
+        'font-size:10px;padding:1px 6px;border-radius:var(--radius-full);',
+        'background:var(--color-surface-2);color:var(--color-text-muted);',
+        'border:1px solid var(--color-border);white-space:nowrap;',
+      ].join('');
+      chip.textContent = tag;
+      tagsCol.appendChild(chip);
+    });
+    if (tags.length > 3) {
+      const more = document.createElement('span');
+      more.style.cssText = 'font-size:10px;color:var(--color-text-muted);';
+      more.textContent = `+${tags.length - 3}`;
+      tagsCol.appendChild(more);
+    }
+
+    // Col 6: Action buttons
+    const actionsCol = document.createElement('div');
+    actionsCol.style.cssText = 'display:flex;gap:4px;align-items:center;';
+    actionsCol.addEventListener('click', e => e.stopPropagation()); // don't bubble to row click
+
+    const _mkBtn = (label, title, onClick) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.title = title;
+      b.style.cssText = [
+        'padding:3px 8px;font-size:10px;border-radius:var(--radius-md);cursor:pointer;',
+        'background:var(--color-surface-2);color:var(--color-text-muted);',
+        'border:1px solid var(--color-border);white-space:nowrap;transition:all .12s;',
+      ].join('');
+      b.addEventListener('mouseenter', () => {
+        b.style.borderColor = 'var(--color-accent)';
+        b.style.color = 'var(--color-accent)';
+      });
+      b.addEventListener('mouseleave', () => {
+        b.style.borderColor = 'var(--color-border)';
+        b.style.color = 'var(--color-text-muted)';
+      });
+      b.addEventListener('click', onClick);
+      return b;
+    };
+
+    actionsCol.appendChild(_mkBtn('+ Task', 'Add a task to this project', () => {
+      // Open new task form pre-linked to this project
+      import('../components/entity-form.js').then(({ openForm }) => {
+        openForm({ type: 'task', project: project.id });
+      }).catch(() => {});
+    }));
+
+    actionsCol.appendChild(_mkBtn('⚡ Focus', 'Focus on this project', () => {
+      setFocusProject(project.id);
+      renderProjects({ _internal: true });
+    }));
+
+    actionsCol.appendChild(_mkBtn('📊', 'Analytics', () => {
+      // Trigger analytics the same way the grid card does
+      import('../core/router.js').then(({ navigate }) => {
+        navigate(`projects/${project.id}/analytics`);
+      }).catch(() => {});
+    }));
+
+    row.appendChild(nameCol);
+    row.appendChild(statusCol);
+    row.appendChild(progressCol);
+    row.appendChild(deadlineCol);
+    row.appendChild(tagsCol);
+    row.appendChild(actionsCol);
+
+    // Row click → open project form
+    row.addEventListener('click', () => {
+      emit(EVENTS.PANEL_OPENED, { entityId: project.id });
+    });
+
+    table.appendChild(row);
+  }
+
+  el.appendChild(table);
+}
+
 function _renderTimeline(el, projects) {
   const container = document.createElement('div');
   container.style.cssText = `padding:var(--space-5);overflow-x:auto;`;
@@ -1358,9 +1543,10 @@ async function renderProjects(params = {}) {
   // [F5] View toggle Grid | Timeline
   const viewToggle = document.createElement('div');
   viewToggle.style.cssText = `display:flex;border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden;`;
-  ['grid','timeline','templates'].forEach(mode => {
+  ['grid','list','timeline','templates'].forEach(mode => {
     const btn = document.createElement('button');
-    btn.textContent = mode === 'grid' ? '⊞ Grid' : mode === 'timeline' ? '📅 Timeline' : '📋 Templates';
+    const LABELS = { grid:'⊞ Grid', list:'☰ List', timeline:'📅 Timeline', templates:'📋 Templates' };
+    btn.textContent = LABELS[mode] || mode;
     btn.style.cssText = `
       padding:4px 10px;font-size:var(--text-xs);font-weight:var(--weight-semibold);border:none;cursor:pointer;
       background:${_viewMode === mode ? 'var(--color-accent)' : 'var(--color-surface)'};
@@ -1446,7 +1632,21 @@ async function renderProjects(params = {}) {
     }
   }
 
+  // FIX: Templates mode must be checked BEFORE the empty-state guard.
+  // On a fresh database (filtered.length === 0), templates must still render.
+  // Also auto-switch to templates view when database is empty so it appears on first visit.
+  if (_viewMode === 'templates') {
+    await _renderTemplatesView(el);
+    return;
+  }
+
   if (filtered.length === 0) {
+    // On truly empty database, show templates view automatically
+    if (_projects.length === 0 && _activeFilter === 'All') {
+      _viewMode = 'templates';
+      await _renderTemplatesView(el);
+      return;
+    }
     const empty = document.createElement('div');
     empty.style.cssText = `
       display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -1463,9 +1663,8 @@ async function renderProjects(params = {}) {
     return;
   }
 
-  // ── [F5] Timeline Mode ──────────────────────────────────────
-  if (_viewMode === 'templates') {
-    await _renderTemplatesView(el);
+  if (_viewMode === 'list') {
+    _renderListView(el, filtered);
     return;
   }
 
