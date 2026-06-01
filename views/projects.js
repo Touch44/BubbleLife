@@ -44,7 +44,8 @@ let _tasks    = [];
 let _persons  = [];
 let _personMap  = new Map();
 let _activeFilter = 'All';
-let _viewMode = 'grid'; // 'grid' | 'timeline'
+let _viewMode = 'grid'; // 'grid' | 'list' | 'timeline' | 'templates'
+let _renderSeq = 0;  // increments each renderProjects call — stale renders abort before appending
 let _projectTaskEdgeMap   = new Map(); // projectId → Set<taskId>
 let _projectMemberEdgeMap = new Map(); // projectId → [personId, ...]
 let _listenersRegistered  = false;
@@ -94,10 +95,10 @@ function _computeHealthScore(project, projTasks) {
   if (snapRaw != null && snapTs && (now - new Date(snapTs).getTime()) < SEVEN_DAYS) {
     if (currentPct > snapRaw) score += 30;       // progress advanced this week
     else if (currentPct === 100) score += 25;    // complete — max velocity credit
-    else if (projTasks.length === 0) score += 15; // no tasks yet — partial credit
+    else if (projTasks.length === 0) score += 8; // no tasks yet — minimal credit
     else score += 8;                              // maintained (not stalled, not advanced)
   } else if (projTasks.length === 0) {
-    score += 15; // new project with no tasks — partial credit
+    score += 8; // new project with no tasks — minimal credit until tasks added
   } else if (currentPct === 100) {
     score += 25; // complete with no recent snapshot
   } else {
@@ -127,7 +128,8 @@ function _computeHealthScore(project, projTasks) {
     if (!t.dueDate) return false;
     return new Date(t.dueDate + 'T00:00:00') < today;
   }).length;
-  const overdueRatio = projTasks.length > 0 ? overdueCount / projTasks.length : 0;
+  // [fine-tune] 0-task projects get 0 pts for overdue ratio — can't be "healthy" with no tasks
+  const overdueRatio = projTasks.length > 0 ? overdueCount / projTasks.length : 1;
   if (overdueRatio === 0) score += 25;
   else if (overdueRatio < 0.1) score += 20;
   else if (overdueRatio < 0.25) score += 12;
@@ -279,7 +281,7 @@ function _uid() {
   return 'tpl-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
-async function _renderTemplatesView(el) {
+async function _renderTemplatesView(el, seq) {
   const userTemplates = await _loadUserTemplates();
 
   // Render the template manager UI
@@ -314,6 +316,8 @@ async function _renderTemplatesView(el) {
 
   wrap.appendChild(sidebar);
   wrap.appendChild(editor);
+  // Guard: abort if a newer render has started since we awaited _loadUserTemplates
+  if (seq !== undefined && seq !== _renderSeq) return;
   el.appendChild(wrap);
 
   let _selectedTplId = null;
@@ -965,28 +969,51 @@ export async function runWeeklyProjectDigest(force = false) {
   }
 
   // Build digest post body
-  let body = `=== Weekly Project Digest === ${today.toLocaleDateString()}\n\n`;
+  // Build a clean, readable digest summary
+  const lines = [];
+  if (justCompleted.length > 0) {
+    lines.push(`🎉 Completed this week`);
+    justCompleted.forEach(({ proj }) => lines.push(`  ✓ ${proj.name || proj.title}`));
+    lines.push('');
+  }
   if (stalled.length > 0) {
-    body += `🚨 STALLED PROJECTS (no activity in 7+ days):\n${stalled.map(s => `  • ${s.proj.name || s.proj.title} — ${s.progress}% done, stalled ${s.daysSince} days`).join('\n')}\n\n`;
+    lines.push(`⚠️ Needs attention (${stalled.length} stalled)`);
+    stalled.forEach(({ proj, progress, daysSince }) =>
+      lines.push(`  • ${proj.name || proj.title} — ${progress}% · no activity for ${daysSince} days`)
+    );
+    lines.push('');
   }
   if (dueSoon.length > 0) {
-    body += `📅 DUE SOON (within 14 days):\n${dueSoon.map(d => `  • ${d.proj.name || d.proj.title} — ${d.daysUntil === 0 ? 'due today' : `${d.daysUntil} days left`}, ${d.progress}% done`).join('\n')}\n\n`;
-  }
-  if (justCompleted.length > 0) {
-    body += `🎉 COMPLETED THIS WEEK:\n${justCompleted.map(c => `  • ${c.proj.name || c.proj.title}`).join('\n')}\n\n`;
+    lines.push(`📅 Due soon`);
+    dueSoon.forEach(({ proj, daysUntil, progress }) =>
+      lines.push(`  • ${proj.name || proj.title} — ${progress}% · ${daysUntil === 0 ? 'due today' : `${daysUntil} day${daysUntil === 1 ? '' : 's'} left`}`)
+    );
+    lines.push('');
   }
   if (newThisWeek.length > 0) {
-    body += `🆕 STARTED THIS WEEK:\n${newThisWeek.map(n => `  • ${n.proj.name || n.proj.title}`).join('\n')}`;
+    lines.push(`🆕 Started this week`);
+    newThisWeek.forEach(({ proj }) => lines.push(`  • ${proj.name || proj.title}`));
+    lines.push('');
   }
+  const body = lines.join('\n').trim();
+
+  // Build summary subtitle for the post header
+  const parts = [];
+  if (justCompleted.length) parts.push(`${justCompleted.length} completed`);
+  if (stalled.length) parts.push(`${stalled.length} stalled`);
+  if (dueSoon.length) parts.push(`${dueSoon.length} due soon`);
+  if (newThisWeek.length) parts.push(`${newThisWeek.length} new`);
+  const subtitle = parts.length ? `(${parts.join(' · ')})` : '';
 
   const digestPost = {
     type: 'post',
-    title: `Weekly Project Digest — ${today.toLocaleDateString()}`,
-    body: body.trim(),
+    title: `Weekly Project Digest — ${today.toLocaleDateString()} ${subtitle}`.trim(),
+    body: body,
     context: 'family',
     tags: ['digest', 'projects'],
     createdBy: account?.id,
-    _isDigest: true,
+    _isSystemPost: true,   // flags this as auto-generated — used by KLRE to skip surfacing
+    _isDigest: true,       // kept for backward compat
   };
 
   try {
@@ -1494,6 +1521,8 @@ function _getProjectTasks(projectId) {
 
 // ── Main Render ────────────────────────────────────────────────
 async function renderProjects(params = {}) {
+  const mySeq = ++_renderSeq; // capture render generation — later checks abort stale renders
+
   const el = document.getElementById('view-projects');
   if (!el) return;
 
@@ -1514,6 +1543,9 @@ async function renderProjects(params = {}) {
   if (params._tab && ['grid','timeline','templates'].includes(params._tab)) {
     _viewMode = params._tab;
   }
+
+  // Abort if a newer render started while we were loading data
+  if (mySeq !== _renderSeq) return;
 
   el.innerHTML = '';
 
@@ -1636,7 +1668,7 @@ async function renderProjects(params = {}) {
   // On a fresh database (filtered.length === 0), templates must still render.
   // Also auto-switch to templates view when database is empty so it appears on first visit.
   if (_viewMode === 'templates') {
-    await _renderTemplatesView(el);
+    await _renderTemplatesView(el, mySeq);
     return;
   }
 
@@ -1644,7 +1676,7 @@ async function renderProjects(params = {}) {
     // On truly empty database, show templates view automatically
     if (_projects.length === 0 && _activeFilter === 'All') {
       _viewMode = 'templates';
-      await _renderTemplatesView(el);
+      await _renderTemplatesView(el, mySeq);
       return;
     }
     const empty = document.createElement('div');
@@ -1693,8 +1725,9 @@ async function renderProjects(params = {}) {
     const progress  = projTasks.length > 0 ? Math.round((doneTasks.length / projTasks.length) * 100) : 0;
 
     // [F1] Health Score
-    const health = _computeHealthScore(project, projTasks);
-    const healthColor = _healthColor(health);
+    const hasTasksDefined = projTasks.length > 0;
+    const health = hasTasksDefined ? _computeHealthScore(project, projTasks) : null;
+    const healthColor = health !== null ? _healthColor(health) : '#d1d5db';
 
     const statusColor   = STATUS_COLORS[project.status] || '#6b7280';
     const deadlineOverdue = _isOverdue(project.deadline);
@@ -1725,8 +1758,8 @@ async function renderProjects(params = {}) {
 
     card.innerHTML = `
       <!-- [F1] Health ring — top right -->
-      <div style="position:absolute;top:var(--space-3);right:var(--space-3);" title="Health Score: ${health}/100 — ${_healthLabel(health)}">
-        ${_healthRingSvg(health)}
+      <div style="position:absolute;top:var(--space-3);right:var(--space-3);" title="${health !== null ? `Health Score: ${health}/100 — ${_healthLabel(health)}` : "No tasks yet — add tasks to track health"}">
+        ${health !== null ? _healthRingSvg(health) : '<svg width="40" height="40"><circle cx="20" cy="20" r="15" fill="none" stroke="#e5e7eb" stroke-width="4"/><text x="20" y="24" text-anchor="middle" font-size="10" fill="#9ca3af">—</text></svg>'}
       </div>
 
       <div style="display:flex;align-items:flex-start;gap:var(--space-2);padding-right:44px;">

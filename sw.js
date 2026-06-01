@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION   = '6.9.2'; // v6.9.2: Delete button for projects, List view for projects
+const APP_VERSION   = '6.9.6'; // v6.9.3: Delete button for projects, List view for projects
 const CACHE_SHELL   = `fh-shell-v${APP_VERSION}`;
 const CACHE_DYNAMIC = `fh-dynamic-v${APP_VERSION}`;
 const ALL_CACHES    = [CACHE_SHELL, CACHE_DYNAMIC];
@@ -92,21 +92,26 @@ self.addEventListener('install', event => {
   );
 });
 
-// ACTIVATE: delete old caches, claim clients, postMessage SW_UPDATED
+// ACTIVATE: delete stale caches, claim clients.
+// SW_UPDATED is sent only when stale caches were removed (= genuine version upgrade).
+// This prevents the infinite-reload loop where activate fires on every page load.
 self.addEventListener('activate', event => {
   console.log('[SW] Activating v' + APP_VERSION);
   event.waitUntil(
-    Promise.all([
-      caches.keys().then(keys =>
-        Promise.all(keys.filter(k => !ALL_CACHES.includes(k)).map(k => caches.delete(k)))
-      ),
-      self.clients.claim(),
-    ]).then(() =>
-      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
-        clients.forEach(c => c.postMessage({ type: 'SW_UPDATED', version: APP_VERSION }));
-        console.log('[SW] Notified ' + clients.length + ' client(s)');
-      })
-    )
+    caches.keys().then(keys => {
+      const staleKeys = keys.filter(k => !ALL_CACHES.includes(k));
+      const isUpgrade = staleKeys.length > 0; // old caches = genuine update
+      return Promise.all(staleKeys.map(k => caches.delete(k)))
+        .then(() => self.clients.claim())
+        .then(() => {
+          if (!isUpgrade) return; // first install or same version — no banner
+          return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+            .then(clients => {
+              clients.forEach(c => c.postMessage({ type: 'SW_UPDATED', version: APP_VERSION }));
+              console.log('[SW] Notified ' + clients.length + ' client(s)');
+            });
+        });
+    })
   );
 });
 

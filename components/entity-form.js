@@ -2179,12 +2179,12 @@ function _buildTagControl(field) {
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
       chip.style.cssText = `display:inline-flex;align-items:center;gap:5px;background:${bg};color:${text};border-radius:99px;padding:4px 10px;font-size:var(--text-sm);font-weight:600;letter-spacing:0.01em;box-shadow:0 1px 3px rgba(0,0,0,0.15);transition:filter 0.15s;`;
-      chip.title = 'Click label to open tag · × to remove';
+      chip.title = '× to remove';
 
-      // Clickable label — looks up tag entity by name and opens panel
+      // Clickable label — opens tag entity if one exists; shows feedback if not
       const labelEl = document.createElement('span');
       labelEl.textContent = tagName;
-      labelEl.style.cursor = 'pointer';
+      labelEl.style.cursor = 'default'; // updated to pointer below if entity confirmed
       labelEl.addEventListener('mouseenter', () => { chip.style.filter = 'brightness(1.1)'; });
       labelEl.addEventListener('mouseleave', () => { chip.style.filter = ''; });
       labelEl.addEventListener('click', async (e) => {
@@ -2195,7 +2195,20 @@ function _buildTagControl(field) {
             (t.name || t.title || '').toLowerCase() === tagName.toLowerCase()
           );
           if (tagEntity) {
+            // Tag entity exists — open its panel
+            labelEl.style.cursor = 'pointer';
+            chip.title = 'Click to open tag · × to remove';
             emit(EVENTS.PANEL_OPENED, { entityId: tagEntity.id, entityType: 'tag' });
+          } else {
+            // Tag is a plain string label — offer to create a tag entity on the fly
+            openQuickCreateModal('tag', { name: tagName }, newTagEntity => {
+              if (newTagEntity?.id) {
+                // Now it exists — update chip and open it
+                labelEl.style.cursor = 'pointer';
+                chip.title = 'Click to open tag · × to remove';
+                emit(EVENTS.PANEL_OPENED, { entityId: newTagEntity.id, entityType: 'tag' });
+              }
+            });
           }
         } catch (err) {
           console.warn('[entity-form] tag panel open failed:', err);

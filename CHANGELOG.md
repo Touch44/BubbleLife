@@ -2,6 +2,52 @@
 
 ---
 
+## v6.9.5 — 2026-05-31
+
+### New: Create tag entity on the fly from chip
+- Clicking a tag chip that has no corresponding tag entity now opens the quick-create modal (pre-filled with the tag name) instead of showing a toast
+- After creating the entity, its panel opens automatically
+- Tooltip and cursor update to reflect the entity now exists
+
+### Improvement: Weekly Project Digest
+**Better format:**
+- Body now uses structured readable sections (Completed → Stalled → Due soon → New) with priority order — most actionable items first
+- Title now includes a stat summary: `Weekly Project Digest — 5/31/2026 (1 stalled · 2 due soon)`
+- Plain `=== text ===` headers replaced with emoji section labels
+
+**KLRE filtering:**
+- Digest posts (and all `_isSystemPost: true` entities) are now excluded from KLRE Knowledge Pulse and Daily Context surfacing
+- Previously, the digest itself appeared in "Context for today" as `"Related to: Daily Review"` — a circular and confusing result
+
+---
+
+## v6.9.4 — 2026-05-31
+
+### Bug Fix: Tag chip misleading "click to open" tooltip
+- Tag chips always showed tooltip "Click label to open tag · × to remove" even when the tag is a plain string label with no corresponding tag entity in the database
+- Clicking the label did nothing (silently failed) if no entity existed
+- **Fix:** Default tooltip is now "× to remove" only; cursor is `default` by default; clicking the label checks if a tag entity exists — if yes, opens the panel and updates tooltip/cursor for subsequent clicks; if no entity, shows toast: `"tagname" is a label only — no tag entity exists yet`
+
+---
+
+## v6.9.3 — 2026-05-31
+
+**Project view bug fixes + health score improvements**
+
+### Bug Fix: Templates panel rendering twice
+- `context:changed` event fires during first-time setup, triggering a second concurrent `renderProjects()` while the first is suspended at `await _loadUserTemplates()`
+- Both async calls resolved and each appended a sidebar+editor panel to `el`
+- **Fix:** Added `_renderSeq` counter (incremented each call); `mySeq !== _renderSeq` guard aborts stale renders before `el.innerHTML = ''` and inside `_renderTemplatesView` before appending
+
+### Improvement: Health score for projects with 0 tasks
+- A newly created project with no tasks was showing a numerical score (e.g. 66) — misleading since "healthy with no tasks" is meaningless
+- **Fix:** Projects with 0 tasks now show `—` ring (grey, hollow) with tooltip "No tasks yet — add tasks to track health"
+- Signal 3 partial credit reduced from +15 to +8 for 0-task projects
+- Signal 5 (overdue ratio): 0-task projects now score 0 instead of 25 — can't claim "no overdue tasks" when there are no tasks at all
+- Net effect: a new 0-task project scores ~33 (setup bonus only) instead of 66, and the ring is hidden until tasks are defined
+
+---
+
 ## v6.9.2 — 2026-05-31
 
 **Project management improvements**

@@ -89,7 +89,7 @@ export async function getPulseItems(maxItems = PULSE_MAX) {
   const typeKeys    = getAllEntityTypes().map(t => t.key);
   const allEntities = (
     await Promise.all(typeKeys.map(k => getEntitiesByType(k)))
-  ).flat().filter(e => !e.deleted);
+  ).flat().filter(e => !e.deleted && !e._isSystemPost);
 
   const today    = new Date();
   const todayTs  = today.getTime();
@@ -219,7 +219,7 @@ export async function getDailyContext(dateStr) {
   const typeKeys    = getAllEntityTypes().map(t => t.key);
   const allEntities = (
     await Promise.all(typeKeys.map(k => getEntitiesByType(k)))
-  ).flat().filter(e => !e.deleted);
+  ).flat().filter(e => !e.deleted && !e._isSystemPost);
 
   // A) Find entities whose date fields match dateStr
   // event/appointment: entity.date; task: entity.dueDate/executionDate
